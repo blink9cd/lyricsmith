@@ -1,0 +1,134 @@
+"""The rows, the count line, the footer's commands and notes, and the exit code."""
+
+from __future__ import annotations
+
+import shlex
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import sy_cases  # noqa: E402 - puts the tool, src/ and album's fixtures on the path
+import sy_summary as ss  # noqa: E402 - import follows the sys.path bootstrap above
+from sy_types import (  # noqa: E402 - import follows the sys.path bootstrap above
+    EXIT_FAILED,
+    EXIT_OK,
+    Action,
+    EmbedResult,
+    EmbedStop,
+    Outcome,
+    Planned,
+    TrackResult,
+)
+
+ROOT = Path("/music")
+A = ROOT / "One" / "01 A.mp3"
+B = ROOT / "Two" / "01 B.mp3"
+
+
+class SummaryTest(sy_cases.IsolatedCase):
+    def test_a_plan_row_names_the_action_and_the_relative_path(self) -> None:
+        row = ss.plan_line(Planned(A, Action.TIME), ROOT)
+        self.assertEqual(row.split(), ["time", "One/01", "A.mp3"])
+
+    def test_a_track_given_as_the_root_or_outside_it_shows_its_name(self) -> None:
+        for root in (A, ROOT / "Two"):
+            row = ss.plan_line(Planned(A, Action.TIME), root)
+            self.assertEqual(row.split(), ["time", "01", "A.mp3"])
+
+    def test_a_refused_plan_row_carries_its_detail(self) -> None:
+        refused = Planned(A, Action.ERROR_TEXT, detail="01 A.txt is not UTF-8")
+        line = ss.plan_line(refused, ROOT)
+        self.assertEqual(line.splitlines()[1].strip(), "01 A.txt is not UTF-8")
+
+    def test_a_flagged_first_line_names_the_file_and_stamp(self) -> None:
+        flagged = TrackResult(A, Outcome.TIMED, first_line="[00:09.100]")
+        lines = ss.result_lines(flagged, ROOT)
+        self.assertEqual(lines[1].strip(), "check the first line: 01 A.lrc [00:09.100]")
+
+    def test_unaligned_lines_are_counted(self) -> None:
+        lines = ss.result_lines(TrackResult(A, Outcome.TIMED, unaligned=2), ROOT)
+        self.assertIn("2 line(s) with nothing to align", lines[1])
+
+    def test_the_count_line_names_each_outcome_seen(self) -> None:
+        results = [
+            TrackResult(A, Outcome.TIMED),
+            TrackResult(B, Outcome.TIMED),
+            TrackResult(B, Outcome.LOW_CONFIDENCE),
+        ]
+        self.assertEqual(
+            ss.count_line(results), "timed 2, low confidence: time by hand 1"
+        )
+        self.assertEqual(ss.count_line([]), "nothing to time")
+
+    def test_without_embed_the_footer_prints_each_folders_album_command(self) -> None:
+        timed = [TrackResult(A, Outcome.TIMED)]
+        footer = ss.footer_lines(timed, units=(ROOT,), loose=(B,))
+        command = f"embed them: lyricsmith album --offline --album {ROOT}"
+        track = shlex.quote(str(B))
+        loose = (
+            f"embed it: lyricsmith album --offline --album {B.parent} --track {track}"
+        )
+        self.assertEqual(footer[1:], [command, loose])
+        embedded = ss.footer_lines(timed)
+        self.assertFalse(any("embed them" in line for line in embedded))
+
+    def test_the_written_tracks_are_those_timed_or_re_timed(self) -> None:
+        results = [
+            TrackResult(A, Outcome.TIMED),
+            TrackResult(B, Outcome.LOW_CONFIDENCE),
+            TrackResult(B, Outcome.RETIMED),
+        ]
+        self.assertEqual(ss.written_tracks(results), (A, B))
+
+    def test_the_fix_names_the_album_folder_or_the_one_track(self) -> None:
+        self.assertNotIn("<its folder>", ss.FIRST_LINE_FIX)
+        self.assertIn("--album <the album folder>", ss.FIRST_LINE_FIX)
+        self.assertIn("the library's Artist/Album folder", ss.FIRST_LINE_FIX)
+        self.assertIn("--track <the track>", ss.FIRST_LINE_FIX)
+
+    def test_the_fix_and_the_by_hand_note_print_once_when_needed(self) -> None:
+        results = [
+            TrackResult(A, Outcome.TIMED, first_line="[00:01.000]"),
+            TrackResult(B, Outcome.TIMED, first_line="[00:02.000]"),
+            TrackResult(B, Outcome.LOW_CONFIDENCE),
+        ]
+        footer = ss.footer_lines(results)
+        self.assertEqual(footer.count(ss.FIRST_LINE_FIX), 1)
+        self.assertEqual(footer.count(ss.BY_HAND), 1)
+
+    def test_an_embed_not_done_prints_the_command_to_run(self) -> None:
+        embeds = [
+            EmbedResult(ROOT / "One", 0),
+            EmbedResult(ROOT / "Two", 2),
+            EmbedResult(ROOT / "Two", EmbedStop.TIMED_OUT),
+            EmbedResult(ROOT, EmbedStop.LOOSE, track=ROOT / "01 L.mp3"),
+        ]
+        lines = ss.embed_lines(embeds)
+        self.assertEqual(lines[0], f"embedded: {ROOT / 'One'}")
+        self.assertIn("album exit 2", lines[1])
+        self.assertIn("embed not done (timed out)", lines[2])
+        self.assertIn("run: lyricsmith album --offline --album", lines[2])
+        loose_command = (
+            f"Artist/Album folder): {ROOT / '01 L.mp3'};"
+            f" run: lyricsmith album --offline --album {ROOT}"
+            f" --track {shlex.quote(str(ROOT / '01 L.mp3'))}"
+        )
+        self.assertIn(loose_command, lines[3])
+
+    def test_each_command_quotes_absolute_paths(self) -> None:
+        command = ss.album_command(Path("My Album"), Path("My Album") / "01 A.mp3")
+        here = Path.cwd()
+        expected = (
+            f"lyricsmith album --offline --album '{here / 'My Album'}'"
+            f" --track '{here / 'My Album' / '01 A.mp3'}'"
+        )
+        self.assertEqual(command, expected)
+
+    def test_the_exit_code_is_1_for_a_track_error_or_an_embed_not_done(self) -> None:
+        low = [TrackResult(A, Outcome.LOW_CONFIDENCE)]
+        self.assertEqual(ss.exit_code(low, []), EXIT_OK)
+        failed = [TrackResult(A, Outcome.ERROR_ALIGN)]
+        self.assertEqual(ss.exit_code(failed, []), EXIT_FAILED)
+        timed = [TrackResult(A, Outcome.TIMED)]
+        self.assertEqual(ss.exit_code(timed, [EmbedResult(ROOT, 1)]), EXIT_FAILED)

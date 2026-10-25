@@ -1,0 +1,6 @@
+# Every text file is stored and checked out with LF line endings, whatever core.autocrlf
+# says on the machine that clones this repository. The tools write LF on every platform,
+# and the committed samples (transcribe's and sync's jfk.lrc and jfk.txt) are compared
+# with real output by hand and read by the suites, so a checkout that turned them into
+# CRLF would differ from a tree nobody had changed.
+* text=auto eol=lf

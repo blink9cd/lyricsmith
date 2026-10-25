@@ -1,0 +1,217 @@
+# Declared so that `pip install .` and `pip install ".[test]"` are the only install steps
+# the README gives. With no backend named, pip falls back to an implicit setuptools it
+# fetches unasked.
+[build-system]
+# 77 is the first setuptools to accept the SPDX `license` string in [project] (PEP 639).
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lyricsmith"
+version = "0.1.0"
+description = "Find, check, transcribe and time an album's lyrics: album, sweep, transcribe and sync."
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+# The oldest interpreter the tools are written and type-checked for, not the newest one
+# on the machine that built them: a newer target silently accepts syntax and APIs that
+# crash on an older one.
+requires-python = ">=3.12"
+# Each pinned to one exact release, so every install resolves the same code. Each
+# version's license was read from its own package metadata when pinned: mutagen
+# GPL-2.0-or-later, requests Apache-2.0, urllib3 MIT, lyricsgenius MIT. A license can
+# change between versions, so re-read it on every bump. transcribe needs none of them:
+# whisper.cpp is a program it runs, not a Python dependency.
+dependencies = [
+  # Reads and writes the ID3 tags, the SYLT / USLT lyrics frames, and the duration.
+  "mutagen==1.48.1",
+  # The HTTP client album asks LRCLIB and NetEase with, directly; lyricsgenius requires
+  # it too.
+  "requests==2.34.2",
+  # requests' transport, pinned because the reply-size cap relies on its bounded
+  # streaming decompression (2.6 and later inflate no more than a read asks for), and
+  # requests itself accepts any urllib3 from 1.21.1.
+  "urllib3==2.8.0",
+  # The Genius fallback for unsynced lyrics. 3.13 removed the constructor's `verbose`
+  # parameter (the library logs through `logging` instead), so it is never passed.
+  "lyricsgenius==3.15.0",
+]
+
+[project.optional-dependencies]
+# The one test-only library. hypothesis drives the property tests, and nothing at runtime
+# imports it.
+test = ["hypothesis==6.165.10"]
+# The packages sync's child process imports directly, each at the exact version
+# sync/requirements-sync.txt pins. That file stays the documented install route, because
+# it pins the whole resolved stack, not just these five; this extra names sync's direct
+# imports so the export's dependency check can count them as declared. Neither the
+# suites nor the other three tools install it.
+sync = [
+  "demucs==4.1.0",
+  "numpy==2.5.4",
+  "PyYAML==6.0.3",
+  "torch==2.14.1",
+  "torchaudio==2.11.0",
+]
+
+[tool.setuptools]
+# Deliberately empty. Every tool is run directly and puts its own sibling folders on
+# sys.path, so nothing here is imported from an installed location: installing this
+# distribution installs its metadata and dependencies, never code. Left to
+# auto-discovery, setuptools refuses this flat layout of sibling folders outright.
+packages = []
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# E4/E7/E9/F are ruff's classic default set, written out so the enabled rules are a
+# function of this file rather than of whichever ruff release is installed. PGH003/PGH004
+# require every suppression to carry a rule code. D adds the docstring rules (pep257),
+# minus D401's imperative-mood opinion, which rewords valid noun-phrase summaries.
+select = ["E4", "E7", "E9", "F", "PGH003", "PGH004", "D"]
+ignore = ["D401"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.per-file-ignores]
+# Test method names self-document; a docstring per test would be noise.
+"**/test_*.py" = ["D"]
+
+[tool.mypy]
+python_version = "3.12"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+# The tools reach the shared libraries, and each other, through a sys.path bootstrap at
+# run time, and import their src/ modules by bare name after inserting src/. mypy cannot
+# see a runtime insert, so these entries are what make those imports resolve. album/tests
+# is here because sweep's suites reuse album's test helpers, so no other folder here may
+# define a test module by any of those names.
+mypy_path = [
+  "$MYPY_CONFIG_FILE_DIR/stdio_utf8",
+  "$MYPY_CONFIG_FILE_DIR/help_formatter",
+  "$MYPY_CONFIG_FILE_DIR/run_lock",
+  "$MYPY_CONFIG_FILE_DIR/bounded_run",
+  # ...and its private src/, which bounded_run.py puts on sys.path at load time for the
+  # modules it imports; mypy cannot see that insert either.
+  "$MYPY_CONFIG_FILE_DIR/bounded_run/src",
+  "$MYPY_CONFIG_FILE_DIR/library_walk",
+  "$MYPY_CONFIG_FILE_DIR/live_pid_guard",
+  "$MYPY_CONFIG_FILE_DIR/album",
+  "$MYPY_CONFIG_FILE_DIR/album/src",
+  "$MYPY_CONFIG_FILE_DIR/album/tests",
+  "$MYPY_CONFIG_FILE_DIR/sweep",
+  "$MYPY_CONFIG_FILE_DIR/sweep/src",
+  "$MYPY_CONFIG_FILE_DIR/transcribe",
+  "$MYPY_CONFIG_FILE_DIR/transcribe/src",
+  "$MYPY_CONFIG_FILE_DIR/sync",
+  "$MYPY_CONFIG_FILE_DIR/sync/src",
+]
+
+# One of the dependencies ships no `py.typed` marker, so mypy cannot use its inline
+# annotations and reports every import of it as untyped. Scoped to that package only,
+# never a blanket rule. Every call into it sits inside a typed adapter function, so `Any`
+# stops at that boundary.
+[[tool.mypy.overrides]]
+module = ["lyricsgenius", "lyricsgenius.*"]
+ignore_missing_imports = true
+
+# The sync tool's child process imports PyTorch and its stack, which an install of the
+# other tools never carries (sync/requirements-sync.txt). Skipping them makes mypy's
+# verdict the same with or without the stack installed.
+[[tool.mypy.overrides]]
+module = [
+  "torch", "torch.*", "torchaudio", "torchaudio.*", "demucs", "demucs.*",
+  "numpy", "numpy.*", "yaml", "yaml.*", "safetensors", "safetensors.*",
+]
+follow_imports = "skip"
+ignore_missing_imports = true
+
+# --- Gate configuration: the lint, test, scan and doc checks this tree is held to. ---
+
+[tool.pii_scan]
+# The license notice names the copyright holder, which is what it is for.
+exclude = ["LICENSE"]
+
+[tool.python_gate]
+# bounded_run ships the grandchild fixture its live boundary test launches, and which a
+# human can run by hand to watch the bound hold. It is an INPUT the test drives, not a
+# module of the tool -- and it deliberately never exits, so it could not be imported by
+# a paired test even in principle.
+exclude = ["bounded_run/samples"]
+
+[tool.samples_presence]
+# Libraries with no CLI: nothing in them turns an input into an output a human could run
+# by hand. bounded_run is deliberately NOT here: it does ship a samples/ pair.
+exempt = [
+  "stdio_utf8",
+  "help_formatter",
+  "run_lock",
+  "library_walk",
+  "live_pid_guard",
+]
+
+[tool.stdio_policy]
+# The whole tree, libraries included: a library is exactly where a stray print() does
+# not belong.
+paths = ["."]
+
+[tool.dep_audit]
+# Pinning checks only in the inner loop; the network CVE audit is run on demand.
+offline = "skip"
+
+[tool.gate_cache]
+# The variable whose value changes which tests run: LYRICSMITH_OFFLINE skips album's
+# live LRCLIB, NetEase, Bandcamp, YouTube Music and Tekstowo tests, so a verdict recorded
+# with one setting is never replayed into a run with another.
+# album/tests/test_env_declared.py fails when this list and the project's environment
+# reads, by literal or module-level constant, differ.
+env = ["LYRICSMITH_OFFLINE"]
+
+[tool.claim_check.bases]
+# The tool docs write their run procedures the way their reader sees the PROJECT: paths
+# relative to the repository root, not to the doc's own directory one level down. "." is
+# this file's own directory, added as an extra resolution root for every doc under each
+# tool folder named below.
+"album" = ["."]
+"sweep" = ["."]
+"transcribe" = ["."]
+"sync" = ["."]
+
+[tool.cli_doc_consistency]
+# README.md is the dispatcher's user guide and --help its option reference, so no
+# lyricsmith.md companion ships beside lyricsmith.py. Each tool's own CLI keeps its
+# companion doc in its folder and is still checked.
+exclude = ["lyricsmith.py"]
+
+[tool.prose_terms]
+# Words this project's prose must not use, so they cannot creep back in. A measurement's
+# provenance stands without naming whose data it was ("measured on a real library"), and
+# whoever runs a tool is "the operator". Pointers to documents that do not ship with the
+# project resolve for no reader -- state the rule instead. The gate prunes samples/ by
+# name, so those READMEs are held to the same words by review. Each entry waives itself:
+# the declaration is not prose.
+#
+# `exclude` holds out the one vendored file whose matches are code, not prose: the run_lock
+# suite loads its subject through importlib's spec_from_file_location, and the names it
+# must use for that API contain the word this list bans.
+exclude = ["run_lock/test_run_lock.py"]
+terms = [
+  # prose: ignore[owner] the declaration itself
+  "owner",
+  # prose: ignore[spec] the declaration itself
+  "spec",
+  # prose: ignore[AGENTS] the declaration itself
+  "AGENTS",
+  # prose: ignore[R13] the declaration itself
+  "R13",
+]
+
+[tool.prose_terms.patterns]
+# Shapes a single word cannot express: a pointer into a tracking list (the word "entry"
+# and a number), a decision or finding tag (a capital D, F, G, I or M and one or two
+# digits), and a ruling cited by number, each naming a record no reader of this project
+# has. State the rule or the measurement instead.
+entry-tag = '(?<![0-9A-Za-z_])entry\s+\d+'
+ruling-tag = '(?<![0-9A-Za-z_])(?-i:[DFGIM])[1-9][0-9]?(?![0-9A-Za-z_])'
+ruling-number = '(?<![0-9A-Za-z_])ruling\s+\d+'
