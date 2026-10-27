@@ -11,11 +11,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+import sy_located  # noqa: F401 - puts the other tools and libraries on sys.path
 from lyrics_model import PlainLyrics, Source, SyncedLyrics
 from lyrics_sidecar import UNREADABLE, plan_sidecars
 from lyrics_slots import Slot, sidecar_entry
 from sy_text import text_lines, tokenize
 from sy_types import LRC_SUFFIX, TXT_SUFFIX, Action, Planned
+
+#: A walked name's rows that are no track: a skipped link, or not a regular file.
+UNCLAIMED = frozenset({Action.SKIP_LINKED, Action.ERROR_AUDIO})
 
 
 def plan_track(audio: Path, *, overwrite: bool) -> Planned:
@@ -67,17 +71,27 @@ def _plan_timed(
     """
     if overwrite and ours:
         lines = text_lines("\n".join(line.text for line in lyrics.lines))
+        if not tokenize(lines).ids:
+            return Planned(audio, Action.SKIP_NO_TEXT)
         return Planned(audio, Action.RETIME, lines=lines)
     return Planned(audio, Action.SKIP_TIMED)
 
 
 def _plan_untimed(audio: Path, lyrics: PlainLyrics, *, renamed: bool) -> Planned:
-    """Untimed text: timed from a .txt; an untimed .lrc is left for album to rename."""
+    """Untimed text: timed from a .txt; an untimed .lrc is left for album to rename.
+
+    A link at the .lrc name is refused rather than written over.
+    """
     if renamed:
         return Planned(audio, Action.SKIP_UNTIMED_LRC)
     lines = text_lines(lyrics.text)
     if not tokenize(lines).ids:
         return Planned(audio, Action.SKIP_NO_TEXT)
+    lrc = audio.with_suffix(LRC_SUFFIX)
+    if sidecar_entry(lrc) is Slot.LINK:
+        # The atomic write would replace the link itself, as a re-time would.
+        detail = f"{lrc.name} is a link: never replaced"
+        return Planned(audio, Action.ERROR_TEXT, detail=detail)
     return Planned(audio, Action.TIME, lines=lines)
 
 
@@ -89,10 +103,14 @@ def claim_lrcs(plans: Sequence[Planned]) -> list[Planned]:
     and a.flac share a .lrc too, and refusing such a pair where case does matter costs a
     row, never a file. Folders are compared exactly, so two folders whose names differ
     only by case, distinct on a disk that keeps case, never refuse each other's tracks.
+    A name the walk found that is no track to time (`UNCLAIMED`) claims nothing.
     """
     claimed: set[tuple[str, str]] = set()
     kept: list[Planned] = []
     for planned in plans:
+        if planned.action in UNCLAIMED:
+            kept.append(planned)
+            continue
         lrc = planned.audio.with_suffix(LRC_SUFFIX)
         key = (str(lrc.parent), lrc.name.casefold())
         if key in claimed:

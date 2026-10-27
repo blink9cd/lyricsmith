@@ -58,6 +58,8 @@ album run <run-id>: 6 tracks under sample_album
  5  05 The Short Bit.mp3      sidecar  unsynced  FLAG: lyrics on a no-lyrics genre (Stand-up Comedy)
  6  06 The Quiet Reel.mp3     -        -         removed: implausible old lyrics (placeholder lyrics)
 synced 1 · unsynced 1 · unchanged 0 · not found 2 · no lyrics expected 1 · silent 0 · kept existing 0 · removed 1 · errors 0 · flagged 1 · genius: offline
+written: embedded 2
+removed: placeholder 1
 bandcamp: off (offline)
 youtube music: off (offline)
 tekstowo: off (offline)
@@ -78,6 +80,8 @@ album run <run-id>: 6 tracks under sample_album
  5  05 The Short Bit.mp3      sidecar  unsynced  FLAG: lyrics on a no-lyrics genre (Stand-up Comedy)
  6  06 The Quiet Reel.mp3     -        -         removed: implausible old lyrics (placeholder lyrics)
 synced 1 · unsynced 1 · unchanged 0 · not found 0 · no lyrics expected 0 · silent 3 · kept existing 0 · removed 1 · errors 0 · flagged 1 · genius: offline
+written: embedded 2
+removed: placeholder 1
 bandcamp: off (offline)
 youtube music: off (offline)
 tekstowo: off (offline)

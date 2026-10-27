@@ -11,25 +11,17 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_hosts as lhost  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_musicbrainz as lmb  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_tekstowo as lt  # noqa: E402 - import follows the sys.path bootstrap above
-
-# The profile test_lyrics_genre registers, under the same name and settings, so the
-# properties run alike whichever suite loads first (its comment gives the reasons).
-settings.register_profile(
-    "album_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_properties")
 
 T = lt.TEKSTOWO_HOST
 B = "bandcamp.com"

@@ -12,8 +12,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
-#: The header line that marks a .lrc as this tool's own. This tool only writes it: album's
-#: `machine_label`, which compares it stripped at both ends, is its one reader.
+#: The header line that marks a .lrc as this tool's own. This tool only writes it and reads
+#: it back only through album's `machine_label`, which compares it stripped at both ends.
 MACHINE_BY_LINE: Final = "[by:machine timed]"
 #: The tool's name as its [re:] line gives it.
 TOOL_LABEL: Final = "lyricsmith sync"
@@ -26,8 +26,41 @@ WAV2VEC2_FILE: Final = "wav2vec2_fairseq_base_ls960_asr_ls960.pth"
 #: The htdemucs bag: a YAML naming its one model's signature, and that model's weights.
 DEMUCS_BAG: Final = "htdemucs.yaml"
 DEMUCS_WEIGHTS: Final = "955717e8.safetensors"
+#: The longest track timed, in seconds. The child holds the whole decoded track in memory,
+#: about 705 KB a second as 32-bit stereo and twice that while separating, so a longer
+#: track is skipped before any child starts, and ffmpeg decodes no more than this. It is
+#: also the length the child's bound assumes when a track's own cannot be read.
+MAX_TRACK_S: Final = 3600
+#: --extensions when none is given: comma-separated, as the option takes them.
+DEFAULT_EXTENSIONS: Final = "mp3"
+#: Each extension --extensions may name, and the ffmpeg demuxer that reads it. ffmpeg
+#: opens a track only with one of these, whatever its bytes say: probed freely, a track
+#: holding an ffconcat or HLS playlist would open the files that playlist names. So no
+#: demuxer that reads another file (concat, hls, image2, any playlist) is ever listed.
+DEMUXERS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "aac": "aac",
+        "aif": "aiff",
+        "aifc": "aiff",
+        "aiff": "aiff",
+        "flac": "flac",
+        "m4a": "mov",
+        "m4b": "mov",
+        "mka": "matroska",
+        "mp2": "mp3",
+        "mp3": "mp3",
+        "oga": "ogg",
+        "ogg": "ogg",
+        "opus": "ogg",
+        "wav": "wav",
+        "wma": "asf",
+        "wv": "wv",
+    }
+)
 
 EXIT_OK, EXIT_FAILED, EXIT_SETUP = 0, 1, 2
+#: A Ctrl-C while timing: the shell's code for a run stopped by SIGINT.
+EXIT_INTERRUPTED: Final = 130
 
 
 class SetupError(Exception):
@@ -42,7 +75,9 @@ class Action(enum.Enum):
     SKIP_TIMED = "skip: already timed"
     SKIP_NO_TEXT = "skip: no untimed text"
     SKIP_UNTIMED_LRC = "skip: untimed .lrc (run album first)"
+    SKIP_LINKED = "skip: linked"
     ERROR_TEXT = "ERROR text"
+    ERROR_AUDIO = "ERROR audio"
 
 
 class Outcome(enum.Enum):
@@ -53,9 +88,12 @@ class Outcome(enum.Enum):
     SKIP_TIMED = Action.SKIP_TIMED.value
     SKIP_NO_TEXT = Action.SKIP_NO_TEXT.value
     SKIP_UNTIMED_LRC = Action.SKIP_UNTIMED_LRC.value
+    SKIP_LINKED = Action.SKIP_LINKED.value
+    SKIP_LONG_TRACK = "skip: track too long"
     TOO_LONG = "skip: text longer than the track"
     LOW_CONFIDENCE = "low confidence: time by hand"
     ERROR_TEXT = Action.ERROR_TEXT.value
+    ERROR_AUDIO = Action.ERROR_AUDIO.value
     ERROR_ALIGN = "ERROR align"
     ERROR_WRITE = "ERROR write"
 
@@ -66,14 +104,16 @@ UNTIMED_OUTCOMES: Final[Mapping[Action, Outcome]] = MappingProxyType(
         Action.SKIP_TIMED: Outcome.SKIP_TIMED,
         Action.SKIP_NO_TEXT: Outcome.SKIP_NO_TEXT,
         Action.SKIP_UNTIMED_LRC: Outcome.SKIP_UNTIMED_LRC,
+        Action.SKIP_LINKED: Outcome.SKIP_LINKED,
         Action.ERROR_TEXT: Outcome.ERROR_TEXT,
+        Action.ERROR_AUDIO: Outcome.ERROR_AUDIO,
     }
 )
 #: The outcomes that wrote a .lrc.
 WRITTEN: Final = frozenset({Outcome.TIMED, Outcome.RETIMED})
 #: The outcomes that make the run exit 1. A low-confidence track is a planned outcome.
 FAILED: Final = frozenset(
-    {Outcome.ERROR_TEXT, Outcome.ERROR_ALIGN, Outcome.ERROR_WRITE}
+    {Outcome.ERROR_TEXT, Outcome.ERROR_AUDIO, Outcome.ERROR_ALIGN, Outcome.ERROR_WRITE}
 )
 
 

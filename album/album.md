@@ -28,14 +28,17 @@ it searches by each track's artist, title and album tags and its length.
   measures nothing and says so. The measurement decodes the local file and nothing leaves
   the machine.
 - Network access for a normal run and for `--mode compare`. `--offline` needs none, and
-  neither do `--mode check`, `--mode undo`, `--mode strip` and `--mode prune`.
+  neither do `--mode check`, `--mode undo`, `--mode strip`, `--mode prune` and
+  `--mode accept`.
 
 ## Usage
 
 ```text
-album.py --album <dir> [--mode run|check|undo|strip|compare|prune] [--track <file>] [--run-id <id>]
+album.py --album <dir> [--mode run|check|undo|strip|compare|prune|accept] [--apply]
+                [--track <file>] [--run-id <id>]
                 [--lang <code>] [--config <file>] [--dry-run] [--offline] [--no-genius]
                 [--no-netease] [--no-bandcamp] [--no-youtube-music] [--no-tekstowo]
+                [--only-providers <name>[,<name>...]]
                 [--fresh | [--refetch-untimed] [--refetch-implausible]]
                 [--changed-list <file>]
 ```
@@ -43,7 +46,8 @@ album.py --album <dir> [--mode run|check|undo|strip|compare|prune] [--track <fil
 | Option | Default | Description |
 | --- | --- | --- |
 | `--album` | required | The album folder. Every MP3 under it, in any subfolder, is a track. |
-| `--mode` | `run` | `run` backs up, fetches, embeds and checks. `check` re-checks a finished run. `undo` puts a run's backup back. `strip` backs up, then removes every track's lyrics frames and sidecars. `compare` asks each provider for every untimed-only track and reports whether a provider other than its lyrics' source agrees; it writes nothing. `prune` removes the run folders nothing needs. |
+| `--mode` | `run` | `run` backs up, fetches, embeds and checks. `check` re-checks a finished run. `undo` puts a run's backup back. `strip` backs up, then removes every track's lyrics frames and sidecars. `compare` asks each provider for every untimed-only track and reports whether a provider other than its lyrics' source agrees; it writes nothing. `prune` removes the run folders nothing needs. `accept` keeps the album as it is and reports what removing every run's backup would lose; with `--apply` it removes them (*`--mode accept`*). |
+| `--apply` | off | `accept` only: record each run's manifest outside the album, then remove the album's `.lyricsmith` folder, every backup and its undo with it. Without it, accept only reports. |
 | `--track` | every track | `run`, `strip`, `check`, `undo` and `compare`: one MP3 under `--album`, relative to the working directory. |
 | `--run-id` | the newest run | `check` and `undo` only: which run to read. |
 | `--changed-list` | no list | `run`, `strip` and `undo`: write the absolute path of every MP3 this saved to this file, one per line, for a library app or script that rereads those files' tags. See [The changed list](#the-changed-list). |
@@ -56,6 +60,7 @@ album.py --album <dir> [--mode run|check|undo|strip|compare|prune] [--track <fil
 | `--no-bandcamp` | off | `run` and `compare` only: skip the Bandcamp step. Bandcamp's terms allow personal, non-commercial use. See *Lyrics sources and their terms* in `../README.md`. |
 | `--no-youtube-music` | off | `run` and `compare` only: skip the YouTube Music steps. YouTube's terms bar automated access. See *Lyrics sources and their terms* in `../README.md`. |
 | `--no-tekstowo` | off | `run` and `compare` only: skip the Tekstowo step. Tekstowo's terms allow home use only. See *Lyrics sources and their terms* in `../README.md`. |
+| `--only-providers` | every provider | `run` and `compare` only: ask only the providers named, one comma-separated value of `lrclib`, `netease`, `youtube-music`, `bandcamp`, `genius` and `tekstowo`; each other provider is not asked and records nothing. A provider also turned off by its `--no-*` option stays off. Refused with `--offline`. See [Asking only some providers](#asking-only-some-providers). |
 | `--fresh` | off | `run` only: ask the providers for every track, even one a sidecar or its own frames would serve; an accepted answer replaces the track's old frames and sidecars, and a track with no accepted answer keeps them. An answer unlike the old lyrics frames is not accepted, nor an untimed one for a track whose lyrics are synced. Refused with `--offline`, `--refetch-untimed` and `--refetch-implausible`. |
 | `--refetch-untimed` | off | `run` only: ask the providers again for each track whose lyrics are untimed only, as though it held none; any accepted answer replaces its old frames and sidecars, however unlike them, and a track with no answer keeps them exactly as they were, except that its sidecar and its frames, each judged alone, are removed when implausible (more words a second than any song is sung at, a `.txt` too large to read, or placeholder lyrics). Synced tracks and tracks with no lyrics run as without it; a track holding only placeholder lyrics is asked again in any run (*Placeholder lyrics*). Refused with `--fresh` and `--offline`. |
 | `--refetch-implausible` | off | `run` only: ask the providers again for each track whose serving lyrics are implausible, synced lines starting past the audio's end or more words a second than any song is sung at, as though it held none; a plausible answer replaces them, and a track with none has the implausible side, its sidecars or its frames, removed, backed up for undo. Plausible tracks run as without it. Combines with `--refetch-untimed`, asking the union of the two; refused with `--fresh` and `--offline`. |
@@ -68,16 +73,18 @@ table marks `run` only, `run` and `compare` only, or `run` and `prune` only, `--
 `--lang`, `--fresh`, `--refetch-untimed` and `--refetch-implausible` among them. `compare` reads the album as it is now, asks the providers and writes nothing, so it
 refuses `--run-id`, `--dry-run`, `--offline`, `--fresh`, `--refetch-untimed`,
 `--refetch-implausible` and `--changed-list`, and takes `--lang`, `--config`, `--no-genius`, `--no-netease`, `--no-bandcamp`,
-`--no-youtube-music`, `--no-tekstowo` and `--track`. `prune` judges every run folder by
+`--no-youtube-music`, `--no-tekstowo`, `--only-providers` and `--track`. `prune` judges every run folder by
 its rules, asks no provider and saves no MP3, so it takes `--album` and `--dry-run`
 alone and refuses `--run-id`, `--track`, `--changed-list`, `--lang`, `--config`,
 `--offline`, `--no-genius`, `--no-netease`, `--no-bandcamp`, `--no-youtube-music`,
-`--no-tekstowo`, `--fresh`, `--refetch-untimed` and `--refetch-implausible`. `--fresh`,
-`--refetch-untimed` and `--refetch-implausible` are each refused together with
-`--offline`, since an offline run asks no provider (and would remove implausible lyrics
-unasked), and `--fresh` with either refetch, since it declines the very answers a
-refetch is there to accept. The two refetches combine: a run with both asks again every
-track either would.
+`--no-tekstowo`, `--only-providers`, `--fresh`, `--refetch-untimed` and
+`--refetch-implausible`. `--fresh`, `--refetch-untimed`, `--refetch-implausible` and
+`--only-providers` are each refused together with `--offline`, since an offline run asks
+no provider (and would remove implausible lyrics unasked), and `--fresh` with either
+refetch, since it declines the very answers a refetch is there to accept. The two refetches combine: a run with both asks again every
+track either would. `accept` takes every run, as `prune` does, so it takes `--album` and
+`--apply` alone and refuses every other option, `--dry-run` included: leaving out
+`--apply` is its dry run. Every other mode refuses `--apply`.
 `--changed-list` is refused by `check` and with `--dry-run`: neither changes anything, so
 its list would always be empty.
 
@@ -98,7 +105,45 @@ both YouTube Music steps and the Tekstowo step by default: `--no-netease` leaves
 both NetEase steps, `--no-bandcamp` the Bandcamp one,
 `--no-youtube-music` the next two and `--no-tekstowo` the last, and YouTube Music and
 Tekstowo are each left out as well while its own cool-down holds (*Bandcamp through
-MusicBrainz*, *YouTube Music* and *Tekstowo.pl*, below).
+MusicBrainz*, *YouTube Music* and *Tekstowo.pl*, below). `--only-providers` leaves out
+every provider it does not name, LRCLIB included (*Asking only some providers*).
+
+### Asking only some providers
+
+`--only-providers` exists for the sweep. An album some provider refused (overloaded,
+unreachable, rate limited or blocked) on a track that provider could still answer (one
+holding no synced lyrics, or no lyrics at all for a provider with only untimed steps) is
+owed that provider's answer, as it is owed a provider a run left out by its cool-down,
+or a provider a refusal stopped part-way for the tracks after its stop, while that
+provider could still answer a track, and the sweep comes back to it; on that
+revisit it names the owed providers, so the album tool asks again only the providers
+that refused or were not asked, never one that already answered. It is just as usable
+by hand, to ask one provider for an album.
+
+Its value is one word, the names parted by commas with no spaces: `lrclib`, `netease`,
+`youtube-music`, `bandcamp`, `genius` and `tekstowo`, each the words its `--no-*` option
+uses (LRCLIB has none, so `lrclib` is the only way to leave it out). The names are
+derived from the providers' own labels, in lower case with a space as a hyphen, so the
+help and the error list them as the code does. They are lowercase, as every option value
+here is: `Genius` is refused. An empty value, an empty name (`genius,`), an unknown name
+(`musicbrainz` among them: MusicBrainz is asked only by the Bandcamp step, so `bandcamp`
+names both) and a name given twice are each a usage error, exit `2`. Given twice, the
+option's last value wins, as any argparse option's does.
+
+A provider left out is not in the run's table at all: it is not asked, it records no
+attempt and no refusal for any track, its breaker file (*Network discipline*) and its
+cool-down file are neither read nor written, and the summary shows it as not asked, as
+its `--no-*` option would: `genius: skipped`, `bandcamp: off (--only-providers)`,
+`youtube music: off (--only-providers)`, `tekstowo: off (--only-providers)`, and `-` on
+the provider line. A provider both named and turned off by its own `--no-*` option is
+off, and its line names the `--no-*` option.
+
+It only narrows the providers; which tracks ask them is the other options' to decide. So
+it combines with `--fresh`, `--refetch-untimed`, `--refetch-implausible`, `--track` and
+`--mode compare`, each of which asks the named providers alone. A dry run takes it, as it
+takes the `--no-*` options, and plans as a run would, though a plan asks no provider. It
+is refused with `--offline`, which asks none, and by the modes that ask none: `check`,
+`undo`, `strip`, `prune` and `accept`.
 
 **`--track` runs one track** of the album instead of every one, and every run option
 works with it: `--dry-run`, `--offline`, `--fresh`, `--refetch-untimed` and
@@ -129,8 +174,11 @@ leaves the track stripped: a full disk during the embed (`ERROR embed`), or a si
 strip cannot remove, such as one in a folder that cannot be written or one marked
 immutable (`ERROR strip`, after the frames are gone). `--mode undo` puts the old frames
 and sidecars back in every such case. On a network file system that refuses opening a file
-for update, the check can refuse an MP3 the embed could have written; the track keeps its
-lyrics, as `ERROR embed`. **A fresh run keeps the old lyrics when nothing is found:** a
+for update, no MP3 can be embedded: the embed opens the track for update itself, so a
+fresh run's check refuses it before the strip and the track keeps its lyrics, as
+`ERROR embed`. `--mode strip` and `--mode undo` cannot save such a track either: one
+whose frames they must rewrite is that track's error, before its frames or sidecars
+change. **A fresh run keeps the old lyrics when nothing is found:** a
 track with no accepted answer keeps its frames and sidecars exactly as they were and
 reports `kept existing` when it had lyrics frames, in any language, or a sidecar the
 backup recorded, a link included; a track with neither reports `not found` (`no lyrics
@@ -252,9 +300,9 @@ strip and embed errors a fresh dry run does; every other track plans as without 
 option.
 
 **`--mode run --refetch-implausible`** asks the providers again for each track whose
-serving lyrics are implausible, the way out for a track a run took another song's lyrics
-for before answers were judged against the track's length: a full song's timed lines on a
-short interlude, say. The serving lyrics are those the fetch would serve the track from
+serving lyrics are implausible, the way out for a track already holding another song's
+lyrics, since a run judges a provider's answer against the track's length but never what
+the track holds: a full song's timed lines on a short interlude, say. The serving lyrics are those the fetch would serve the track from
 (*How a track's lyrics are found*): a timed `.lrc`, unless labeled as machine-made, then
 the best-ranked worded synced frame, the one in `--lang` first, then a `.txt` (or a
 labeled or untimed `.lrc`), then the best-ranked worded untimed frame, a placeholder never
@@ -323,6 +371,26 @@ newest run unless `--run-id` names another. It is read only: it writes nothing a
 beside another run of the same album. A track whose check cannot run (the file deleted or
 unreadable since the run, or, for a track served from its frames, its sidecar unreadable)
 is that track's `ERROR` row, and the exit code is `1`.
+
+**Which folders are runs.** A run is a folder under `.lyricsmith` named by a run id (the
+start time in UTC, `YYYYMMDDTHHMMSSZ`, with `-2`, `-3` and so on for a later run started
+in the same second) that holds a `manifest.json` entry: any entry by that name, a folder
+or other non-file included, makes the folder a run. A folder with no manifest is a
+backup that never finished, and no run; a link under a run id's name is no run either. A
+manifest that is itself a symbolic link, dangling or leading out of the run folder, still
+makes its folder a run, as prune reads it, and so does one that cannot be looked at
+because its folder is not open to search. A manifest that is no regular file, a folder,
+a FIFO pipe or a socket, is read without waiting on it and refused the same way, so a
+pipe with no writer never stalls an undo, a check, a prune or a sweep. `--mode check` and `--mode undo` then refuse
+that run rather than pass over it to an older run: they exit `2` with one line on stderr,
+after the program's name, `run '<id>': its manifest could not be read (<reason>); choose another run with
+--run-id <older id>, or mend or remove its run folder <path>`. An undo of an older run
+warns that a newer run's changes to the same tracks were overwritten. Every other file
+a mode reads after finding it is opened the way a manifest is, without waiting: a frame's
+export or exact copy and a sidecar's copy in a run folder, a sidecar beside a track, the
+track's MP3 itself, and a cool-down or breaker file. A FIFO pipe or a device swapped in
+under one is refused by the open itself, as that track's error or that file's warning,
+and is never waited on.
 
 **`--mode undo`** takes the album lock and puts a run's backed-up lyrics frames and sidecars
 back, every track of the run or the one `--track` names. Undoing a run that is not the newest
@@ -447,8 +515,9 @@ would be removed but any run left behind is not `undone`, it is kept instead, as
 `kept: newest, another run is not undone`; every older removable run still goes. A kept run with
 displaced sidecars counts as left behind, but it is `undone`, so it does not hold the newest
 back. An unreadable one counts as not undone, and an unreadable run newer than the newest
-readable one holds that run back too, since a plain undo can pass over an unreadable run (a
-linked manifest) for the run below it. With no runs left at all, a plain undo reports that
+readable one holds that run back too: a plain undo refuses the unreadable run (*Which
+folders are runs*), and once it is mended or removed by hand, the run below it is the one a
+plain undo reaches. With no runs left at all, a plain undo reports that
 there is no run, as on an album never run.
 
 **Rename, then delete.** Each folder is first renamed, inside the run folder, to
@@ -486,6 +555,126 @@ Exit `0` means the pass finished, whatever it kept; `1`, that at least one remov
 `2`, that it could not start (an unusable album, a refused link, the album lock held, or a
 `shutil.rmtree` without protection against links); `3`, that the report could not be
 written.
+
+**`--mode accept`** keeps the album as it is and drops what its runs kept for undo, for
+the one `--album`. Prune removes only what nothing needs, so a kept run stays forever;
+accept is the supported way to let it go. It deletes on purpose: a run's backup can hold
+the only copy of lyrics the run replaced or removed, and of a sidecar undo set aside, and
+after accept no undo can bring them back. So by default it only reports, and removes
+nothing without `--apply`. **Run the report-only pass first, on any library**, and read
+its at-risk list before adding `--apply`.
+
+Every run of the album is taken, always; no option picks a run, a track or an age. With
+`--apply`, each run's `manifest.json` is copied to a records folder outside the library,
+and then the album's whole `.lyricsmith` folder goes, its `lock` included. The pass asks
+no provider and touches no MP3 and no sidecar.
+
+**Accept needs a POSIX system.** It deletes only through a `shutil.rmtree` that is proof
+against links, and on Windows `shutil.rmtree.avoids_symlink_attacks` is false, so there
+accept is refused with exit `2` before anything is read, its report-only pass included.
+
+**What refuses the album** (exit `2`, nothing touched, each reason printed as a
+`refused:` line in the report, except where the table says one error on stderr):
+
+| The album holds | Refused as |
+| --- | --- |
+| A run whose manifest says `backed_up`, a run that never finished | `unfinished run`: undo it, or run the album again, first |
+| A manifest that cannot be read, which could be neither judged nor recorded | `unreadable manifest`, with the reason |
+| A run whose manifest reads but whose `undo` folder cannot be listed, so its set-aside files could not be judged | `unreadable run folder`, with the reason |
+| An entry in `.lyricsmith` that is not the `lock`, a run-id folder or a `.pruning` leftover | `unknown entry`, each named: deleting the folder would delete something lyricsmith did not write |
+| A linked `.lyricsmith` or `lock`, or a link or non-folder at `.lyricsmith.accepting` | one error on stderr and no report, before anything is read, as the other modes refuse a link |
+
+The album lock held by another run, and a Python whose `shutil.rmtree` does not protect
+against links (as for prune), refuse it too, each as one error on stderr and no report.
+
+**What is at risk**, listed by track ahead of everything else, each with its run and
+reason. Every run counts, not only the newest: a newer run's backup holds the older run's
+output, never the older run's original, so each run's backup is the only copy of what
+that run replaced. A track's entry counts only when it is not undone and its backup holds
+a file (a frame export, or a sidecar copy rather than a link) that the run touched:
+
+| The run's outcome for the track | At risk as |
+| --- | --- |
+| `removed` | `removed`, with its reason (`placeholder`, `past end`, `too many words`, `other`) |
+| `stripped` | `stripped` |
+| `written`, or `error` once its backup holds a file | `replaced` |
+| `kept existing`, `not found`, `silent`, `no lyrics expected` | `replaced` when the sidecar tidy-up removed or renamed a backed-up sidecar; else nothing |
+| `unchanged`, or `error` with nothing backed up | nothing |
+| a track listing displaced sidecars, or a file in the run's `undo` folder | `set aside`, undone or not |
+
+Accept also runs `--mode check` over every track's current lyrics before anything goes,
+since check reads the backups: a track whose check flags is listed as `check flags` with
+check's own reason, and one whose check could not run as `check could not run`.
+
+**The order, so a failure leaves the recoverable state.** Under the album lock: read and
+judge every run, refuse or check, and stop there without `--apply`. With it: first finish
+any `.lyricsmith.accepting` an earlier accept left (below); then create the records
+folder, write every manifest copy atomically and read each back; only then rename
+`.lyricsmith` to `.lyricsmith.accepting`, lock inside, and delete it. Each manifest
+is read again for its copy, held to the judgment's own rules: one that now leads out of
+its run folder through a link, has been swapped for a link since, or is over the
+manifest's 16 MiB cap is a records failure, and none of its bytes are copied. A
+records failure deletes nothing more and exits `2`, though a leftover finished before
+it stays finished;
+when the records folder was made before the failure, the report names it as
+`partial records: <folder>`, which may hold some of the copies. A delete that fails
+leaves `.lyricsmith.accepting`, which no mode reads as a run; the next accept finishes
+it first, reported as `left by an earlier accept`, even on an album with no
+`.lyricsmith` left, where it takes no lock, since taking it would create the folder.
+Renaming the whole folder, lock included, is what lets the lock go: a run that starts
+afterward makes a fresh `.lyricsmith` and its own lock. A folder you made yourself
+named `.lyricsmith.accepting` is taken for a leftover and deleted with `--apply`,
+unjudged.
+
+**The records folder** is `$XDG_STATE_HOME/lyricsmith/accepted/` when that holds an
+absolute path, else `~/.local/state/lyricsmith/accepted/`, as the sweep's ledger is. Each
+accept makes one folder there, named by its UTC time and a short hash of the album's
+path, holding `album.txt` (the album's resolved path) and each run's manifest as
+`<run id>.json`, byte for byte. It holds no lyrics, but it is your own track data, the
+paths and titles of your library: keep it local, and never commit it. So each file is
+written readable by you alone (permissions 0o600), and each folder an accept makes for
+it, its own folder included, 0o700; a folder already there keeps its permissions. No
+mode reads it back; it is there for whatever you later want to know about the runs an
+accept dropped.
+
+The report lists the at-risk tracks, one row for each track, run and reason, then one
+row per run (its state, and what its backup holds as counts of frame exports, sidecar
+copies and set-aside sidecars), then where the records went, then a counts line; a
+report-only pass ends with a hint. The names below are invented:
+
+```text
+album accept: 2 run folders under <album>
+
+ #  track            run               reason    detail
+ 1  01 Harbor.mp3    20261019T161809Z  replaced  written
+ 2  01 Harbor.mp3    20261022T031008Z  replaced  written
+ 3  02 Lantern.mp3   20261022T031008Z  removed   placeholder
+
+ #  run               state     frames  sidecars  set aside  outcome
+ 1  20261019T161809Z  complete  0       1         0          would remove
+ 2  20261022T031008Z  complete  2       1         0          would remove
+
+would remove 2 · at risk 2 · errors 0
+report only: nothing was removed; add --apply to remove it
+```
+
+With `--apply` the outcomes read `removed`, a `records: <folder>` line comes before the
+counts line, and the counts line begins `removed N`, counting run folders. `at risk`
+counts tracks, each once however many rows it has (above, three rows, two tracks). A
+removal that failed shows `ERROR: <reason>`, and a leftover's own row,
+`.lyricsmith.accepting`, comes last in the table. A refused album prints its header,
+counting the run-id folders it found, then `refused: <reason>: <detail>` for each
+reason, then `refused: nothing was removed`. An album with neither folder prints that
+it has no run and exits `0`, and nothing is created. Exit `0` means the pass finished;
+`1`, that a removal failed; `2`, that the album was refused, the records could not be
+written, or the pass could not start; `3`, that the report could not be written.
+
+**What changes for the other modes.** A plain `--mode undo` or `--mode check` on an
+accepted album reports that it has no run, as on one never run, and so does a ledger's
+printed undo command. `--mode compare` finds no record of where a track's lyrics came
+from, so it treats them as unrecorded and may report a provider's own lyrics as a
+disagreement with them. Any later run recreates `.lyricsmith`, since that is where its
+undo lives.
 
 ## How a track's lyrics are found
 
@@ -765,7 +954,9 @@ bytes of the reply, and each call opens a fresh connection, so a call that was a
 shares nothing with the next. Every request, to every provider, names the tool and
 its version in its `User-Agent`, as LRCLIB asks of its clients, with no address or
 personal detail in it (MusicBrainz's alone adds the contact, when the config file sets
-one: *The config file*): the tool's folder name and the project's version, each kept to
+one: *The config file*): the tool's name, `lyricsmith`, and the project's version from
+`[project].version` in the project's `pyproject.toml` (`unknown` when it cannot be read;
+`../lyricsmith_project/lyricsmith_project.md`), each kept to
 ASCII letters, digits, `.`, `_` and `-`, so neither can break the header, and a half
 left empty reads `lyrics-tool` or `unknown`. Genius requests go through a session of the
 tool's own in place of lyricsgenius's, so neither the library's header naming the
@@ -784,21 +975,91 @@ each request to `api.genius.com`, and is dropped on a redirect to another host. 
 Genius session keeps no cookie a reply sets, so it never sends one back, not even on a
 redirect's next hop.
 
-An LRCLIB or NetEase request refused in a way that may pass, an HTTP 429, 502, 503 or 504
-or a connection that dropped or was refused, is tried again up to three times, after 2, 5
-and then 10 seconds. A reply's `Retry-After` header in whole seconds replaces that wait, up
-to 10 seconds; its date form is ignored. The retries stay inside the call's 30-second
-deadline: a wait that would end past it is not begun, and the step's error is the last
-refusal, so a call is never abandoned in the middle of a wait. Every other failure is that
-step's error at once: another 4xx status, a redirect, a request that timed out (it has
-already spent much of the call), a certificate failure, and a NetEase body refusing the
-request with its own code. A refusal a retry got past leaves no trace. Genius calls are at
-least 3 seconds apart; a pace wait that would end past the call's deadline is not begun,
-and the call times out. A Genius 403 or 429 challenge is retried after 15, 45 and 90
-seconds, then is that step's error (`HTTP 429 after 3 retries`). A retry wait that would end
-at or past the call's deadline is not begun either: the last challenge is then the step's error,
+An LRCLIB or NetEase request refused in a way that may pass, an HTTP 429 or any server
+error (5xx), or a connection that dropped or was refused, is tried again up to three
+times, after 2, 5 and then 10 seconds. A reply's `Retry-After` header in whole seconds
+replaces that wait, up to 10 seconds; its date form is ignored. The retries stay inside
+the call's 30-second deadline: a wait that would end past it is not begun, and the
+step's error is the last refusal, so a call is never abandoned in the middle of a wait.
+Every other failure is that step's error at once: another 4xx status, a redirect, a
+request that timed out (it has already spent much of the call), a certificate failure,
+a connection that dropped while the reply's body was read (unreachable, but past the
+retries, which end once a reply's status is in), and a NetEase body refusing the request
+with its own code. A refusal a retry got past is
+no error, but each retry made after a refusal is counted by provider and reason,
+Genius's challenge retries included, kept in the manifest's `retried` map and shown on
+the summary's `providers:` line (`7 retried`). Genius calls are at least 3 seconds
+apart; a pace wait that would end past the call's deadline is not begun, and the call
+times out. A Genius 403 or 429 challenge is retried after 15, 45 and 90 seconds, then is
+that step's error (`HTTP 429 after 3 retries`). A retry wait that would end at or past
+the call's deadline is not begun either: the last challenge is then the step's error,
 counting the retries made (`HTTP 429 after 1 retry`), or as it came when none was made.
+So it is when a retry's turn times out, the pace wait or the lock outlasting the
+deadline: no request went out, so the challenge is what Genius last answered, not a
+timeout.
 Any other HTTP error status from Genius is that step's error at once.
+A Genius lookup makes up to four requests through the library, the search, a fallback
+search, the keyed song record and the lyrics page, and its refusal does not record which
+of them drew the challenge.
+
+**A breaker per provider.** LRCLIB, NetEase, Genius and Bandcamp each have a breaker,
+which stops asking a provider that keeps refusing; MusicBrainz's requests are Bandcamp's
+step's, so Bandcamp's breaker covers them. YouTube Music and Tekstowo have none: their own
+24-hour stop holds (*YouTube Music*, *Tekstowo.pl*).
+
+- Three refusals in a row that are `overloaded`, `unreachable` or `rate limited` (each
+  refusal's `reason`, below) open it for 5 minutes. A step whose breaker is open is not
+  asked: the track records a refusal of the breaker's last reason, its detail `breaker
+  open until 09:35:00 UTC`, marked `unsent` since no request went out. The summary's
+  `refusals:` and `providers:` lines count such a step as `breaker open`, apart from
+  the refusals heard; the sweep still owes the provider for it.
+- Once the window has ended, the next track asks (half-open). An answer, or nothing
+  found, closes it and resets the count; a refusal opens it again for twice the window,
+  up to 60 minutes. A breaker left half-open for more than 60 minutes past its window
+  is read as closed, so a provider not asked for that long starts over: its next
+  refusal counts one, rather than reopening a window from days before at double.
+- One `blocked` refusal (a `401`, `403`, `407` or `451`, a challenge page, Genius still
+  challenged after its retries) opens it at once for 60 minutes. A sweep visits an owed
+  album whose last visit was challenged so after every other album
+  (`../sweep/sweep.md`, "An owed album").
+- An `unrecognized` refusal, a reply of a shape the tool does not know or any other
+  client error (a `400`, `404`, `410`, `422`: that one request's fault, not the
+  provider's), neither counts nor resets the count, and the next track asks.
+- One call counts once. An LRCLIB or NetEase step that reads what the provider's call for
+  its other kind heard neither asks the breaker nor tells it anything, and a failure
+  Bandcamp keeps for an album and raises again for each of its tracks counts once.
+  A Bandcamp step served from what it kept for an album, an answer or a failure,
+  sends nothing, so it neither asks the breaker nor tells it anything: it is read
+  even while the breaker is open, and never closes or counts toward opening it.
+
+**The breaker file** is one per provider, beside the cool-down files:
+`$XDG_STATE_HOME/lyricsmith/<provider>_breaker.json` when `XDG_STATE_HOME` holds an
+absolute path, else under `$HOME/.local/state/lyricsmith/`, `<provider>` being `lrclib`,
+`netease`, `genius` or `bandcamp`. It holds `run`, the refusals counted in a row;
+`reason`, the last counted or blocked one's class; `window_s`, the window in seconds;
+and `open_until`, when it ends, in UTC as `2026-10-22T09:30:00Z`. The last two are
+`null` while the breaker is closed. Like the cool-down files, it is written readable
+by you alone (permissions 0o600).
+
+- Every run or compare reads, as it starts, the file of each provider it asks, so a
+  breaker carries across a sweep's albums and a resume. A provider it does not ask
+  (turned off by its `--no-*` option, left out by `--only-providers`, or Genius with no
+  key) has its file neither read nor written, so a broken one is no notice.
+  `--offline` and `--dry-run` never read or write one.
+- It is written atomically and read back, each time the breaker's state changes, and
+  only then.
+- A file that cannot be read, or does not hold a state the breaker can make, is a notice
+  on stderr under the provider's name (`lrclib:`) and counts as no breaker; the next
+  change replaces it. That includes a window ending further off than its own length, so
+  an edited file cannot switch a provider off for good, and a `window_s` that is not
+  above `0` and at most an hour. A file over 1 KiB is refused the same way, read no
+  further than its first byte past that.
+- A file that cannot be written is a notice too, and the run goes on.
+- **To clear a breaker early, delete its file by hand.** No option clears it.
+- `sweep` reads these files too, through the same reader (`read_breaker`), just before it
+  revisits an owed album, and passes over one whose whole debt is held by an open breaker
+  or a cool-down (`../sweep/sweep.md`, *An owed album*). A file that reader ignores is no
+  breaker there either.
 
 **An error status is that step's error, never nothing found.** Every reply's HTTP status
 is read: any status of 400 or above from LRCLIB or NetEase, a 429 rate limit included,
@@ -815,14 +1076,14 @@ error too. A provider that answers every request but wins no track shows in the 
 **Each refusal is recorded on its track.** Every step that ended in an error or a
 timeout is kept in the track's manifest entry as a refusal, in the order asked, naming
 the provider, the step's kind and a short detail, whatever the track's end: `not found`,
-`no lyrics expected`, written, `unchanged`, `kept existing` or `ERROR`. So a later reader
-can tell "the providers refused" from "nothing was found": a refusal beside another
-provider's empty answer still ends `not found` (or `no lyrics expected`, or `silent`,
-*Silent tracks*), and a track every provider failed for is still its `ERROR fetch`, its
-refusals recorded too. An answer
-that is empty, or one the chain does not accept, is no refusal. A track its sidecar or its
-frames served with no provider asked has none; one whose untimed lyrics kept their place
-still asked the timed steps, so it keeps any refusal they met. The detail is one of:
+`no lyrics expected`, written, `unchanged`, `kept existing` or `ERROR`. So a later
+reader can tell "the providers refused" from "nothing was found": a refusal beside
+another provider's empty answer still ends `not found` (or `no lyrics expected`, or
+`silent`, *Silent tracks*), and a track every provider failed for is still its `ERROR
+fetch`, its refusals recorded too. An answer that is empty, or one the chain does not
+accept, is no refusal. A track its sidecar or its frames served with no provider asked
+has none; one whose untimed lyrics kept their place still asked the timed steps, so it
+keeps any refusal they met. The detail is one of:
 
 | Detail | When |
 | --- | --- |
@@ -831,6 +1092,7 @@ still asked the timed steps, so it keeps any refusal they met. The detail is one
 | `HTTP <status> after <n> retries` | A Genius challenge (403 or 429) still answered after `<n>` retries (`after 1 retry` for one): 3, or fewer when the call's deadline left no room for the next wait. With no room for even the first, the challenge is recorded as `HTTP <status>` |
 | `<detail> after <n> retries` | An LRCLIB, NetEase or MusicBrainz request (MusicBrainz's recorded as Bandcamp's) still failing after `<n>` retries (`after 1 retry` for one), `<detail>` being how it failed last: `HTTP 503 after 3 retries`, `ConnectionError after 2 retries`. Fewer than 3 when the call's deadline left no room for the next wait |
 | `timeout` | The call ran past its deadline and was abandoned |
+| `breaker open until <HH:MM:SS> UTC` | The provider was not asked: its breaker was open (*A breaker per provider*); the refusal's `reason` is the breaker's last, and `unsent` is `true` |
 | `unexpected reply` | A reply in a shape the tool does not know, from any provider but Genius; MusicBrainz's is recorded as Bandcamp's |
 | `reply not JSON`, `reply too large` | A reply that is not JSON from any provider but Genius, or over 2 MiB from any provider; from YouTube Music, a reply not JSON stops it for the run |
 | `redirect refused`, `TooManyRedirects` | A Genius redirect off `https` on Genius's own hosts, or a third in a row |
@@ -842,8 +1104,44 @@ still asked the timed steps, so it keeps any refusal they met. The detail is one
 | the error's type | Any other failure, such as `ConnectionError` or `ReadTimeout` |
 
 A detail never holds a reply's body or a request's URL, so no track title reaches it.
-A Genius challenge, or an LRCLIB or NetEase refusal, that a retry got past is no refusal:
-only a step's final failure counts. An LRC provider's untimed step that re-records how its timed step's call failed
+
+Beside its detail, each refusal keeps its facts, read from the error itself and never
+from the detail's words. `reason` is its class: `rate limited` (HTTP 429), `overloaded`
+(any server error, 500 to 599), `unreachable` (a timeout, or a connection that failed or
+dropped), `blocked` (HTTP 401, 403, 407 or 451, a Genius challenge still answered after
+its retries, a YouTube Music challenge redirect or any status from it but a 429 or a
+5xx, a Tekstowo challenge page or third redirect) or `unrecognized` (any other client
+error, such as a 400, 404, 410 or 422, which says that one request was bad rather than
+that the client is barred, though from YouTube Music, whose stop leaves every later
+track unasked, it is `blocked`; whatever a stop's class, `sweep` owes the stopped provider
+for the tracks the stop left unasked (*YouTube Music*, its stop rule); a reply of a shape the tool does
+not know: `unexpected reply`, not JSON, too large, a refused redirect, NetEase's
+`code <n>`, a page not recognized; or any other failure). `status` is the refusing HTTP
+status, `retries` the retries made before the last failure (`0` for none),
+`retry_after_s` the wait the reply's `Retry-After` asked for in seconds, as asked before
+the 10-second cap a retry holds it to, and `server` the reply's `Server` header, one
+line of at most 80 characters, so a CDN's `503` can be told from the origin's.
+`unsent` is `true` only for a step its open breaker skipped (*A breaker per provider*):
+no request went out, and its `reason` is the class that opened the breaker; every other
+refusal is `false`, and an entry written before the field reads as `false`. Every
+provider's refusing reply keeps all three, YouTube Music's and Tekstowo's stops
+included; each is `null` only where there was no refusing reply to read them from: a
+timeout, a dropped connection, a Tekstowo challenge page, third redirect or page not
+recognized (no status or wait; YouTube Music's reply not JSON keeps its `server`), or a
+Genius challenge whose last reply gave none. No part of a reply's body is kept. A
+manifest written before the facts existed still reads: each refusal's `reason` is read
+back from its provider and its detail, as that provider classes it live: `HTTP 429` rate
+limited, `HTTP 500` to `599` overloaded, `HTTP 401`, `403`, `407` or `451` blocked, any
+other `HTTP 4xx` unrecognized except from YouTube Music, any other `HTTP <status>`
+blocked but a redirect status, which is unrecognized except from YouTube Music; Genius's
+`HTTP 403` or `HTTP 429` after retries, Tekstowo's `challenge page` and
+`too many redirects`, and YouTube Music's `redirect to consent` and `redirect to sorry`
+blocked; `timeout` and a connection error's type unreachable; anything else
+unrecognized. Its `retries` reads as `0` and the rest as `null`. Of the facts, `reason`
+and `unsent` are acted on, by the breakers, the summary's counts and the sweep's debt;
+the rest are kept for reading. A Genius challenge, or an LRCLIB or
+NetEase refusal, that a retry got past is no refusal: only a step's final failure
+counts. An LRC provider's untimed step that re-records how its timed step's call failed
 (*Each LRC provider is asked once per query*) is a refusal of its own, one per step.
 
 **Known limit: a Genius challenge page answered with status 200 reads as no lyrics.** Genius
@@ -919,13 +1217,13 @@ the album's next track looks it up again; a slow MusicBrainz is asked again for 
 track, still at its one-request-a-second pace. Nothing is kept between runs.
 
 **Pacing and the worst case.** MusicBrainz is asked at most once a second, its own
-documented limit, and a `429` or `503` from it is retried as an LRCLIB request is
-(*Network discipline*), within the call's deadline. Bandcamp gets at most two page
-requests per album, or among same-titled entries the `/music` page and up to eight album
-pages, never retried: a retry would break that cap, so a refused page is the album's
-error. The worst case for an album is five MusicBrainz requests, about five seconds, and
-nine Bandcamp requests, paid once per album tag; a Bandcamp call's deadline is
-`BANDCAMP_STEP_DEADLINE_S`.
+documented limit, and a `429` or a server error (5xx) from it is retried as an LRCLIB
+request is (*Network discipline*), within the call's deadline. Bandcamp gets at most two
+page requests per album, or among same-titled entries the `/music` page and up to eight
+album pages, never retried: a retry would break that cap, so a refused page is the
+album's error. The worst case for an album is five MusicBrainz requests, about five
+seconds, and nine Bandcamp requests, paid once per album tag; a Bandcamp call's deadline
+is `BANDCAMP_STEP_DEADLINE_S`.
 
 **Redirects.** MusicBrainz's are never followed. A Bandcamp request follows at most two,
 each only to an `https` URL whose host is `bandcamp.com` or ends in `.bandcamp.com`, with
@@ -998,7 +1296,11 @@ deadline is `YOUTUBE_MUSIC_STEP_DEADLINE_S`.
 that starts with `consent.` or a path that starts with `/sorry`, or a `200` whose body is
 not JSON, turns YouTube Music off for the rest of the run and writes the cool-down below.
 That track records the refusal (`HTTP 429`, `redirect to consent`, `reply not JSON`), and
-every later track skips both steps unrecorded, so none counts as asked. **Not a stop**,
+every later track skips both steps unrecorded, so none counts as asked. A stop on a client
+error, such as a `400` or a `404`, is recorded as `blocked`, not `unrecognized`. Whatever
+the stop's reason, `reply not JSON` included, the sweep owes a stopped provider, YouTube
+Music or Tekstowo, for the stopping track and every later track it left unasked that it
+could still answer (`../sweep/sweep.md`, *An owed album*), so the album stays owed to it. **Not a stop**,
 only that track's error, with no cool-down: a `200` of an unexpected shape (`unexpected
 reply`, which is how a change to YouTube's JSON shows and needs a code fix, not a back-off),
 a reply over 2 MiB, a connection error and a request timeout.
@@ -1009,7 +1311,9 @@ a reply over 2 MiB, a connection error and a request timeout.
 from the config file and from every album. It holds three fields, each time in UTC as
 `2026-10-22T09:30:00Z`: `refused_at`, when the refusal came; `what`, what it was
 (`HTTP 429`, `redirect to consent`); and `until`, exactly 24 hours later. It is written
-atomically and read back, since a sweep's next album reads it at once.
+atomically and read back, since a sweep's next album reads it at once, and readable by
+you alone (permissions 0o600); each folder made for it is 0o700, while a folder already
+there, `~/.local/state` say, keeps its permissions.
 
 - Every run or compare that would ask YouTube Music reads it first, and until `until`
   leaves YouTube Music out (`cooling down until <time>` in the summary). `--offline` and
@@ -1021,6 +1325,10 @@ atomically and read back, since a sweep's next album reads it at once.
 - A cool-down that cannot be written still stops YouTube Music for the run, with a
   notice saying so.
 - **To clear it early, delete the file by hand.** No option clears it.
+- `sweep` reads the cool-down files too, through the same reader (`read_cooldown`), just
+  before it revisits an owed album, and passes over one whose whole debt is still cooling
+  down or behind an open breaker (`../sweep/sweep.md`, *An owed album*). A file that reader
+  ignores is no cool-down there either.
 
 ## Tekstowo.pl
 
@@ -1198,6 +1506,10 @@ count is `0`, and the summary says `silence check: off (no ffmpeg)`. A run with 
 `silence check: on` (*What goes to stdout and stderr*). The manifest records which as its
 `silence_check`, and a silent track's peak as `peak_dbfs` (*The backup and its manifest*).
 
+**To find every silent track of a library**, whatever its lyrics, use the sweep's read-only
+`--mode silence` instead: it measures each track the same way and lists the silent ones
+with a verdict on whether each is likely meant (*The silence pass* in `../sweep/sweep.md`).
+
 ## What a write changes
 
 Every write, an embed, a strip or an undo's restore, changes only the `SYLT` and `USLT`
@@ -1284,6 +1596,54 @@ the written and unchanged tracks whose check flagged them, and every track flagg
 names an unchanged track's kind and source after `unchanged` (`unchanged synced
 (sidecar)`).
 
+Right after the counts line, a `written:` line splits the written tracks by what each
+held before the run and what it got, and a `removed:` line splits the removed tracks by
+why their old lyrics went. Each lists only the categories that count a track, in the
+order below, and is left out when it counts none:
+
+```text
+written: upgraded 3, new synced 1, embedded 2
+removed: placeholder 1, past end 1
+```
+
+| Category | Held before | Got |
+| --- | --- | --- |
+| `upgraded` | untimed | synced |
+| `new synced` | nothing | synced |
+| `embedded` | anything | the track's own sidecar, frames or machine-labeled `.lrc` |
+| `synced replaced` | synced | synced, from a provider |
+| `untimed replaced` | untimed | untimed |
+| `new untimed` | nothing | untimed |
+| `replaced by untimed` | synced | untimed |
+| `before unknown` | not recorded | anything |
+
+What a track held is the run's own record of it, the manifest's `held`
+(*`manifest.json`*), read from the files before anything changes, in a run or a strip, by
+the same rule the run uses to judge what a track holds. Synced lyrics count only when a line has words and
+a time stamp in milliseconds, so a `.lrc` with no stamp and a `SYLT` timed in MPEG
+frames are untimed, and a placeholder never counts as synced: a track holding only
+placeholders held untimed lyrics.
+
+Where `held` is unknown (a sidecar that could not be read, a frame over the lyrics cap,
+a track that errored before `held` was read, or a manifest written before the field
+existed), the categories fall back to an approximation, read from the track's `before`
+block rather than the files: synced when the backup holds a `SYLT` frame timed in milliseconds or a `.lrc`
+copy, else untimed when it holds any other lyrics frame or a `.txt` copy, else nothing.
+A `.lrc` copy reads as synced from that record alone, without reading the copy for time
+stamps, and so does a placeholder `SYLT` of time stamps alone beside real untimed
+lyrics: outside a `--refetch-untimed` run, nothing on that record tells them from real
+synced lyrics. A track a `--refetch-untimed` run asked again held untimed lyrics, however its
+backup records them, since that run picks only tracks holding no real synced lyrics. A
+sidecar recorded as a link was never copied, so it counts as nothing. A track whose only
+lyrics were placeholders (*Placeholder lyrics*) held untimed lyrics, however they were
+stored.
+
+The removed reasons are `placeholder` (a stored placeholder), `past end` and `too many
+words` (the check's rows a refetch judged the old lyrics by), and `other` (a `.txt` too
+large to read, say). They are read from the outcome's `implausible` text; when the
+sidecars and the frames went for different reasons, the first one naming a rule
+decides.
+
 After the counts line, a line each says whether the run asked Bandcamp, YouTube Music
 and Tekstowo, and whether it measured silence:
 
@@ -1294,8 +1654,9 @@ tekstowo: on
 silence check: on
 ```
 
-`bandcamp:` reads `on`, `off (--no-bandcamp)` or `off (offline)`. `youtube music:` reads
-`on`, `off (--no-youtube-music)`, `off (offline)`, `cooling down until <time>` when a
+`bandcamp:` reads `on`, `off (--no-bandcamp)`, `off (--only-providers)` or `off
+(offline)`. `youtube music:` reads `on`, `off (--no-youtube-music)`, `off
+(--only-providers)`, `off (offline)`, `cooling down until <time>` when a
 cool-down held as the run began, or `stopped after <refusal>; cooling down until <time>`
 when a refusal stopped it during the run (*YouTube Music*), `<time>` in UTC as
 `2026-10-22T09:30:00Z`. `tekstowo:` reads the same, its option `--no-tekstowo`, its
@@ -1308,11 +1669,30 @@ none of them.
 measure nothing and print no such line.
 
 A run's summary follows those lines with one line tallying each provider in chain
-order: the tracks whose answer the run kept, over the tracks it was asked for, and, for
-a provider that refused or failed for any track, how many in brackets.
+order: the tracks whose answer the run kept, over the tracks it was asked for, and, in
+brackets, those kept answers by kind, then how many tracks it refused or failed for,
+how many it was not asked for because its breaker was open, and how many retries it
+made after a refusal (*Network discipline*), each only when it is not zero. A track
+counts as `breaker open` only when every refusal it met from that provider was a step
+its open breaker skipped (`unsent`); one that met a refusal heard too counts as
+refused. A skipped track still counts as asked, so one Genius challenge and the twenty
+lookups it left unsent read `Genius 0/21 (1 refused, 20 breaker open)`. A `;` parts
+the kinds from the other counts when both are shown. The kinds count the tracks whose
+kept lyrics came from that provider, so they add up to the tracks won. Retries are counted per retry, not per track, whether the request then
+answered or not; Genius's challenge retries count as Genius's.
 
 ```text
-providers: LRCLIB 5/12 · NetEase 4/7 (3 refused) · YouTube Music 2/3 · Bandcamp 0/2 · Genius - · Tekstowo 0/1
+providers: LRCLIB 5/12 (4 synced, 1 untimed; 7 retried) · NetEase 4/7 (4 synced; 3 refused, 1 retried) · YouTube Music 2/3 (2 untimed) · Bandcamp 0/2 · Genius - · Tekstowo 0/1
+```
+
+When any provider refused, a `refusals:` line follows it, counting the tracks each
+provider refused for each reason (*Each refusal is recorded on its track*); a track
+counts once per provider and reason, however many of the provider's steps refused it.
+A step its open breaker skipped counts under `breaker open`, after every reason, never
+under the reason that opened the breaker:
+
+```text
+refusals: LRCLIB overloaded 12, unreachable 1; Genius blocked 1, breaker open 20
 ```
 
 A provider counts once per track, its synced and plain steps together, and so does a
@@ -1334,8 +1714,9 @@ none as kept. An
 `unchanged` track's answer counts as kept, as a written one's does. `-` marks a provider
 the run did not hold: Genius without a key or under `--no-genius`, Bandcamp under
 `--no-bandcamp`, YouTube Music under `--no-youtube-music` or while its cool-down held,
-Tekstowo under `--no-tekstowo` or while its cool-down held, and every provider under
-`--offline`. A provider that answers every request with plausible but useless data wins
+Tekstowo under `--no-tekstowo` or while its cool-down held, each provider
+`--only-providers` does not name, and every provider under `--offline`. A provider that
+answers every request with plausible but useless data wins
 nothing and shows `0/<n>`, where the counts alone would never show it. A strip and a dry
 run ask no provider and print no such line. A run cut short tallies the tracks whose fetch
 finished. A track counts once as refused however many of the provider's steps refused for
@@ -1361,26 +1742,33 @@ the notices go to stderr as a run's do.
 **Notices on stderr** are prefixed by what they concern: `genius:` (the key: no key
 found, a key file readable by others, an unusable default file), `no_lyrics:` (the
 default file's genre list), `musicbrainz:` (the default file's `[musicbrainz] contact`
-unusable, never quoting it, so no contact is sent), and `youtube music:` and `tekstowo:`
+unusable, never quoting it, so no contact is sent), `youtube music:` and `tekstowo:`
 (that source's cool-down file that cannot be used and is ignored, or one that could not be
-written after a refusal).
+written after a refusal), and `lrclib:`, `netease:`, `genius:` and `bandcamp:` (that
+provider's breaker file that cannot be used and is ignored, or one that could not be
+written).
 
 Every printed name, path and message shows its control characters (C0, tab and newline
 included, DEL and C1) as visible `\xNN` escapes, and its direction marks, embeddings,
 overrides and isolates (U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) and line and
 paragraph separators (U+2028, U+2029) as `\uXXXX`, so a name cannot drive the terminal or
-read as another. Every other character prints as it is. The manifest keeps the true
-names.
+read as another. Every other character prints as it is. The escape is the shared
+library's `stdio_utf8.spell_unsafe`, the one every lyricsmith tool prints a name through.
+The manifest keeps the true names.
 
 ## Exit codes
 
 | Code | When |
 | --- | --- |
 | `0` | Every track was processed with no error. A track with no lyrics found, or one the check flagged, is not an error, and neither is a compare FLAG nor a hint, whatever the count. |
-| `1` | At least one track errored: its backup, sidecar, fetch, strip, embed or check, or its undo. A prune exits `1` when a run folder's rename or removal failed. A compare exits `1` when any row is an `ERROR`: a tag or sidecar it cannot read, or every provider asked failing. A dry run exits `1` when it cannot plan a track: its tag or sidecar unreadable, or, with `--fresh`, or for an untimed-only track with `--refetch-untimed`, a sidecar name its strip, or an MP3 its embed, would fail on. |
-| `2` | The run could not start: a bad or misplaced option, no album or no MP3 under it, the album lock held by another run, no run to check or undo, a prune on a Python whose `shutil.rmtree` does not protect against links, a `--track` outside the album or the run or not one of its tracks (*`--track` paths*), or an unusable `--config` (unreadable, holding none of the three tables, a malformed `[no_lyrics]` table, or an unusable `[musicbrainz] contact`). Also an album-level error before any MP3 changed, as below. |
-| `3` | The work finished, or stopped part-way, but its record could not be written: the run's manifest after a track finished (an OS error, or a write that does not read back as written), or the `--changed-list` file. Each is said on stderr after the report. So is a prune's report that could not be written, and so is a report that could not be written once any mode's work began, a dry run's, a check's and a compare's included: a progress line or the summary refused by a closed stderr or stdout (below). It outranks `1` and `130`, since undo depends on the record: a run with track errors, or one a Ctrl-C stopped, whose record also failed exits `3`, its errors still in the summary. |
-| `130` | Interrupted with Ctrl-C. Once the backup is done, the manifest records the tracks that finished; before it, the run stops with no summary and no track changed. |
+| `1` | At least one track errored: its backup, sidecar, fetch, strip, embed or check, or its undo. A prune exits `1` when a run folder's rename or removal failed, and an accept when the removal of `.lyricsmith`, or of an earlier accept's leftover, failed. A compare exits `1` when any row is an `ERROR`: a tag or sidecar it cannot read, or every provider asked failing. A dry run exits `1` when it cannot plan a track: its tag or sidecar unreadable, or, with `--fresh`, or for a track asked again (one holding only placeholder lyrics, or one `--refetch-untimed` or `--refetch-implausible` picks), a sidecar name its strip, or an MP3 its embed, would fail on. |
+| `2` | The run could not start: a bad or misplaced option, no album or no MP3 under it, the album lock held by another run, no run to check or undo or a chosen run whose manifest could not be read (*Which folders are runs*), a prune or an accept on a Python whose `shutil.rmtree` does not protect against links, an accept that refused the album or could not write its records (*`--mode accept`*), a `--track` outside the album or the run or not one of its tracks (*`--track` paths*), or an unusable `--config` (unreadable, holding none of the three tables, a malformed `[no_lyrics]` table, or an unusable `[musicbrainz] contact`). Also an album-level error before any MP3 changed, as below. |
+| `3` | The work finished, or stopped part-way, but its record could not be written: the run's manifest after a track finished (an OS error, or a write that does not read back as written), or the `--changed-list` file. Each is said on stderr after the report. So is a prune's or an accept's report that could not be written, and so is a report that could not be written once any mode's work began, a dry run's, a check's and a compare's included: a progress line or the summary refused by a closed stderr or stdout (below). It outranks `1` and `130`, since undo depends on the record: a run with track errors, or one a Ctrl-C stopped, whose record also failed exits `3`, its errors still in the summary. |
+| `130` | Interrupted with Ctrl-C. Once the backup is done, the manifest records the tracks that finished; before it, the run stops with no summary and no track changed. An accept stopped after its rename leaves `.lyricsmith.accepting`, which the next accept finishes; stopped before it, none of the album's runs was removed. |
+
+A shared library or a sibling tool's module that cannot be located, or that a same-named
+module would shadow, also exits `2`, before anything runs: see *Exit codes* in
+`../README.md`.
 
 **An album-level error is exit `2`, with one line on stderr naming it and no traceback:** an OS error, or a manifest write that does not read back as written.
 The album-level steps are taking the lock (a read-only album cannot hold one), the backup,
@@ -1477,10 +1865,18 @@ and the file when absent. A second run of the same album while the first holds i
 backed up. The kernel drops the lock when its holder exits, however it exits, so a run
 killed outright leaves a lock file that holds nothing, and the next run simply takes it. The
 file itself stays between runs: deleting it would race a second run opening it, and the two
-could then each hold a lock.
+could then each hold a lock. The one exception is `--mode accept --apply`, which holds the
+lock while it renames the whole `.lyricsmith` folder, lock inside, out of the way: a run
+that starts afterward creates a fresh folder and lock, sharing no file with the old one, so
+no two holders can meet. Accept's report-only pass takes the lock as prune's dry run does,
+so on a `.lyricsmith` holding no `lock` it creates an empty one, the only change it makes.
+Two accepts started on one album at once cannot both judge it: the second finds the lock
+held, or, once the first has renamed the folder, only its `.lyricsmith.accepting`, which it
+finishes as a leftover. Both may then delete the same folder, so one can report its removal
+as an `ERROR` and exit `1`; the records were already written and nothing is lost.
 
 `.lyricsmith` and its `lock` must be real: a symbolic link at either name would put the
-run folder or the lock outside the album, so run, strip, undo, check and prune refuse it
+run folder or the lock outside the album, so run, strip, undo, check, prune and accept refuse it
 with exit `2` before anything is created or read. A run-id folder under the run folder
 that is a link is not a run: it is never listed, never chosen
 as the newest, and `--run-id` naming it finds no run.
@@ -1634,7 +2030,9 @@ Every run keeps its backup in a hidden folder inside the album:
   Undo and check find every file by the name the manifest records, so runs written
   before this rule read as they always did.
 - **Each export is proven.** After writing a frame's `.lrc` or `.txt`, the backup reads
-  it back and compares it with the frame. An LRC cannot carry every SYLT frame: one
+  it back and compares it with the frame. That read, and the one proving an exact copy,
+  never follows a link: one found under the name since the write fails the track's
+  backup. An LRC cannot carry every SYLT frame: one
   timed in MPEG frames rather than milliseconds, entries stored out of time order, an
   entry holding a line break or leading or trailing spaces, or one opening with a
   bracket that would read back as a stamp. A USLT text holding what UTF-8 cannot encode
@@ -1663,7 +2061,7 @@ The manifest holds only paths inside the album, and `album` is always `"."`, so 
 or renaming the album folder does not break undo. Its top level records the `schema`
 (`1`; any other value is refused, exit `2`), the `run_id`, the `lang` written into new
 frames, the run's `state`, `genius` (`configured` or `absent`), `bandcamp`, `youtube_music`,
-`tekstowo`, `silence_check` and the `tracks`. `state` moves from `backed_up` to `complete`
+`tekstowo`, `silence_check`, `retried` and the `tracks`. `state` moves from `backed_up` to `complete`
 when the run finishes, and to `undone` once every track of the run is undone. A run killed
 part-way stays `backed_up`, which undo honors.
 
@@ -1680,6 +2078,11 @@ stays `1` and every older run still checks and undoes.
 it missed (*Silent tracks*). It is optional when read in the same way: a manifest without
 it reads `off`, which is true of every run made before it existed.
 
+`retried` maps each provider to the retries made after a refusal so far, by reason, such
+as `{"Lrclib": {"overloaded": 7}}`; MusicBrainz's count as Bandcamp's. Each manifest
+write reads it afresh. It is optional when read: a manifest without it reads as no
+retries, which is what every run made before it recorded.
+
 Each track records:
 
 | Field | What it holds |
@@ -1687,7 +2090,7 @@ Each track records:
 | `path` | The MP3's path inside the album. |
 | `id3_version` | The ID3v2 version the file had before the run, as `[2, 4]`, or `null` when it had no ID3v2 header. |
 | `before` | What undo restores: `frames`, each frame's kind, language, description, encoding, SYLT format and type, its export `file` and any `exact` copy; and `sidecars`, each sidecar's `name` and either its copy's `file` or, for a symbolic link, its `link` target, the other `null` (either left out reads as `null`, and an entry with neither is refused); an entry with no `link` field, as a manifest written before links were recorded has, is a file copy. `null` when the track's backup failed. |
-| `after` | What the run did, filled in as the track finishes: `status` (`written`, `unchanged`, `not found`, `no lyrics expected`, `silent`, `kept existing`, `removed`, `stripped` or `error`; a manifest written before `unchanged` existed reads as it always did), `source` (a provider's name, `sidecar`, `frames`, `machine transcript` or `machine timed`), `kind` (`synced` or `unsynced`), `query`, `sidecar_written`, `sidecars_removed`, `sidecars_renamed`, `sidecar_hashes`, `frames_written`, `check`, `error` and `sidecar_links_ignored`, each sidecar link left unread because it leads out of the album (left out, as a manifest written before it existed has, it reads as none), and `refusals`, each provider call that refused or failed instead of answering, in the order asked, as its `provider`, its `step` (`synced` or `unsynced`, the kind it was asked for) and a short `detail` such as `HTTP 503` or `timeout`, one line of at most 80 characters, never a reply body (left out, it reads as none), then `refetch_untimed`, `sidecar_unreadable`, `implausible` and `refetch_implausible` (below), and the silence check's `peak_dbfs`, a number set on a `silent` track alone, and `silence_failed`, a string naming why a missed track's measurement failed (both left out, they read as none). `null` until then. |
+| `after` | What the run did, filled in as the track finishes: `status` (`written`, `unchanged`, `not found`, `no lyrics expected`, `silent`, `kept existing`, `removed`, `stripped` or `error`; a manifest written before `unchanged` existed reads as it always did), `source` (a provider's name, `sidecar`, `frames`, `machine transcript` or `machine timed`), `kind` (`synced` or `unsynced`), `query`, `sidecar_written`, `sidecars_removed`, `sidecars_renamed`, `sidecar_hashes`, `frames_written`, `check`, `error` and `sidecar_links_ignored`, each sidecar link left unread because it leads out of the album (left out, as a manifest written before it existed has, it reads as none), and `refusals`, each provider call that refused or failed instead of answering, in the order asked, as its `provider`, its `step` (`synced` or `unsynced`, the kind it was asked for) and a short `detail` such as `HTTP 503` or `timeout`, one line of at most 80 characters, never a reply body, and its facts (*Each refusal is recorded on its track*): `reason`, `status`, `retries`, `retry_after_s`, `server` and `unsent` (left out, `refusals` reads as none; an entry written before its facts reads its `reason` from its `provider` and `detail`, no `retries` and the rest as `null`; one written before `unsent` reads it as `false`, and any value but `true` or `false` is refused), then `refetch_untimed`, `sidecar_unreadable`, `implausible` and `refetch_implausible` (below), and the silence check's `peak_dbfs`, a number set on a `silent` track alone, and `silence_failed`, a string naming why a missed track's measurement failed (both left out, they read as none), and `held`, what the track held before the run changed anything: `nothing`, `untimed` or `synced` (`null`, or left out, it reads as unknown: for a sidecar that could not be read, a frame over the lyrics cap, a track that errored before `held` was read, and a manifest written before the field existed, which leaves it out; any other value is refused). `null` until then. |
 | `undone` | Whether an undo has put the track back. |
 | `displaced` | Every copy an undo of this track set aside in `undo/`, by its path inside the album, an undo that then failed included. |
 
@@ -1930,7 +2333,10 @@ each track the first entry that decides it wins:
 | Anything else: kept existing, not found, no lyrics expected, an error, or a write served from the track's own sidecar, frames or a machine-labeled `.lrc` | Nothing: the run left the lyrics it found, so the next older run is read. |
 
 A manifest that cannot be read (malformed, an unknown schema, oversized, reached through a
-link) is passed over like a run that never named the track. A track no run decides is
+link, or a FIFO pipe) is passed over like a run that never named the track, and never
+silently: before any provider is asked, compare prints one line on stderr for each such
+run, newest first, `passed over the run .lyricsmith/<id>: its manifest cannot be read
+(<error type>)`, naming the error's type and never quoting the file. A track no run decides is
 `source unrecorded`: its lyrics predate the tool or came from outside it.
 
 A source among the providers compare asks is left out of the questions and its answer is
@@ -1948,8 +2354,9 @@ track's own source, which was not asked (`LRCLIB own`). A provider not asked for
 (Genius without a key or under `--no-genius`, NetEase under `--no-netease`, Bandcamp
 under `--no-bandcamp`, YouTube
 Music under `--no-youtube-music` or while its cool-down holds, Tekstowo under
-`--no-tekstowo` or while its cool-down holds, and LRCLIB, NetEase, Bandcamp, YouTube
-Music and Tekstowo for a query by file name) is left out, and a track no provider was
+`--no-tekstowo` or while its cool-down holds, any provider `--only-providers` does not
+name, and LRCLIB, NetEase, Bandcamp, YouTube Music and Tekstowo for a query by file
+name) is left out, and a track no provider was
 asked for shows `-`. The source's `own` cell is the exception: it shows even when that
 provider is not held (no Genius key, `--no-genius`, `--no-netease`, `--no-bandcamp`,
 `--no-youtube-music`, `--no-tekstowo`)
@@ -1990,7 +2397,8 @@ stderr*), and the `providers:` tally line. Here a provider's count is the tracks
 answer agreed, over the tracks it was asked for, with the tracks set aside as its own and
 the calls that failed in brackets (`LRCLIB 1/3 (2 own, 1 refused)`); a track set aside is
 in neither number, and an error row is never counted as set aside. `-` marks a provider
-compare did not hold.
+compare did not hold. Compare splits no count by kind, and prints no `written:` or
+`removed:` line.
 
 **The intended loop**, for a track whose lyrics are wrong:
 

@@ -115,6 +115,62 @@ class RenderedOutputTests(unittest.TestCase):
         self.assertNotIn("default:", parser.format_help())
 
 
+class _RawShimOverLegacy(help_formatter.RawNoneHidingFormatter, _LegacyDefaultsBase):
+    """The raw, None-hiding shim over the legacy base, so its required case is observable."""
+
+
+class RawNoneHidingLegacyTests(unittest.TestCase):
+    """The None-hiding formatter's own logic, pinned against the legacy stand-in."""
+
+    def setUp(self) -> None:
+        self.formatter = _RawShimOverLegacy(prog="demo")
+
+    def test_a_none_default_is_never_shown(self) -> None:
+        # None is no value a person could type, so the note would say nothing true.
+        rendered = self.formatter._get_help_string(_action(required=False))
+        self.assertEqual(rendered, "Help text.")
+
+    def test_a_required_option_with_a_real_default_loses_the_note(self) -> None:
+        # Not None, so only the inherited required-option override can strip it.
+        rendered = self.formatter._get_help_string(_action(required=True, default=7))
+        self.assertEqual(rendered, "Help text.")
+
+    def test_a_real_default_on_an_optional_keeps_the_note(self) -> None:
+        rendered = self.formatter._get_help_string(_action(required=False, default=7))
+        self.assertEqual(rendered, "Help text." + _DEFAULT_NOTE)
+
+
+class RawNoneHidingRenderedTests(unittest.TestCase):
+    """``format_help()`` under the None-hiding formatter, on the running interpreter."""
+
+    def _parser(
+        self, description: str | None = None, epilog: str | None = None
+    ) -> argparse.ArgumentParser:
+        return argparse.ArgumentParser(
+            prog="demo",
+            description=description,
+            epilog=epilog,
+            formatter_class=help_formatter.RawNoneHidingFormatter,
+        )
+
+    def test_a_real_default_is_shown(self) -> None:
+        parser = self._parser()
+        parser.add_argument("--depth", default=99, help="How deep to walk.")
+        self.assertIn("(default: 99)", parser.format_help())
+
+    def test_a_none_default_is_not_shown(self) -> None:
+        parser = self._parser()
+        parser.add_argument("--model", help="Leave out to use the first found.")
+        self.assertNotIn("default:", parser.format_help())
+
+    def test_the_epilog_and_description_keep_their_line_breaks(self) -> None:
+        epilog = "exit codes:\n  0  done\n  1  a file failed"
+        parser = self._parser(description="first line\n  second line", epilog=epilog)
+        rendered = parser.format_help()
+        self.assertIn(epilog, rendered)
+        self.assertIn("first line\n  second line", rendered)
+
+
 class ExportTests(unittest.TestCase):
     """The public name is what 72 importers will bind to, so pin its shape."""
 
@@ -125,6 +181,11 @@ class ExportTests(unittest.TestCase):
                 argparse.ArgumentDefaultsHelpFormatter,
             )
         )
+
+    def test_the_raw_formatter_composes_both_bases(self) -> None:
+        cls = help_formatter.RawNoneHidingFormatter
+        self.assertTrue(issubclass(cls, help_formatter.ReqAwareDefaultsFormatter))
+        self.assertTrue(issubclass(cls, argparse.RawDescriptionHelpFormatter))
 
 
 if __name__ == "__main__":

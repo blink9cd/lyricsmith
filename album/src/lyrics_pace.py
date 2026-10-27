@@ -11,7 +11,8 @@ nothing slept and the pacing left as it was.
 waited for only until the call's deadline, the moment the watchdog abandons the call,
 so an abandoned call's request ends before the next begins and a late one sends
 nothing. `sleep_within` is the same rule for any other wait a call makes, such as a
-retry's: a wait that would end at or past the deadline is not begun. Nothing here prints.
+retry's: a wait that would end at or past the deadline is not begun (`ends_before`, which
+the HTTP layer's retries read too). Nothing here prints.
 """
 
 from __future__ import annotations
@@ -39,15 +40,13 @@ class Lock(Protocol):
 class Pacer:
     """At least *interval_s* between a provider's requests, never waiting past a deadline.
 
-    *name* is the provider's, for the timeout's message, and *late_message* replaces
-    that message where a provider's own wording predates the shared pacer.
+    *name* is the provider's, for the timeout's message.
     """
 
     interval_s: float
     name: str
     clock: Callable[[], float] = time.monotonic
     sleeper: Callable[[float], None] = time.sleep
-    late_message: str | None = None
     #: The clock's reading at the last `mark`; None before the first.
     last: float | None = field(default=None, init=False)
 
@@ -62,15 +61,9 @@ class Pacer:
         if self.last is not None:
             start = max(now, self.last + self.interval_s)
         if start > give_up_at:
-            raise ProviderTimeout(self._late())
+            raise ProviderTimeout(f"the {self.name} pace outlasts the deadline")
         if start > now:
             self.sleeper(start - now)
-
-    def _late(self) -> str:
-        """The message of a turn refused at its deadline: `late_message`, else the standard."""
-        if self.late_message is not None:
-            return self.late_message
-        return f"the {self.name} pace outlasts the deadline"
 
     def mark(self) -> None:
         """Count the next interval from now."""
@@ -100,6 +93,15 @@ def held_until(
         lock.release()
 
 
+def ends_before(now: float, wait_s: float, give_up_at: float) -> bool:
+    """Whether a wait of *wait_s* begun at *now* ends before *give_up_at*.
+
+    The rule for every deadline-bounded wait but a pace's: one that would end at or
+    past the deadline is not begun.
+    """
+    return now + wait_s < give_up_at
+
+
 def sleep_within(
     clock: Callable[[], float],
     sleeper: Callable[[float], None],
@@ -113,7 +115,7 @@ def sleep_within(
     `held_until`, refuses at the deadline, so the wait would only turn a refusal into
     a timeout.
     """
-    if clock() + wait_s >= give_up_at:
+    if not ends_before(clock(), wait_s, give_up_at):
         return False
     sleeper(wait_s)
     return True

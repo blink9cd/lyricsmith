@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
+import sy_located  # noqa: F401 - puts the other tools and libraries on sys.path
 import at_models
 from at_models import ModelFile
 from sy_types import DEMUCS_BAG, DEMUCS_WEIGHTS, WAV2VEC2_FILE

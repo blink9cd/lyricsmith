@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import at_label
+import at_modes
 import at_types
+import stdio_utf8
 from tests._isolation import IsolatedCase
 
 
@@ -35,14 +38,15 @@ class TypesTest(IsolatedCase):
         self.assertFalse(at_types.has_timestamp("[by:x]\nuntimed\n"))
         self.assertFalse(at_types.has_timestamp("[ar:someone]\n"))
 
-    def test_spell_unsafe_spells_every_c0_character_as_hex(self) -> None:
-        # The album tool spells a tab, a line feed and a carriage return as \x09,
-        # \x0a and \x0d; one file name must print one way from either tool.
-        self.assertEqual(at_types.spell_unsafe("\t"), "\\x09")
-        self.assertEqual(at_types.spell_unsafe("a\nb\rc"), "a\\x0ab\\x0dc")
-        self.assertEqual(at_types.spell_unsafe("\x1b\x7f\x85"), "\\x1b\\x7f\\x85")
-        self.assertEqual(at_types.spell_unsafe("\u202e\u2028"), "\\u202e\\u2028")
-        self.assertEqual(at_types.spell_unsafe("café \\"), "café \\")
+    def test_names_and_labels_are_escaped_by_the_shared_helper(self) -> None:
+        # The album tool escapes with the same function, so one file name prints one
+        # way from either tool; the escape's own cases belong to the shared library.
+        for module in (at_label, at_modes):
+            with self.subTest(module=module.__name__):
+                self.assertIs(module.spell_unsafe, stdio_utf8.spell_unsafe)
+        for copy in ("spell_unsafe", "UNSAFE", "LATIN1_END", "_escape"):
+            with self.subTest(copy=copy):
+                self.assertFalse(hasattr(at_types, copy))
 
     def test_shown_path_is_relative_under_the_root_and_whole_outside_it(self) -> None:
         root = Path("/music")

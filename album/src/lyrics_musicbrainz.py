@@ -59,8 +59,6 @@ _MBID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 #: Bandcamp's own host and its subdomains, as `urlsplit` lower-cases a host.
 _BANDCAMP_HOST = re.compile(r"(?:[a-z0-9-]+\.)*bandcamp\.com")
 _SOURCE = Source.BANDCAMP
-#: The timeout a pace wait past the call's deadline raises: this client's own wording.
-_LATE = "the MusicBrainz lookup ran out of time"
 #: The fixed parameters of the search, beside its query, and of a lookup.
 _SEARCH_PARAMS: Mapping[str, str | int] = {"limit": SEARCH_LIMIT, "fmt": "json"}
 _LOOKUP_PARAMS: Mapping[str, str | int] = {"inc": "url-rels", "fmt": "json"}
@@ -263,7 +261,6 @@ class MusicBrainzClient:
             "MusicBrainz",
             clock=self.clock,
             sleeper=self.sleeper,
-            late_message=_LATE,
         )
 
     def _get(

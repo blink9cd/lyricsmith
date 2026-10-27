@@ -20,6 +20,7 @@ import http_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_cooldown as lyc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_fetch as lf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_providers as lp  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_table as ltable  # noqa: E402 - import follows the sys.path bootstrap above
@@ -238,7 +239,11 @@ class StopTest(_ProviderCase):
             stopped.attempts,
             (
                 lm.ProviderAttempt(
-                    SYNCED_KEY, False, lm.AttemptOutcome.ERROR, "HTTP 429"
+                    SYNCED_KEY,
+                    False,
+                    lm.AttemptOutcome.ERROR,
+                    "HTTP 429",
+                    lrf.RefusalFacts(lrf.Refusal.RATE_LIMITED, 429),
                 ),
             ),
         )

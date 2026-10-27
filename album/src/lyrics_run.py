@@ -6,7 +6,8 @@ then takes each backed-up track through its stages inside one error boundary: a
 failure is recorded against that track, at the stage it happened in, and the run
 moves on. The manifest is replaced as each track finishes, so a run that stops
 part-way still records which tracks it changed. A strip is the same run with another
-per-track step (`strip_step`), so it shares all of that rather than copying it.
+per-track step (`lyrics_strip_step.strip_step`), so it shares all of that rather than
+copying it.
 Discovery, the lock and the deferred interrupt are `lyrics_album`'s; a track's state
 and the outcome built from it are `lyrics_outcomes`'; the manifest written as each
 track finishes is `lyrics_recorder`'s; which frame the check judges is
@@ -33,7 +34,7 @@ answers. Every run, fresh, refetch or neither, treats a track whose only lyrics 
 placeholders (`lyrics_refetch.placeholder_target`) as a refetch treats an untimed-only
 track whose lyrics are implausible: asked afresh, and its placeholders removed when
 nothing answers. Every run hands the fetch the track's duration, read with its frames,
-so an answer it rules out is declined (`lyrics_accept`).
+so an answer it rules out is declined (`lyrics_step_answer`).
 
 No write that would leave a file as it was is made: the embed does not save frames the
 track already holds, the sidecar writer does not rewrite a file holding its bytes, and
@@ -41,8 +42,7 @@ a run replacing old lyrics does not strip a track whose frames already are the
 answer's (`lyrics_refetch.strip_if_changing`). A track the run accepted lyrics for and
 changed nothing of is `OutcomeStatus.UNCHANGED`, and still checked.
 
-The report carries each provider's tally (`lyrics_tally`): the tracks it was asked
-for, and those whose answer the run kept.
+The report carries each provider's tally (`lyrics_tally`): asked, and kept by kind.
 
 Every stage arrives through `lyrics_stages.Stages`, typed by the stage protocols, so
 the entry point passes the real functions and a test passes fakes. Nothing here prints:
@@ -69,6 +69,7 @@ from pathlib import Path
 from lyrics_album import AcquireLock, album_lock
 from lyrics_decline import declines
 from lyrics_genre import NO_LYRICS_GENRES, no_lyrics_genre
+from lyrics_held import read_held
 from lyrics_inventory import (
     NO_EMBEDDED_LYRICS,
     embedded_lyrics,
@@ -102,6 +103,7 @@ from lyrics_records import (
 )
 from lyrics_recorder import RunRecorder
 from lyrics_refetch import afresh_target, remove_implausible, strip_if_changing
+from lyrics_retried import RetriedCounts, no_retries
 from lyrics_sidecar import MACHINE_LABELS, sidecar_keeps
 from lyrics_stages import Stages
 from lyrics_tally import ProviderCount, TrackFetch, tally_providers, track_count
@@ -124,9 +126,11 @@ class RunOptions:
     lyrics are implausible (`--refetch-implausible`), the two asking their union.
     *no_lyrics_genres* mark a track whose miss is no lyrics expected (lyrics_genre).
     *bandcamp* is whether the run's table asks Bandcamp, which its manifest records;
-    *youtube_music* gives YouTube Music's state, read at every write, so a stop shows at once;
-    *tekstowo* gives Tekstowo's, read alike.
-    *ffmpeg* measures a missed track for silence (lyrics_silence); None leaves the check off.
+    *youtube_music* gives YouTube Music's state, read at every write, so a stop shows
+    at once; *tekstowo* gives Tekstowo's, read alike.
+    *ffmpeg* measures a missed track for silence (lyrics_silence); None leaves the
+    check off.
+    *retried* gives the run's retries so far (`lyrics_retried`), read at every write.
     """
 
     lang: str
@@ -140,6 +144,7 @@ class RunOptions:
     youtube_music: Callable[[], CoolingState] = cooling_off
     ffmpeg: str | None = None
     tekstowo: Callable[[], CoolingState] = cooling_off
+    retried: Callable[[], RetriedCounts] = no_retries
 
 
 @dataclass(frozen=True)
@@ -196,8 +201,8 @@ class TrackContext:
 
 
 #: One backed-up track's work inside its error boundary, `_process` for a run and
-#: `strip_step` for a strip: it updates the state as it goes, so whatever stops it, the
-#: outcome built from that state records what was done.
+#: `lyrics_strip_step.strip_step` for a strip: it updates the state as it goes, so
+#: whatever stops it, the outcome built from that state records what was done.
 type TrackStep = Callable[
     [TrackContext, ManifestTrack, TrackBefore, TrackState], TrackOutcome
 ]
@@ -211,11 +216,13 @@ def _asks_afresh(
     Every track of a fresh run; in any run, a track whose only lyrics are
     placeholders; each untimed-only track of a refetch; and each track serving
     implausible lyrics under ``--refetch-implausible`` (`lyrics_refetch.afresh_target`).
-    *state* records the target, so a miss removes what it names. Its sidecars are
-    only planned for that, so nothing on disk changes.
+    *state* records the target, so a miss removes what it names, and what the track
+    held (`lyrics_held`). Its sidecars are only planned for both, so nothing on disk
+    changes.
     """
     state.stage = ErrorStage.SIDECAR
     options = ctx.options
+    state.held_kind = read_held(ctx.stages, ctx.album, path, tags.frames, options.lang)
     target = afresh_target(
         ctx.stages,
         ctx.album,
@@ -352,20 +359,6 @@ def _process(
     return state.accepted()
 
 
-def strip_step(
-    ctx: TrackContext, track: ManifestTrack, before: TrackBefore, state: TrackState
-) -> TrackOutcome:
-    """Strip one backed-up track: its lyrics frames and both sidecars, one held write.
-
-    *before* goes unused: the backup has already recorded it, and undo restores the
-    track from there.
-    """
-    state.stage = ErrorStage.STRIP
-    with state.held():
-        state.stripped = ctx.stages.strip_track(ctx.album / track.path)
-    return state.outcome(OutcomeStatus.STRIPPED)
-
-
 def _run_track(
     ctx: TrackContext, track: ManifestTrack, step: TrackStep, state: TrackState
 ) -> tuple[TrackOutcome, bool]:
@@ -393,15 +386,16 @@ def _run_track(
 
 
 def _track_fetch(state: TrackState, outcome: TrackOutcome) -> TrackFetch | None:
-    """The tally's view of one track: its fetch's attempts and the answer kept, if any.
+    """The tally's view of one track: its fetch's attempts, the answer kept and its kind.
 
     None when the track never finished a fetch. A fresh run's declined answer is
     the one kept-existing outcome with a source, and counts as not accepted.
     """
     if state.result is None:
         return None
-    kept = outcome.status is not OutcomeStatus.KEPT_EXISTING
-    return TrackFetch(state.result.attempts, outcome.source if kept else None)
+    declined = outcome.status is OutcomeStatus.KEPT_EXISTING
+    source, kind = (None, None) if declined else (outcome.source, outcome.kind)
+    return TrackFetch(state.result.attempts, source, kind)
 
 
 def _run_tracks(
@@ -452,8 +446,8 @@ def run_album(
     """Run *album*: lock, back up every track, then take each through *step*.
 
     *step* is a run's sidecar, fetch, embed and check unless a strip passes
-    `strip_step`; either way it shares this lock, backup barrier, error boundary and
-    per-track record. Raise `LockHeldError` when another run holds the album, and an
+    `lyrics_strip_step.strip_step`; either way it shares this lock, backup barrier,
+    error boundary and per-track record. Raise `LockHeldError` when another run holds the album, and an
     `OSError` from the lock or the backup, before any MP3 changed. Nothing beside an
     MP3 changes until the backup has written its manifest. Each finished track is
     recorded in the manifest at once; a run nothing cut short is then marked complete.
@@ -481,6 +475,7 @@ def run_album(
             progress,
             youtube_music=options.youtube_music,
             tekstowo=options.tekstowo,
+            retried=options.retried,
         )
         ctx = TrackContext(album, run_dir, providers, options, stages)
         fetches: list[TrackFetch] = []
@@ -490,5 +485,7 @@ def run_album(
         recorder.manifest.tracks,
         interrupted=recorder.interrupted,
         record_error=recorder.record_error,
-        providers=tally_providers({key.source for key in providers}, fetches),
+        providers=tally_providers(
+            {key.source for key in providers}, fetches, retried=options.retried()
+        ),
     )

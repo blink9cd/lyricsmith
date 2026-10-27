@@ -6,9 +6,10 @@ block), what the strip stage removed from a track, the manifest itself with its 
 and the undo report. `is_mp3_name` is the one test of an MP3's name, for discovery and
 for the manifest's track paths alike.
 
-Pure: no I/O, no printing, no third-party import. The run folder's name and
-`run_folder` are re-exported from `lyrics_run_folders`, so every reader of them here
-names the same folder. The runtime floor is Python 3.12.
+Pure: no I/O, no printing. The run folder's name and `run_folder` are re-exported from
+`lyrics_run_folders`, so every reader of them here names the same folder, and a refusal's
+record, `ProviderRefusal`, from `lyrics_refusal`, beside its class and facts; that module
+alone reads a third-party one, ``requests``'s error types. The runtime floor is Python 3.12.
 """
 
 from __future__ import annotations
@@ -31,6 +32,11 @@ from lyrics_cap import MAX_LYRICS_CHARS as MAX_LYRICS_CHARS
 from lyrics_run_folders import MANIFEST_NAME as MANIFEST_NAME
 from lyrics_run_folders import RUN_FOLDER_NAME as RUN_FOLDER_NAME
 from lyrics_run_folders import run_folder as run_folder
+
+# A refusal's record lives with its class and facts; re-exported, so readers keep this name.
+from lyrics_refusal import MAX_REFUSAL_DETAIL_CHARS as MAX_REFUSAL_DETAIL_CHARS
+from lyrics_refusal import ProviderRefusal as ProviderRefusal
+from lyrics_retried import RetriedCounts
 
 #: The manifest layout this code reads and writes. A manifest naming any other is refused.
 MANIFEST_SCHEMA = 1
@@ -212,31 +218,12 @@ class SidecarHash:
     sha256: str
 
 
-#: The most characters a refusal's detail keeps: room for a status, a provider's
-#: refusal code or a short reason, never a reply body.
-MAX_REFUSAL_DETAIL_CHARS = 80
+class HeldBefore(StrEnum):
+    """The strongest real lyrics a track held before the run (`lyrics_held`)."""
 
-
-@dataclass(frozen=True)
-class ProviderRefusal:
-    """One provider call that refused or failed instead of answering.
-
-    *provider* and *step* name the chain step as `lyrics_fetch.CHAIN` does: the
-    source, and the kind of lyrics it was asked for. *detail* is a short reason such
-    as ``HTTP 503``, ``timeout`` or a provider's refusal code. It is held to one line,
-    whitespace runs collapsed to single spaces, and cut to `MAX_REFUSAL_DETAIL_CHARS`,
-    so a reply body passed by mistake cannot fill the manifest.
-    """
-
-    provider: Source
-    step: LyricsKind
-    detail: str
-
-    def __post_init__(self) -> None:
-        """Collapse the detail to one capped line; idempotent, so a reread is equal."""
-        short = " ".join(self.detail.split())[:MAX_REFUSAL_DETAIL_CHARS].rstrip()
-        # Frozen, so the normalized value is set the one way a frozen dataclass allows.
-        object.__setattr__(self, "detail", short)
+    NOTHING = "nothing"
+    UNTIMED = "untimed"
+    SYNCED = "synced"
 
 
 class OutcomeStatus(StrEnum):
@@ -279,7 +266,8 @@ class TrackOutcome:
     *refetch_implausible* is True when a ``--refetch-implausible`` run asked the
     providers again for the track, whose serving lyrics were implausible; *implausible*
     then says why, as for a refetch. Any run sets *implausible* alone,
-    ``placeholder lyrics``, on a track whose only lyrics are placeholders, which it removes the same way when nothing answers.
+    ``placeholder lyrics``, on a track whose only lyrics are placeholders, which it
+    removes the same way when nothing answers.
     """
 
     status: OutcomeStatus
@@ -303,6 +291,8 @@ class TrackOutcome:
     peak_dbfs: float | None = None
     #: Why a missed track's silence check failed, when it did.
     silence_failed: str | None = None
+    #: What the track held before the run changed anything, None when not read.
+    held: HeldBefore | None = None
 
 
 @dataclass(frozen=True)
@@ -418,6 +408,8 @@ class Manifest:
     youtube_music: CoolingState = CoolingState.OFF
     tekstowo: CoolingState = CoolingState.OFF
     silence_check: SilenceCheck = SilenceCheck.OFF
+    #: The refusals a retry got past, by provider and reason (`lyrics_retried`).
+    retried: RetriedCounts = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Refuse a schema this code does not know."""

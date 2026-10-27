@@ -24,7 +24,8 @@ A failure keeps a short detail for the run's record of refusals (`error_detail`)
 `ProviderError`, such as NetEase's ``code -462``. Never the error's message, which may
 hold a request URL with the track's title in it, and never a reply's body. A request the
 LRC adapters retried (`lyrics_http`) and that still failed is a `RetriedError`, whose
-detail adds the retries made: ``HTTP 503 after 3 retries``.
+detail adds the retries made: ``HTTP 503 after 3 retries``. The refusal's class is read
+from the error's type and attributes, never from its detail (`lyrics_refusal.classify`).
 
 Nothing here prints.
 """
@@ -65,17 +66,25 @@ class HttpStatusError(ProviderError):
     """A provider answered a request with an HTTP error status, such as a 429 rate limit.
 
     *retry_after_s* is the wait the reply's ``Retry-After`` header asked for, in
-    seconds, or None when it gave none in that form (`retry_after_s`).
+    seconds, or None when it gave none in that form (`retry_after_s`): as asked, before
+    any cap a retry holds it to. *server* is the reply's ``Server`` header, None when
+    it sent none, so a refusal can tell a CDN's from the origin's.
     """
 
     def __init__(
-        self, source: Source, status: int, retry_after_s: float | None = None
+        self,
+        source: Source,
+        status: int,
+        retry_after_s: float | None = None,
+        *,
+        server: str | None = None,
     ) -> None:
         """Name *source* and *status*; the detail is ``HTTP <status>``."""
         super().__init__(f"{source} answered HTTP {status}", detail=f"HTTP {status}")
         self.source = source
         self.status = status
         self.retry_after_s = retry_after_s
+        self.server = server
 
 
 def retries_phrase(count: int) -> str:
@@ -174,21 +183,23 @@ def status_hook(
 ) -> ResponseHook:
     """A response hook raising `HttpStatusError` for *source* on any non-OK response.
 
-    An error status in *absent* passes: it names a status the caller falls back on
-    rather than fails, which it reads from the response itself. A redirect raises
-    too, whatever *absent* names, unless *refuse_redirects* is off for a session that
-    follows redirects itself.
+    The error keeps the reply's ``Server`` header and, for an error status, its
+    ``Retry-After`` wait. An error status in *absent* passes: it names a status the
+    caller falls back on rather than fails, which it reads from the response itself.
+    A redirect raises too, whatever *absent* names, unless *refuse_redirects* is off
+    for a session that follows redirects itself.
     """
 
     def raise_on_error_status(
         response: HttpResponse, *args: object, **kwargs: object
     ) -> None:
         status = response.status_code
+        server = response.headers.get("Server")
         if refuse_redirects and status in REDIRECT_STATUSES:
-            raise HttpStatusError(source, status)
+            raise HttpStatusError(source, status, server=server)
         if not response.ok and status not in absent:
             wait = retry_after_s(response.headers.get("Retry-After"))
-            raise HttpStatusError(source, status, wait)
+            raise HttpStatusError(source, status, wait, server=server)
 
     return raise_on_error_status
 

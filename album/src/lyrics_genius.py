@@ -56,9 +56,11 @@ from urllib.parse import urljoin, urlsplit
 import lyricsgenius
 import requests
 
+from lyrics_breakers import BreakerGuard
 from lyrics_http import (
     MAX_REDIRECTS,
     REDIRECT_REFUSED,
+    OnRetry,
     block_netrc,
     capped_body,
     user_agent,
@@ -76,10 +78,18 @@ from lyrics_providers import (
     REDIRECT_STATUSES,
     HttpStatusError,
     ProviderError,
+    ProviderTimeout,
     hook_status_errors,
     retries_phrase,
 )
 from lyrics_records import Secret
+from lyrics_refusal import ClassedError, Refusal, RefusalFacts, classify
+
+# The statuses of a challenge live in the leaf module the detail reader shares;
+# re-exported, so the step's callers and tests read them from here.
+from lyrics_refusal_words import (
+    GENIUS_CHALLENGE_STATUSES as GENIUS_CHALLENGE_STATUSES,
+)
 
 #: The Genius client's own per-request timeout; its own retry is off, since ours is explicit.
 GENIUS_TIMEOUT_S = 10
@@ -87,8 +97,6 @@ GENIUS_TIMEOUT_S = 10
 GENIUS_MIN_INTERVAL_S = 3.0
 #: The waits before each retry of a Genius call answered by a challenge; then it is an error.
 GENIUS_RETRY_WAITS_S: tuple[float, ...] = (15.0, 45.0, 90.0)
-#: The HTTP statuses Genius's front end answers a challenge with.
-GENIUS_CHALLENGE_STATUSES = frozenset({403, 429})
 #: The hosts a Genius redirect may lead to, over https on its default port alone.
 GENIUS_HOSTS = frozenset({"genius.com", "api.genius.com"})
 #: The most redirects one Genius request follows: the shared text GET's limit.
@@ -110,19 +118,29 @@ def genius_step_deadline_s(deadline_s: float) -> float:
     return paced + sum(GENIUS_RETRY_WAITS_S)
 
 
-class GeniusChallengeError(ProviderError):
+class GeniusChallengeError(ClassedError):
     """Genius still answered with a challenge after the retries a call made.
 
     Its detail names the last challenge's status and the retries made, such as
     ``HTTP 429 after 3 retries``, or fewer when the call's deadline left room for fewer:
-    a challenge a retry got past is no failure at all.
+    a challenge a retry got past is no failure at all. Its class is blocked, whatever
+    the status, and it keeps the last reply's asked wait and ``Server`` header.
     """
 
-    def __init__(self, status: int, retries: int) -> None:
+    def __init__(
+        self,
+        status: int,
+        retries: int,
+        *,
+        retry_after_s: float | None = None,
+        server: str | None = None,
+    ) -> None:
         """Name the last challenge's *status* and the *retries* made before it."""
         detail = f"HTTP {status} after {retries_phrase(retries)}"
-        super().__init__(f"still challenged: {detail}", detail=detail)
+        facts = RefusalFacts(Refusal.BLOCKED, status, retries, retry_after_s, server)
+        super().__init__(f"still challenged: {detail}", detail=detail, facts=facts)
         self.status = status
+        self.retries = retries
 
 
 class GeniusSong(Protocol):
@@ -206,6 +224,16 @@ class GeniusProvider:
     #: The per-request deadline, which sets this step's whole-call bound. It is the only
     #: input to that bound, so the watchdog's and the step's own give-up cannot disagree.
     deadline_s: float = field(kw_only=True)
+    #: The run's breaker for this provider, shared by its steps; the fetch layer asks
+    #: it before each call (`lyrics_breakers`). None leaves the steps unguarded.
+    breaker: BreakerGuard | None = field(
+        default=None, kw_only=True, compare=False, repr=False
+    )
+    #: Told of each challenge retry made, as `lyrics_http.RetryPolicy.on_retry` is of
+    #: its retries (`lyrics_retried`); None counts none.
+    on_retry: OnRetry | None = field(
+        default=None, kw_only=True, compare=False, repr=False
+    )
     #: Held over the pacing and the call together: a call the watchdog abandoned may
     #: still be running when the next begins, and the two must not overlap. A call
     #: waits for it only until its step deadline, the moment the watchdog abandons it.
@@ -226,16 +254,34 @@ class GeniusProvider:
         """The bound for one call, at this step's `deadline_s`."""
         return genius_step_deadline_s(self.deadline_s)
 
-    def _paced_search(self, query: TrackQuery, give_up_at: float) -> GeniusSong | None:
+    def _paced_search(
+        self, query: TrackQuery, give_up_at: float, sending: Callable[[], None]
+    ) -> GeniusSong | None:
         """One paced search for *query*, under the lock so no two calls overlap.
 
         Past *give_up_at* the watchdog has abandoned the call, so it raises
         `ProviderTimeout` with no request made and the pacing left as it was; so does
-        a pace wait that would end past it (`lyrics_pace.Pacer.take_turn`).
+        a pace wait that would end past it (`lyrics_pace.Pacer.take_turn`). *sending*
+        is called once the turn is taken, just before the request goes out, and never
+        when the turn times out.
         """
         with held_until(self.lock, self.clock, give_up_at, "Genius"):
             self.pacer.take_turn(give_up_at)
+            sending()
             return self.client.search_song(query.title, query.artist)
+
+    def _sending_hook(self, challenges: list[HttpStatusError]) -> Callable[[], None]:
+        """What `_paced_search` calls as a request goes out: a retry is counted then.
+
+        Counting at the send, not after the retry wait, leaves uncounted a retry whose
+        turn timed out (the lock held by an abandoned call, or a pace wait past the
+        deadline): no request went out, so nothing was retried.
+        """
+        on_retry = self.on_retry
+        if not challenges or on_retry is None:
+            return _send_quietly
+        reason = classify(challenges[-1]).reason
+        return lambda: on_retry(Source.GENIUS, reason)
 
     def __call__(self, query: TrackQuery) -> str | None:
         """Search Genius for *query*; a challenge is retried on its schedule.
@@ -243,7 +289,9 @@ class GeniusProvider:
         A song the matcher refuses is None, as no song is: nothing found. A retry wait
         that would end past the call's deadline is not begun, as a pace wait is not, so
         the call is never abandoned mid-wait: the step's error is then the last
-        challenge (`_still_challenged`).
+        challenge (`_still_challenged`). So is a retry whose turn times out (the lock
+        held to the deadline, or a pace wait past it): no request went out, so the
+        challenge it was for is still what the call last heard.
         """
         give_up_at = self.clock() + self.step_deadline_s()
         challenges: list[HttpStatusError] = []
@@ -253,16 +301,26 @@ class GeniusProvider:
             ):
                 break
             try:
-                song = self._paced_search(query, give_up_at)
+                song = self._paced_search(
+                    query, give_up_at, self._sending_hook(challenges)
+                )
             except HttpStatusError as error:
                 if error.status not in GENIUS_CHALLENGE_STATUSES:
                     raise
                 challenges.append(error)
                 continue
+            except ProviderTimeout:
+                if not challenges:
+                    raise
+                break
             if song is None or not song_matches(query, song):
                 return None
             return song.lyrics
         raise _still_challenged(challenges)
+
+
+def _send_quietly() -> None:
+    """The sending hook for a first try, or a call no tally watches: nothing to count."""
 
 
 def _still_challenged(challenges: list[HttpStatusError]) -> ProviderError:
@@ -274,7 +332,10 @@ def _still_challenged(challenges: list[HttpStatusError]) -> ProviderError:
     retries = len(challenges) - 1
     if not retries:
         return challenges[0]
-    return GeniusChallengeError(challenges[-1].status, retries)
+    last = challenges[-1]
+    return GeniusChallengeError(
+        last.status, retries, retry_after_s=last.retry_after_s, server=last.server
+    )
 
 
 def genius_url_allowed(url: str) -> bool:

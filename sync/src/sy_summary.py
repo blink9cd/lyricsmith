@@ -29,15 +29,8 @@ LABEL_GAP: Final = 2
 DETAIL_INDENT: Final = "    "
 #: The widest label any row can carry, so the paths line up.
 LABEL_WIDTH: Final = max(len(label.value) for label in (*Action, *Outcome))
-#: The album command that embeds a folder's new .lrc files, as a person runs it.
-ALBUM_COMMAND: Final = "lyricsmith album --offline --album"
-FIRST_LINE_FIX: Final = (
-    "A flagged first line can start early, stretched back over the intro: edit its stamp"
-    " in the .lrc, keep the [by:machine timed] line, then embed the corrected time with"
-    f" {ALBUM_COMMAND} <the album folder> (in a library, the library's Artist/Album"
-    " folder); for a track in no album folder, add --track <the track>. A second sync"
-    " run does not embed it."
-)
+#: The album options that embed a folder's new .lrc files, after the album tool's words.
+EMBED_OPTIONS: Final = ("--offline", "--album")
 BY_HAND: Final = (
     "A low-confidence track gets no .lrc: time it by hand in a tap-along LRC editor run"
     " locally, such as lrc-maker."
@@ -56,10 +49,13 @@ def _row(label: str, audio: Path, root: Path) -> str:
     return f"{label:<{LABEL_WIDTH + LABEL_GAP}}{_shown(audio, root)}"
 
 
-def plan_line(planned: Planned, root: Path) -> str:
-    """The dry run's row for *planned*, its refusal's detail beneath it."""
+def plan_lines(planned: Planned, root: Path) -> list[str]:
+    """The dry run's row for *planned*, then its refusal's detail as its own line.
+
+    Each is printed alone: a line break inside one printed line is spelled as an escape.
+    """
     row = _row(planned.action.value, planned.audio, root)
-    return f"{row}\n{DETAIL_INDENT}{planned.detail}" if planned.detail else row
+    return [row, f"{DETAIL_INDENT}{planned.detail}"] if planned.detail else [row]
 
 
 def result_lines(result: TrackResult, root: Path) -> list[str]:
@@ -72,7 +68,7 @@ def result_lines(result: TrackResult, root: Path) -> list[str]:
     if result.unaligned:
         lines.append(
             f"{DETAIL_INDENT}{result.unaligned} line(s) with nothing to align"
-            " took the next line's stamp"
+            " took the next line's stamp, or after the last sung line its end"
         )
     return lines
 
@@ -91,20 +87,40 @@ def written_tracks(results: Sequence[TrackResult]) -> tuple[Path, ...]:
     return tuple(result.audio for result in results if result.outcome in WRITTEN)
 
 
-def album_command(folder: Path, track: Path | None = None) -> str:
+def _embed_words(album: Sequence[str]) -> str:
+    """The album tool named by *album*'s words, then the embedding options, quoted."""
+    return shlex.join([*album, *EMBED_OPTIONS])
+
+
+def first_line_fix(album: Sequence[str]) -> str:
+    """The note on a flagged first line, naming the album tool by *album*'s words."""
+    return (
+        "A flagged first line can start early, stretched back over the intro: edit its"
+        " stamp in the .lrc, keep the [by:machine timed] line, then embed the corrected"
+        f" time with {_embed_words(album)} <the album folder> (in a library, the"
+        " library's Artist/Album folder); for a track in no album folder, add --track"
+        " <the track>. A second sync run does not embed it."
+    )
+
+
+def album_command(album: Sequence[str], folder: Path, track: Path | None = None) -> str:
     """The album command for *folder*, or for one *track* in it, quoted for a shell.
 
-    Both paths are absolute, so the command runs from any folder: album reads --track
-    against the working directory.
+    *album* is the album tool's words as this run names it: ``lyricsmith album`` when
+    dispatched, its entry file's name when run alone. Both paths are absolute, so the
+    command runs from any folder: album reads --track against the working directory.
     """
-    command = f"{ALBUM_COMMAND} {shlex.quote(str(folder.absolute()))}"
+    command = f"{_embed_words(album)} {shlex.quote(str(folder.absolute()))}"
     if track is None:
         return command
     return f"{command} --track {shlex.quote(str(track.absolute()))}"
 
 
-def embed_lines(embeds: Sequence[EmbedResult]) -> list[str]:
-    """One line per --embed album run: done, or not done with the command to run."""
+def embed_lines(embeds: Sequence[EmbedResult], album: Sequence[str]) -> list[str]:
+    """One line per --embed album run: done, or not done with the command to run.
+
+    *album* names the album tool in that command (`album_command`).
+    """
     lines = []
     for embed in embeds:
         if embed.ok:
@@ -116,7 +132,7 @@ def embed_lines(embeds: Sequence[EmbedResult]) -> list[str]:
             else f"album exit {embed.code}"
         )
         named = embed.folder if embed.track is None else embed.track
-        command = album_command(embed.folder, embed.track)
+        command = album_command(album, embed.folder, embed.track)
         lines.append(f"embed not done ({why}): {named}; run: {command}")
     return lines
 
@@ -124,18 +140,38 @@ def embed_lines(embeds: Sequence[EmbedResult]) -> list[str]:
 def footer_lines(
     results: Sequence[TrackResult],
     *,
+    album: Sequence[str],
     units: Sequence[Path] = (),
     loose: Sequence[Path] = (),
+    sidecars: Sequence[Path] = (),
 ) -> list[str]:
-    """The counts; album's command for each unit and loose track; the fix and the note."""
+    """The counts; album's command for each unit and loose track; the notes.
+
+    A written track album cannot embed into, being no MP3, is named with its .lrc.
+    *album* names the album tool in each command (`album_command`).
+    """
     lines = [count_line(results)]
-    lines += [f"embed them: {album_command(folder)}" for folder in units]
-    lines += [f"embed it: {album_command(track.parent, track)}" for track in loose]
+    lines += [f"embed them: {album_command(album, folder)}" for folder in units]
+    lines += [
+        f"embed it: {album_command(album, track.parent, track)}" for track in loose
+    ]
+    lines += [
+        f"stays a sidecar: {track.with_suffix(LRC_SUFFIX)} (album embeds MP3s only)"
+        for track in sidecars
+    ]
     if any(result.first_line is not None for result in results):
-        lines.append(FIRST_LINE_FIX)
+        lines.append(first_line_fix(album))
     if any(result.outcome is Outcome.LOW_CONFIDENCE for result in results):
         lines.append(BY_HAND)
     return lines
+
+
+def interrupted_line(left: int) -> str:
+    """The line a Ctrl-C during timing prints: how many tracks it left untimed."""
+    return (
+        f"interrupted: timing stopped with {left} track(s) left, and nothing was"
+        " embedded; a second run times the rest"
+    )
 
 
 def exit_code(results: Sequence[TrackResult], embeds: Sequence[EmbedResult]) -> int:

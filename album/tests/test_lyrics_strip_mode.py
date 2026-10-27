@@ -127,9 +127,13 @@ class StripModeTest(StripCliCase):
                 lr.OutcomeStatus.STRIPPED,
                 sidecars_removed=("01 Keeper.lrc", "01 Keeper.txt"),
                 frames_written=True,
+                held=lr.HeldBefore.SYNCED,
             ),
         )
-        self.assertEqual(mill.after, lr.TrackOutcome(lr.OutcomeStatus.STRIPPED))
+        self.assertEqual(
+            mill.after,
+            lr.TrackOutcome(lr.OutcomeStatus.STRIPPED, held=lr.HeldBefore.NOTHING),
+        )
         assert bell.after is not None
         self.assertEqual(bell.after.sidecars_removed, ("03 Bell.lrc",))
 

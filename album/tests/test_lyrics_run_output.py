@@ -57,11 +57,12 @@ album run 20261014T153012Z: 8 tracks under album
  7  07 Fence.mp3    LRCLIB  synced    ERROR embed: frames differ after the save
  8  08 Tower.mp3    LRCLIB  synced    FLAG: ends short (last line 25.750 s, track 199.993 s)
 synced 3 · unsynced 2 · unchanged 0 · not found 2 · no lyrics expected 0 · silent 0 · kept existing 0 · removed 0 · errors 1 · flagged 1 · genius: absent
+written: new synced 3, embedded 1, new untimed 1
 bandcamp: on
 youtube music: on
 tekstowo: on
 silence check: off (no ffmpeg)
-providers: LRCLIB 5/8 · NetEase - · YouTube Music - · Bandcamp - · Genius - · Tekstowo -
+providers: LRCLIB 5/8 (4 synced, 1 untimed) · NetEase - · YouTube Music - · Bandcamp - · Genius - · Tekstowo -
 backup: .lyricsmith/20261014T153012Z/   undo: album.py --album {album} --mode undo
 """
 

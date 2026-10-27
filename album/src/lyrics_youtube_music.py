@@ -39,10 +39,16 @@ from urllib.parse import urlsplit
 
 import requests
 
-from lyrics_cooling_client import CoolingClient, Refusal, status_refusal
+from lyrics_cooling_client import CoolingClient, Refusal, StoppedError
 from lyrics_http import REPLY_NOT_JSON, REQUEST_TIMEOUT_S, capped_body
 from lyrics_model import Source
-from lyrics_providers import ProviderError
+from lyrics_providers import retry_after_s
+from lyrics_refusal import RefusalFacts, stopping_status_refusal
+
+# The stop words of each challenge redirect live in the leaf module the detail reader
+# shares; re-exported, so callers and tests read them from here.
+from lyrics_refusal_words import TO_CONSENT as TO_CONSENT
+from lyrics_refusal_words import TO_SORRY as TO_SORRY
 
 #: The API's base. ``?alt=json`` and no API key: ytmusicapi 1.12.3 ``constants.py:3``
 #: and ``ytmusic.py:155-157``.
@@ -75,18 +81,14 @@ _RADIO_PREFIX = "RDAMVM"
 _AUDIO_TRACK = "MUSIC_VIDEO_TYPE_ATV"
 #: The two redirect forms that are challenges, by the start of the host and of the path.
 _CONSENT_HOST, _SORRY_PATH = "consent.", "/sorry"
-#: The stop words each challenge redirect records.
-TO_CONSENT, TO_SORRY = "redirect to consent", "redirect to sorry"
 _CHALLENGES = frozenset({TO_CONSENT, TO_SORRY})
 _OK = 200
 
 
-class YouTubeMusicStopped(ProviderError):
+class YouTubeMusicStopped(StoppedError):
     """YouTube Music refused or challenged a request, or had already; its detail is *what*."""
 
-    def __init__(self, what: str) -> None:
-        """Carry *what* as both the message's tail and the recorded detail."""
-        super().__init__(f"YouTube Music stopped: {what}", detail=what)
+    SOURCE: ClassVar[str] = "YouTube Music"
 
 
 def web_remix_version(today: date) -> str:
@@ -147,12 +149,30 @@ def stop_reason(status: int, location: str | None) -> str | None:
     return None if status == _OK else f"HTTP {status}"
 
 
+def _reply_facts(
+    kind: Refusal, status: int | None, response: requests.Response
+) -> RefusalFacts:
+    """A stop of *kind* on *response*: its refusing *status*, asked wait and server.
+
+    The wait is read only beside a refusing status, as the status hook reads it.
+    """
+    headers = response.headers
+    wait = None if status is None else retry_after_s(headers.get("Retry-After"))
+    return RefusalFacts(kind, status, retry_after_s=wait, server=headers.get("Server"))
+
+
 def _refusal(status: int, reason: str) -> Refusal:
     """The class of the stop `stop_reason` gave as *reason* for a reply of *status*.
 
-    A challenge redirect is a block; any other reason is the status's own refusal.
+    A challenge redirect is a block; any other reason is the status's class as a stop
+    (`stopping_status_refusal`), so a client error is a block too.
     """
-    return Refusal.BLOCKED if reason in _CHALLENGES else status_refusal(status)
+    # A stop turns YouTube Music off for the run, so a 400 or a 404 here is never that
+    # one request's own error: every later track goes unasked. Recorded as blocked, the
+    # album stays owed. YouTube Music has no breaker, so the class changes only the debt.
+    if reason in _CHALLENGES:
+        return Refusal.BLOCKED
+    return stopping_status_refusal(status)
 
 
 def _send(
@@ -184,7 +204,7 @@ class YouTubeMusicClient(CoolingClient):
 
     NAME: ClassVar[str] = "YouTube Music"
     MIN_INTERVAL_S: ClassVar[float] = YOUTUBE_MUSIC_MIN_INTERVAL_S
-    stopped_error: ClassVar[type[ProviderError]] = YouTubeMusicStopped
+    stopped_error: ClassVar[type[StoppedError]] = YouTubeMusicStopped
 
     def post(
         self, endpoint: str, body: Mapping[str, object], give_up_at: float
@@ -209,8 +229,10 @@ class YouTubeMusicClient(CoolingClient):
                         return json.loads(raw)
                     # Bad text: ValueError; nesting past the stack: RecursionError.
                     except (ValueError, RecursionError):
-                        reason, kind = REPLY_NOT_JSON, Refusal.UNRECOGNIZED
+                        # A 200: a reply of the wrong shape, with no refusing status.
+                        reason = REPLY_NOT_JSON
+                        facts = _reply_facts(Refusal.UNRECOGNIZED, None, response)
                 else:
-                    kind = _refusal(status, reason)
+                    facts = _reply_facts(_refusal(status, reason), status, response)
             # Raised once the reply is closed, still in this turn, under the lock.
-            raise self.refuse(kind, reason)
+            raise self.refuse(facts, reason)

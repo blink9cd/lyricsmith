@@ -28,9 +28,12 @@ sys.path[:0] = [str(_HERE.parent)]
 import album  # noqa: E402 - import follows the sys.path bootstrap above
 import fixtures  # noqa: E402 - the tests folder is on sys.path for every suite
 import lyrics_album  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_breaker as lbk  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_breakers as lbs  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_cooldown as lyc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_retried as lrt  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_table as ltable  # noqa: E402 - import follows the sys.path bootstrap above
 import run_fakes  # noqa: E402 - the tests folder is on sys.path for every suite
 
@@ -105,6 +108,42 @@ class CliCase(fixtures.IsolatedCase):
         """*source*'s setup when its cool-down file holds none, on this test's wiring."""
         state = lyc.cooldown_path(self.wiring().environ, source)
         return lyc.CoolingSetup(state, now=self.wiring().now)
+
+    def breaker_setups(
+        self, *, netease: bool = True, bandcamp: bool = True, genius: bool = False
+    ) -> dict[lm.Source, lbs.BreakerSetup]:
+        """Each asked guarded provider's setup when no breaker file is there.
+
+        LRCLIB's always; NetEase's, Bandcamp's and Genius's only when the run asks
+        them, which for Genius means a key was found. On this test's wiring.
+        """
+        environ, now = self.wiring().environ, self.wiring().now
+        asked = {
+            lm.Source.LRCLIB: True,
+            lm.Source.NETEASE: netease,
+            lm.Source.GENIUS: genius,
+            lm.Source.BANDCAMP: bandcamp,
+        }
+        return {
+            source: lbs.BreakerSetup(lbk.breaker_path(environ, source), lbk.CLOSED, now)
+            for source in lbk.GUARDED_SOURCES
+            if asked[source]
+        }
+
+    def chosen_settings(
+        self, settings: ltable.ProviderSettings, *, genius: bool = False
+    ) -> ltable.ProviderSettings:
+        """*settings* as a run or compare builds them when no breaker file is there.
+
+        Each such run also reads the breaker file of each guarded provider it asks,
+        as *settings* and *genius* (a key found) say, and carries a fresh retry tally.
+        """
+        breakers = self.breaker_setups(
+            netease=settings.netease, bandcamp=settings.bandcamp, genius=genius
+        )
+        return dataclasses.replace(
+            settings, breakers=breakers, retried=lrt.RetryTally()
+        )
 
     def main(
         self,

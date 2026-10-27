@@ -5,11 +5,13 @@ folders point at a fresh temporary folder, and a tripwire fails any socket use. 
 suite reuses the transcribe tool's search for whisper.cpp's bundled sample, loaded from
 that tool's tests folder by file rather than put on the path: that folder is a package
 named `tests`, the name this folder answers to as well. `fake_child` and `reply_for`
-stand in for the child process that needs PyTorch, and `fake_opener` for the network.
+stand in for the child process that needs PyTorch, `fake_opener` for the network, and
+`invented_models` for the pinned models, each holding `DATA`.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import os
@@ -40,6 +42,9 @@ FRAME_SECONDS = 0.02
 CHILD_STDERR = "line one\nlast words\n"
 #: The address a fake download ends at: HTTPS, as the fetch requires.
 FAKE_URL = "https://example.invalid/model.bin"
+#: The bytes every invented model holds, and their SHA-256, as a manifest pins them.
+DATA = b"an invented model file\n" * 100
+DIGEST = hashlib.sha256(DATA).hexdigest()
 # os.geteuid exists only off Windows, so it is looked up; root reads a mode-000 file or
 # folder, so the unreadable-sidecar and unreadable-folder tests skip under it.
 _GETEUID = getattr(os, "geteuid", None)
@@ -54,6 +59,14 @@ def transcribe_test_module(name: str) -> types.ModuleType:
     module = importlib.util.module_from_spec(found)
     found.loader.exec_module(module)
     return module
+
+
+def invented_models(*names: str) -> tuple[at_models.ModelFile, ...]:
+    """One invented model a name, each holding `DATA`, standing in for the pinned ones."""
+    return tuple(
+        at_models.ModelFile(name, f"https://example.invalid/{name}", len(DATA), DIGEST)
+        for name in names
+    )
 
 
 class FakeResponse(io.BytesIO):

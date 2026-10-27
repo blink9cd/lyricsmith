@@ -15,7 +15,9 @@ file. A file that cannot be read, or does not hold exactly that, is a warning an
 ignored rather than an error: a broken file must not stop a run, and an edited one, with
 a refusal in the future or an end further off, must not switch its source off for good.
 No warning quotes the file's content. No option clears a cool-down; deleting the file does.
-Nothing here prints.
+The discipline is shared: the breakers' files (`lyrics_breaker`) sit in the same folder
+(`state_folder`) and are parsed, read and written through the same helpers
+(`load_record`, `read_state`, `write_record`, `parse_utc`). Nothing here prints.
 """
 
 from __future__ import annotations
@@ -26,18 +28,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeVar, runtime_checkable
 
 import lyrics_files
 from lyrics_model import ProviderTable, ReadBackError, Source
+from lyrics_state import state_root, write_state_file
 
-#: The variable naming the XDG state folder; a relative value is ignored.
-STATE_ENV = "XDG_STATE_HOME"
-#: The home variable, read from the environment given before the process's own.
-HOME_ENV = "HOME"
-#: The state folder under the home folder when the variable gives none.
-_HOME_STATE_DIR = Path(".local") / "state"
-#: The folder inside the state folder that holds every source's file.
+#: The folder inside the state folder (`lyrics_state.state_root`) that holds every
+#: source's file.
 STATE_DIR = Path("lyricsmith")
 #: Each source's cool-down file, beside the others in the state folder.
 STATE_FILES: Mapping[Source, str] = MappingProxyType(
@@ -53,6 +51,8 @@ _FIELDS = frozenset({"refused_at", "what", "until"})
 _WHAT_MAX = 100
 #: The largest file read: a real one is ~100 bytes; the cap keeps deep nesting out.
 MAX_COOLDOWN_BYTES = 1024
+
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -77,19 +77,13 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _state_base(environ: Mapping[str, str]) -> Path:
-    """The state folder: XDG_STATE_HOME when absolute, else ~/.local/state.
+def state_folder(environ: Mapping[str, str]) -> Path:
+    """`STATE_DIR` under the state folder *environ* names: where every source's file sits.
 
-    A relative XDG_STATE_HOME is ignored, as the XDG convention asks, so the answer
-    never depends on the working directory. HOME is read from *environ* too; the
-    process's home folder stands in only when *environ* has none.
+    The state folder is `lyrics_state.state_root`'s. The breakers' files
+    (`lyrics_breaker`) sit here too, beside the cool-down files.
     """
-    state = environ.get(STATE_ENV, "")
-    if state and Path(state).is_absolute():
-        return Path(state)
-    home = environ.get(HOME_ENV)
-    base = Path(home) if home else Path.home()
-    return base / _HOME_STATE_DIR
+    return state_root(environ) / STATE_DIR
 
 
 def cooldown_path(environ: Mapping[str, str], source: Source) -> Path:
@@ -98,7 +92,7 @@ def cooldown_path(environ: Mapping[str, str], source: Source) -> Path:
     A source with no entry in `STATE_FILES` is a `KeyError`: a programming error, not
     a run's.
     """
-    return _state_base(environ) / STATE_DIR / STATE_FILES[source]
+    return state_folder(environ) / STATE_FILES[source]
 
 
 def format_utc(moment: datetime) -> str:
@@ -106,17 +100,17 @@ def format_utc(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime(_UTC_FORM)
 
 
-def _parse_utc(value: object) -> datetime:
+def parse_utc(value: object) -> datetime:
     """A time in exactly `format_utc`'s form, aware UTC; ValueError otherwise.
 
     ``strptime`` alone would take ``8:30`` for ``08:30``, so the text must also be
     what formatting the result gives back.
     """
     if not isinstance(value, str):
-        raise ValueError("a cool-down time is not text")
+        raise ValueError("a state file's time is not text")
     moment = datetime.strptime(value, _UTC_FORM).replace(tzinfo=UTC)
     if format_utc(moment) != value:
-        raise ValueError("a cool-down time is not in the file's form")
+        raise ValueError("a state file's time is not in the file's form")
     return moment
 
 
@@ -129,6 +123,26 @@ def _what(value: object) -> str:
     return value
 
 
+def load_record(
+    data: bytes, fields: frozenset[str], *, max_bytes: int, what: str
+) -> dict[str, object]:
+    """The JSON object *data* holds, with exactly *fields*; ValueError otherwise.
+
+    The shared first half of every state file's parser: anything over *max_bytes* is
+    refused unread, nesting deeper than the decoder's stack is a ValueError, and so are
+    undecodable bytes (`UnicodeDecodeError`). *what* names the file in the error.
+    """
+    if len(data) > max_bytes:
+        raise ValueError(f"a {what} file too large")
+    try:
+        document: object = json.loads(data.decode("utf-8"))
+    except RecursionError as error:  # nesting deeper than the decoder's stack
+        raise ValueError(f"a {what} file nested too deeply") from error
+    if not isinstance(document, dict) or set(document) != fields:
+        raise ValueError(f"not a {what} record")
+    return document
+
+
 # fuzz-target
 def parse_cooldown(data: bytes, now: datetime) -> CoolDown:
     """The cool-down *data* holds, checked against *now*; ValueError when malformed.
@@ -137,16 +151,11 @@ def parse_cooldown(data: bytes, now: datetime) -> CoolDown:
     their forms, a refusal later than *now*, or an end other than `COOL_DOWN` after the
     refusal. Undecodable bytes raise `UnicodeDecodeError`, a ValueError too.
     """
-    if len(data) > MAX_COOLDOWN_BYTES:
-        raise ValueError("a cool-down file too large")
-    try:
-        document: object = json.loads(data.decode("utf-8"))
-    except RecursionError as error:  # nesting deeper than the decoder's stack
-        raise ValueError("a cool-down file nested too deeply") from error
-    if not isinstance(document, dict) or set(document) != _FIELDS:
-        raise ValueError("not a cool-down record")
-    refused_at = _parse_utc(document["refused_at"])
-    until = _parse_utc(document["until"])
+    document = load_record(
+        data, _FIELDS, max_bytes=MAX_COOLDOWN_BYTES, what="cool-down"
+    )
+    refused_at = parse_utc(document["refused_at"])
+    until = parse_utc(document["until"])
     what = _what(document["what"])
     # Checked before the sum, so the addition stays inside datetime's range.
     if refused_at > now:
@@ -156,16 +165,47 @@ def parse_cooldown(data: bytes, now: datetime) -> CoolDown:
     return CoolDown(refused_at, what, until)
 
 
-def read_cooldown(path: Path, now: datetime) -> CoolDownRead:
-    """The cool-down *path* holds; none for a missing file, a warning for a broken one."""
+def read_state(
+    path: Path, parse: Callable[[bytes], _T], what: str, *, max_bytes: int
+) -> tuple[_T | None, str | None]:
+    """What *parse* reads from *path*, and a warning; none for a missing file.
+
+    A file that cannot be read, or that *parse* refuses, is no state and a warning
+    naming the file and the error's type, never quoting the content. It is read
+    through `lyrics_files.read_regular`, so a FIFO pipe or a folder under the name is
+    such a file at once, never waited on. No more than *max_bytes* and one byte is
+    read, so *parse*, given *parse*'s own cap as *max_bytes*, refuses an oversized
+    file by that byte without it being read whole. *what* names the kind of file in
+    the warning.
+    """
     try:
-        return CoolDownRead(parse_cooldown(path.read_bytes(), now))
+        return parse(lyrics_files.read_regular(path, max_bytes + 1)), None
     except FileNotFoundError:
-        return CoolDownRead(None)
+        return None, None
     # A UnicodeDecodeError and a JSONDecodeError are both ValueErrors; each is named.
     except (OSError, ValueError) as error:
-        warning = f"{path}: cool-down file ignored ({type(error).__name__})"
-        return CoolDownRead(None, warning)
+        return None, f"{path}: {what} file ignored ({type(error).__name__})"
+
+
+def read_cooldown(path: Path, now: datetime) -> CoolDownRead:
+    """The cool-down *path* holds; none for a missing file, a warning for a broken one."""
+    cool_down, warning = read_state(
+        path,
+        lambda data: parse_cooldown(data, now),
+        "cool-down",
+        max_bytes=MAX_COOLDOWN_BYTES,
+    )
+    return CoolDownRead(cool_down, warning)
+
+
+def write_record(path: Path, document: Mapping[str, object]) -> None:
+    """Write *document* as JSON to *path*, atomically and confirmed, its folder made.
+
+    A state file: written 0o600, each folder made for it 0o700
+    (`lyrics_state.write_state_file`). Raises `OSError` or `ReadBackError` when the
+    file cannot be written.
+    """
+    write_state_file(path, json.dumps(document).encode())
 
 
 def write_cooldown(path: Path, refused_at: datetime, what: str) -> CoolDown:
@@ -182,8 +222,7 @@ def write_cooldown(path: Path, refused_at: datetime, what: str) -> CoolDown:
         "what": cool_down.what,
         "until": format_utc(cool_down.until),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lyrics_files.write_confirmed(path, json.dumps(document).encode())
+    write_record(path, document)
     return cool_down
 
 

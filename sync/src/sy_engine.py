@@ -13,9 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+import sy_located  # noqa: F401 - puts the other tools and libraries on sys.path
+from lyrics_files import open_regular
 import at_engine
 import mutagen
 from sy_request import Reply, ReplyError, Request, dump_request, load_reply
+from sy_types import MAX_TRACK_S
 
 CHILD: Final = Path(__file__).resolve().with_name("sy_child.py")
 REQUEST_NAME: Final = "request.json"
@@ -24,8 +27,6 @@ REPLY_NAME: Final = "reply.json"
 CHILD_BASE_S: Final = 60.0
 #: Timing ran at about 0.2 times the track's length; twice its length leaves ten times that.
 CHILD_PER_SECOND: Final = 2.0
-#: A track whose length cannot be read is given the bound of an hour-long one.
-UNKNOWN_LENGTH_S: Final = 3600.0
 
 
 @dataclass(frozen=True)
@@ -37,9 +38,15 @@ class Aligned:
 
 
 def track_seconds(audio: Path) -> float | None:
-    """*audio*'s length in seconds as its tags say, or None when it cannot be read."""
+    """*audio*'s length in seconds as its tags say, or None when it cannot be read.
+
+    Opened through album's `lyrics_files.open_regular`, and mutagen handed the open
+    file, so a FIFO pipe or a device under the name is no length at once, never
+    waited on.
+    """
     try:
-        found = mutagen.File(audio)
+        with open_regular(audio, "rb") as stream:
+            found = mutagen.File(stream)
     except (mutagen.MutagenError, OSError):
         return None
     length = getattr(getattr(found, "info", None), "length", None)
@@ -47,10 +54,14 @@ def track_seconds(audio: Path) -> float | None:
 
 
 def child_timeout(seconds: float | None) -> float:
-    """The child's bound: a minute, plus twice the track's length."""
-    return CHILD_BASE_S + CHILD_PER_SECOND * (
-        UNKNOWN_LENGTH_S if seconds is None else seconds
-    )
+    """The child's bound: a minute, plus twice the track's length.
+
+    The length is the tags' claim, so it counts for no more than `MAX_TRACK_S`, which
+    is also the length assumed when there is none to read: a crafted header cannot
+    stretch the watchdog past the longest track's bound.
+    """
+    length = MAX_TRACK_S if seconds is None else min(seconds, MAX_TRACK_S)
+    return CHILD_BASE_S + CHILD_PER_SECOND * length
 
 
 def child_argv(workdir: Path) -> list[str]:

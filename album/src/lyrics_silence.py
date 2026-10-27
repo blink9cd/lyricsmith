@@ -13,20 +13,14 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-# The shared bounded runner sits directly under the project root, two folders above
-# this one.
-# See stdio_utf8/stdio_utf8.md, "How this project's tools import it", for why
-# each is ONE fixed candidate rather than a search up the ancestors, and why a
-# missing copy fails its import below by name.
-sys.path.append(str(Path(__file__).resolve().parents[2] / "bounded_run"))
+import lyrics_located  # noqa: F401 - puts the shared libraries on sys.path
 
-import bounded_run  # noqa: E402 - import follows the sys.path bootstrap above
-from lyrics_config import GENIUS_TOKEN_ENV  # noqa: E402 - follows the bootstrap above
+import bounded_run
+from lyrics_config import GENIUS_TOKEN_ENV
 
 #: The executable looked up on PATH.
 FFMPEG = "ffmpeg"

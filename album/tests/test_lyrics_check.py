@@ -13,29 +13,18 @@ import sys
 import unittest
 from pathlib import Path
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_check as lc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_stages as ls  # noqa: E402 - import follows the sys.path bootstrap above
-
-# A registered profile, never an @settings decorator: a fuzzing campaign
-# that re-applies its own settings to each property is refused by Hypothesis on a
-# decorated one. Its own
-# name, so another suite's profile loaded in the same process cannot replace it.
-# deadline=None: a per-example deadline measures machine load, not correctness.
-settings.register_profile(
-    "album_check_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_check_properties")
 
 #: A track length used where the timing rows should all pass, in seconds.
 _TRACK_S = 180.0

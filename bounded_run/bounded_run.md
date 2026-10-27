@@ -35,6 +35,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bounded_run"))
 import bounded_run  # noqa: E402 - import follows the sys.path bootstrap above
 ```
 
+It makes the same insert for its own import of `stdio_utf8`, from the folder beside its own
+(`<parent>/stdio_utf8`), at the FRONT of `sys.path`. So a caller that puts the libraries on
+the path itself, from a list of folders, gets the `stdio_utf8` it named only while the two
+folders share a parent, so keep them side by side.
+
 ## API
 
 ### `run_bounded(argv, *, timeout, cwd=None, env=None, stdin_text=None, kill_tree_fn=kill_tree, clock=None, hide_window=False)`

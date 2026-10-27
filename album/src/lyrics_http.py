@@ -1,16 +1,18 @@
 """Every provider's shared HTTP: one session per call, a named User-Agent, a capped GET.
 
-A GET given a `Retry` tries a transient refusal again (`RetryPolicy`): an HTTP 429, 502,
-503 or 504, or a connection that dropped or was refused, waits 2, 5 and then 10 seconds
+A GET given a `Retry` tries a transient refusal again (`RetryPolicy`): an HTTP 429 or any
+5xx, or a connection that dropped or was refused, waits 2, 5 and then 10 seconds
 between attempts, or what the reply's ``Retry-After`` asks in whole seconds, up to
 `RETRY_AFTER_CAP_S`. A wait that would end past the call's own deadline is not begun, so
 the retries never outlast the watchdog's bound for the call (`PROVIDER_DEADLINE_S` by
 default), and a call the watchdog abandoned stops retrying on its own. Every other
 failure is raised at once: another client error, a redirect, a request timeout (which
 has already spent much of the call) and a certificate failure. Only the final failure
-is raised, as a `RetriedError` naming the retries made when there were any; a refusal a
-retry got past leaves no trace. A status the caller falls back on (*absent*) is no
-failure, so it is never retried.
+is raised, as a `RetriedError` naming the retries made when there were any. A refusal a
+retry got past is not raised, but a policy given a hook (`RetryPolicy.on_retry`) is told
+of each retry made, by the provider asked and the refusal's class
+(`lyrics_refusal.classify`), so a run can count them (`lyrics_retried`). A status the
+caller falls back on (*absent*) is no failure, so it is never retried.
 
 Each provider call opens its own session (`new_session`), so a call the fetch chain's
 watchdog abandoned never shares a connection or a cookie with the next one. Every request
@@ -43,12 +45,10 @@ Nothing here prints.
 
 from __future__ import annotations
 
-import functools
 import http.cookiejar
 import json
 import re
 import time
-import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,16 +57,20 @@ from urllib.parse import urljoin
 
 import requests
 
+# The project's manifest reader, which reads the version the User-Agent carries, is on
+# sys.path through the album tool's located module.
+import lyrics_located  # noqa: F401 - puts the manifest reader on sys.path
+import lyricsmith_project
 from lyrics_model import Source
+from lyrics_pace import ends_before
 from lyrics_providers import HttpStatusError, ProviderError, RetriedError, status_hook
 from lyrics_providers import REDIRECT_STATUSES
+from lyrics_refusal import TRANSIENT_STATUSES, Refusal, classify
 
-#: The tool's own folder, inside the project whose configuration is read below.
-_TOOL_DIR = Path(__file__).resolve().parents[1]
 #: The project configuration whose ``[project]`` version the User-Agent carries.
-PROJECT_CONFIG = _TOOL_DIR.parent / "pyproject.toml"
+PROJECT_CONFIG = lyricsmith_project.PROJECT_CONFIG
 #: What the User-Agent says when the project's version cannot be read, or cleans to nothing.
-UNKNOWN_VERSION = "unknown"
+UNKNOWN_VERSION = lyricsmith_project.UNKNOWN_VERSION
 #: What the User-Agent names the tool when the name it is given cleans to nothing. Generic
 #: on purpose, so a bad name never stands in for the tool's own.
 FALLBACK_TOOL_NAME = "lyrics-tool"
@@ -100,8 +104,9 @@ PROVIDER_DEADLINE_S = 30.0
 RETRY_WAITS_S: tuple[float, ...] = (2.0, 5.0, 10.0)
 #: The longest wait a reply's Retry-After may ask for in place of the scheduled one.
 RETRY_AFTER_CAP_S = 10.0
-#: The statuses of an overloaded or rate-limiting server, which may answer next time.
-RETRY_STATUSES = frozenset({429, 502, 503, 504})
+#: The statuses of an overloaded or rate-limiting server, which may answer next time:
+#: the refusal classes' own set, so a retry and a class never disagree.
+RETRY_STATUSES = TRANSIENT_STATUSES
 #: Connection failures that are not transient: a request timeout has already spent much
 #: of the call, and a certificate failure answers the same way every time.
 _LASTING_CONNECTION_ERRORS = (requests.Timeout, requests.exceptions.SSLError)
@@ -123,13 +128,21 @@ class TextReply:
     text: str
 
 
+#: What a policy tells of each retry it makes: the provider asked, the refusal's class.
+OnRetry = Callable[[Source, Refusal], None]
+
+
 @dataclass(frozen=True)
 class RetryPolicy:
-    """How a call's requests retry: the waits between attempts, on an injected clock."""
+    """How a call's requests retry: the waits between attempts, on an injected clock.
+
+    *on_retry*, when given, is told of each retry made, before its wait.
+    """
 
     clock: Callable[[], float] = time.monotonic
     sleeper: Callable[[float], None] = time.sleep
     waits_s: tuple[float, ...] = RETRY_WAITS_S
+    on_retry: OnRetry | None = None
 
     def within(self, bound_s: float) -> Retry:
         """The retry for one call starting now, which waits only within *bound_s*."""
@@ -146,8 +159,9 @@ class Retry:
     def pause_s(self, error: Exception, scheduled_s: float) -> float | None:
         """The wait before trying again after *error*, or None to raise it now.
 
-        None for a failure that is not transient, and for a wait that would end past
-        `give_up_at`. A transient status's Retry-After replaces *scheduled_s*, capped.
+        None for a failure that is not transient, and for a wait that would end at or
+        past `give_up_at` (`lyrics_pace.ends_before`). A transient status's Retry-After
+        replaces *scheduled_s*, capped.
         """
         if isinstance(error, HttpStatusError):
             if error.status not in RETRY_STATUSES:
@@ -160,23 +174,7 @@ class Retry:
             wait = scheduled_s
         else:
             return None
-        return wait if self.policy.clock() + wait < self.give_up_at else None
-
-
-@functools.cache
-def _project_version(config: Path) -> str:
-    """The ``[project]`` version *config* declares, or `UNKNOWN_VERSION`.
-
-    Cached: every provider call builds a User-Agent, and the file does not change
-    during a run.
-    """
-    try:
-        with config.open("rb") as handle:
-            project = tomllib.load(handle).get("project")
-    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
-        return UNKNOWN_VERSION
-    version = project.get("version") if isinstance(project, dict) else None
-    return version if isinstance(version, str) else UNKNOWN_VERSION
+        return wait if ends_before(self.policy.clock(), wait, self.give_up_at) else None
 
 
 def _clean_token(text: str, fallback: str) -> str:
@@ -192,7 +190,7 @@ USER_AGENT_NAME: Final = "lyricsmith"
 def user_agent(config: Path = PROJECT_CONFIG, tool_name: str = USER_AGENT_NAME) -> str:
     """``<tool>/<version>``: *tool_name* and *config*'s project version, each cleaned."""
     name = _clean_token(tool_name, FALLBACK_TOOL_NAME)
-    return f"{name}/{_clean_token(_project_version(config), UNKNOWN_VERSION)}"
+    return f"{name}/{_clean_token(lyricsmith_project.project_version(config), UNKNOWN_VERSION)}"
 
 
 def send_unchanged(request: requests.PreparedRequest) -> requests.PreparedRequest:
@@ -288,6 +286,8 @@ def _send_retrying(
                 if retries:
                     raise RetriedError(error, retries) from error
                 raise
+            if retry.policy.on_retry is not None:
+                retry.policy.on_retry(source, classify(error).reason)
         retry.policy.sleeper(pause)
         retries += 1
 

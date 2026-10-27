@@ -181,6 +181,11 @@ class DeadlineTest(RetryCase):
         self.assertEqual((script.sent, self.clock.sleeps), (2, [2.0]))
         self.assertEqual(lp.error_detail(error), "HTTP 503 after 1 retry")
 
+    def test_a_wait_ending_exactly_at_the_bound_is_not_begun(self) -> None:
+        error, script = self.refusal([503, 200], bound_s=lh.RETRY_WAITS_S[0])
+        self.assertIsInstance(error, lp.HttpStatusError)
+        self.assertEqual((script.sent, self.clock.sleeps), (1, []))
+
     def test_no_room_for_the_first_wait_is_the_plain_refusal(self) -> None:
         error, script = self.refusal([503, 200], bound_s=1.0)
         self.assertIsInstance(error, lp.HttpStatusError)

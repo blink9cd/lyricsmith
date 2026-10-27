@@ -14,28 +14,19 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from hypothesis import HealthCheck, assume, given, settings
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_fetch as lf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_inventory as li  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_sidecar as ls  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_records import MAX_LYRICS_CHARS  # noqa: E402 - import follows the sys.path bootstrap above
-
-# A registered profile of its own, never an @settings decorator, as the other
-# property suites do. deadline=None: each example writes and reads a file, so a
-# per-example deadline would measure the disk, not correctness.
-settings.register_profile(
-    "album_sidecar_match_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow, HealthCheck.filter_too_much],
-)
-settings.load_profile("album_sidecar_match_properties")
 
 #: Invented lines.
 _ONE, _TWO = "Chalk birds fly off the pavement", "when the street sweeper sings"

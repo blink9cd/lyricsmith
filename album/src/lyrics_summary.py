@@ -3,9 +3,9 @@
 Each report opens with a header naming the tool, the report (the run's id, or "dry run")
 and the album, then a table with one row per track, then a line of counts. The entry
 point prints them to stdout and nothing else, so redirecting stdout captures exactly the
-report. Every line passes through `printable`, and every table cell before its column
-is measured, so a name holding a control character prints as visible escapes and its
-row still lines up. Pure: this module builds strings and never prints.
+report. Every line passes through `stdio_utf8.spell_unsafe`, and every table cell
+before its column is measured, so a name holding a control character prints as visible
+escapes and its row still lines up. Pure: this module builds strings and never prints.
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ import shlex
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
+import lyrics_located  # noqa: F401 - puts the shared libraries on sys.path
+from lyrics_categories import count_categories, format_removed, format_written
 from lyrics_check import shown
 from lyrics_compare import (
     COMPARED,
@@ -29,7 +31,6 @@ from lyrics_outcomes import (
     describe_removed,
     describe_status,
     is_genre_flagged,
-    printable,
 )
 from lyrics_records import (
     RUN_FOLDER_NAME,
@@ -41,8 +42,10 @@ from lyrics_records import (
     UndoStatus,
     UndoTrackResult,
 )
+from lyrics_refusal_tally import count_refusals, format_refusals
 from lyrics_run import RunReport
 from lyrics_tally import DOT, format_tally, track_count
+from stdio_utf8 import spell_unsafe
 
 #: What fills a cell with nothing to say.
 EMPTY = "-"
@@ -65,8 +68,8 @@ def header_lines(prog: str, what: str, counted: str, album: Path) -> list[str]:
 
 
 def report_text(lines: Iterable[str]) -> str:
-    """The report's *lines* as printed text, each one through `printable`."""
-    return "".join(f"{printable(line)}\n" for line in lines)
+    """The report's *lines* as printed text, each one through `spell_unsafe`."""
+    return "".join(f"{spell_unsafe(line)}\n" for line in lines)
 
 
 def _note(markers: Sequence[QueryMarker], links_ignored: Sequence[str]) -> str:
@@ -90,12 +93,12 @@ def table(
     The first column is the row number, right-aligned; the last is not padded, so no
     line ends in spaces.
     """
-    numbered = [[str(i), *map(printable, row)] for i, row in enumerate(rows, 1)]
+    numbered = [[str(i), *map(spell_unsafe, row)] for i, row in enumerate(rows, 1)]
     cells = [list(headers), *numbered]
     widths = [max(len(row[col]) for row in cells) for col in range(len(headers))]
     widths[0] = max(widths[0], _NUMBER_WIDTH)
     lines = []
-    for row, note in zip(cells, ["", *map(printable, notes)], strict=True):
+    for row, note in zip(cells, ["", *map(spell_unsafe, notes)], strict=True):
         padded = [row[0].rjust(widths[0])]
         padded += [cell.ljust(width) for cell, width in zip(row[1:-1], widths[1:-1])]
         lines.append(_GAP.join([*padded, row[-1], note]).rstrip())
@@ -221,22 +224,37 @@ def format_run(
     silence: str | None = None,
     tekstowo: str | None = None,
 ) -> str:
-    """The run summary: rows, counts, the optional lines (`_optional_lines`), tally, backup."""
+    """The run summary: rows, counts, the optional lines (`_optional_lines`), tally, backup.
+
+    The counts line is followed by the written tracks by category and the removed
+    ones by reason, each line only when it counts a track (`lyrics_categories`). The
+    provider tally is followed by the refusals by provider and reason, when there
+    were any (`lyrics_refusal_tally`).
+    """
     rows = [(t.path, *run_row(t)) for t in report.tracks]
     notes = [
         _note(t.after.query, t.after.sidecar_links_ignored) if t.after else ""
         for t in report.tracks
     ]
     outcomes = [t.after for t in report.tracks if t.after is not None]
+    categories = count_categories(report.tracks)
     lines = [
         *header_lines(prog, f"run {report.run_id}", track_count(len(rows)), album),
         *table(("#", "track", "source", "kind", "check"), rows, notes),
         _run_counts_line(outcomes, genius),
+        *_present(format_written(categories)),
+        *_present(format_removed(categories)),
         *_optional_lines(bandcamp, youtube_music, tekstowo, silence),
         format_tally(report.providers),
+        *_present(format_refusals(count_refusals(report.tracks))),
         _backup_footer(report, album, command),
     ]
     return report_text(lines)
+
+
+def _present(line: str | None) -> tuple[str, ...]:
+    """*line* as the lines it adds: none when it is None."""
+    return () if line is None else (line,)
 
 
 def _strip_cell(track: ManifestTrack) -> str:

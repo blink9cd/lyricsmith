@@ -107,6 +107,20 @@ class DiscoverTracksTest(fixtures.IsolatedCase):
         with self.assertRaisesRegex(lyrics_album.AlbumUnusableError, "no MP3"):
             lyrics_album.discover_tracks(self.tmp)
 
+    def test_a_walk_of_an_album_with_no_mp3_returns_its_links(self) -> None:
+        album = self.tmp / "album"
+        album.mkdir()
+        (album / "01 A.mp3").symlink_to(self.tmp / "elsewhere.mp3")
+        found = lyrics_album.walk_album(album)
+        self.assertEqual(found, lyrics_album.Discovery((), (album / "01 A.mp3",)))
+
+    def test_a_walk_raises_what_its_onerror_raises(self) -> None:
+        def refuse(error: OSError) -> None:
+            raise error
+
+        with self.assertRaises(FileNotFoundError):
+            lyrics_album.walk_album(self.tmp / "gone", onerror=refuse)
+
 
 class AlbumLockTest(fixtures.IsolatedCase):
     """One run per album: the kernel lock refuses a second holder, and dies with its own."""

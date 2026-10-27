@@ -46,11 +46,12 @@ album run {run_id}: 3 tracks under album
  2  CD2/02 Orchard.mp3  sidecar  unsynced  PASS
  3  CD2/03 Mill.mp3     -        -         not found
 synced 1 · unsynced 1 · unchanged 0 · not found 1 · no lyrics expected 0 · silent 0 · kept existing 0 · removed 0 · errors 0 · flagged 1 · genius: absent
+written: upgraded 1, embedded 1
 bandcamp: on
 youtube music: on
 tekstowo: on
 silence check: off (no ffmpeg)
-providers: LRCLIB 1/3 · NetEase - · YouTube Music - · Bandcamp - · Genius - · Tekstowo -
+providers: LRCLIB 1/3 (1 synced) · NetEase - · YouTube Music - · Bandcamp - · Genius - · Tekstowo -
 backup: .lyricsmith/{run_id}/   undo: album.py --album {album} --mode undo
 """
 

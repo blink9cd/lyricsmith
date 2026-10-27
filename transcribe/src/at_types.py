@@ -1,6 +1,6 @@
 """transcribe's shared names: label constants, row types, options, line and path helpers.
 
-Every module of the tool takes its labels, suffixes, exit codes and escape from here,
+Every module of the tool takes its labels, suffixes and exit codes from here,
 so the parallel parts of the tool agree on one spelling of each; this module imports
 none of the others.
 Nothing here reads a file, runs a process or prints.
@@ -27,17 +27,6 @@ TXT_SUFFIX = ".txt"
 TOOL_LABEL: Final = "lyricsmith transcribe"
 #: The name prefix of the per-file temporary folder; the walk skips it as hidden.
 TEMP_PREFIX: Final = ".lyricsmith-"
-
-#: The characters a printed name or a label value never carries raw: C0, DEL and C1,
-#: which could steer a terminal or break a line, and the direction marks, embeddings,
-#: overrides and isolates and the line and paragraph separators, which make a name read
-#: as another. The same set lyricsmith album escapes; nothing else is touched.
-UNSAFE = re.compile(
-    r"[\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]"
-)
-
-#: The first code point past Latin-1: below it an escape takes two hex digits.
-LATIN1_END: Final = 0x100
 
 #: whisper-cli -of <workdir>/out writes out.lrc and out.txt.
 ENGINE_STEM = "out"
@@ -132,21 +121,6 @@ def split_lines(text: str) -> list[str]:
 def has_timestamp(text: str) -> bool:
     """Whether any line of a .lrc starts with a [MM:SS.CC] timestamp."""
     return any(TIMESTAMP_LINE.match(line) for line in split_lines(text))
-
-
-def _escape(char: str) -> str:
-    r"""One `UNSAFE` character as ``\xNN`` below U+0100, else as ``\uXXXX``.
-
-    Never Python's own short forms: a tab is ``\x09``, not ``\t``, so a name prints
-    the same here as from lyricsmith album.
-    """
-    code = ord(char)
-    return f"\\x{code:02x}" if code < LATIN1_END else f"\\u{code:04x}"
-
-
-def spell_unsafe(text: str) -> str:
-    r"""*text* with each `UNSAFE` character spelled as its escape (``\x1b``, ``\u202e``)."""
-    return UNSAFE.sub(lambda match: _escape(match.group()), text)
 
 
 def shown_path(audio: Path, root: Path) -> Path:

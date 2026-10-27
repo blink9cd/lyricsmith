@@ -10,14 +10,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import at_located  # noqa: F401 - puts the shared libraries on sys.path
 from at_types import (
     MACHINE_BY_LINE,
     TIMESTAMP_LINE,
     TOOL_LABEL,
     Label,
-    spell_unsafe,
     split_lines,
 )
+from stdio_utf8 import spell_unsafe
 
 
 def re_line(label: Label) -> str:

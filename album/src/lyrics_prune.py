@@ -21,8 +21,13 @@ from pathlib import Path
 from lyrics_album import AcquireLock, album_lock
 from lyrics_manifest import read_manifest
 from lyrics_model import ManifestSchemaError
-from lyrics_records import MANIFEST_NAME, Manifest, RunState
-from lyrics_run_folders import refuse_linked_run_folder, run_order, run_parent
+from lyrics_records import Manifest, RunState
+from lyrics_run_folders import (
+    manifest_present,
+    refuse_linked_run_folder,
+    run_order,
+    run_parent,
+)
 from lyrics_stages import ReadManifest
 from lyrics_undo import UNDO_DIR
 
@@ -132,11 +137,11 @@ def classify(found: Found) -> Verdict:
 def judge(entries: Iterable[Found]) -> tuple[Verdict, ...]:
     """Every entry's verdict, oldest first, the newest-run rule applied.
 
-    Plain undo and check act on the newest run they can read, so that run goes only
-    when every run left behind is undone. Left behind is every other run kept, a newer
-    unreadable one included, and an unreadable one counts as not undone: `select_run`
-    skips some unreadable manifests (a dangling link), so it would land on an older
-    run. Older removable runs go either way.
+    Plain undo and check act on the newest run, so that run goes only when every run
+    left behind is undone. Left behind is every other run kept, a newer unreadable one
+    included, and an unreadable one counts as not undone: `select_run` takes it as a
+    run, and undo refuses it, but the run behind it must still be there once it is
+    mended or removed by hand. Older removable runs go either way.
     """
     ordered = sorted(entries, key=lambda e: e.order)
     verdicts = [classify(e) for e in ordered]
@@ -179,16 +184,16 @@ def _read_entry(
     if leftover:
         return Found(entry.name, order, Kind.LEFTOVER, parent=parent)
     try:
-        # A link counts as a manifest: read, refused and kept, never taken for an
-        # unfinished backup. Only a name that is truly absent is no manifest; any
-        # other failure (a folder not open to search) is an entry nobody can vouch for.
-        os.lstat(entry / MANIFEST_NAME)
-    except FileNotFoundError:
-        return Found(entry.name, order, Kind.NO_MANIFEST, parent=parent)
+        # The listing's own rule: a link counts as a manifest, read, refused and kept,
+        # never taken for an unfinished backup. A failure to tell (a folder not open to
+        # search) is an entry nobody can vouch for.
+        present = manifest_present(entry)
     except OSError as error:
         return Found(
             entry.name, order, Kind.UNREADABLE, detail=str(error), parent=parent
         )
+    if not present:
+        return Found(entry.name, order, Kind.NO_MANIFEST, parent=parent)
     try:
         manifest = read(entry)
         displaced = _holds_displaced(entry, manifest)

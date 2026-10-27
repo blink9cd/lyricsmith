@@ -80,6 +80,8 @@ album run 20261016T034745Z: 6 tracks under sample_album
  5  05 The Short Bit.mp3      sidecar  unsynced  FLAG: lyrics on a no-lyrics genre (Stand-up Comedy)
  6  06 The Quiet Reel.mp3     -        -         removed: implausible old lyrics (placeholder lyrics)
 synced 1 · unsynced 1 · unchanged 0 · not found 0 · no lyrics expected 0 · silent 3 · kept existing 0 · removed 1 · errors 0 · flagged 1 · genius: offline
+written: embedded 2
+removed: placeholder 1
 bandcamp: off (offline)
 youtube music: off (offline)
 tekstowo: off (offline)
@@ -100,7 +102,9 @@ then flagged `lyrics on a no-lyrics genre`, which counts in `flagged` but remove
 nothing. The sixth track's `.txt` holds a placeholder, which reads as no lyrics held:
 the run asks the providers as for a track with none, and offline nothing answers, so
 the placeholder is removed, `removed: implausible old lyrics (placeholder lyrics)`. The
-backup holds it, so the undo below puts it back. The `bandcamp:`, `youtube music:` and
+backup holds it, so the undo below puts it back. Under the counts, `written: embedded 2`
+says both written tracks embedded their own sidecars, and `removed: placeholder 1` why
+the sixth track's lyrics went. The `bandcamp:`, `youtube music:` and
 `tekstowo:` lines say each of those steps was off, and why, and `silence check: on` says
 the measurement ran. The `providers:` line shows `-` for every provider, since an offline
 run asks none; a run that asks them shows each one's tracks won over tracks asked, and how
@@ -135,6 +139,8 @@ album run 20261016T034745Z: 6 tracks under sample_album
  5  05 The Short Bit.mp3      sidecar  unsynced  FLAG: lyrics on a no-lyrics genre (Stand-up Comedy)
  6  06 The Quiet Reel.mp3     -        -         removed: implausible old lyrics (placeholder lyrics)
 synced 1 · unsynced 1 · unchanged 0 · not found 2 · no lyrics expected 1 · silent 0 · kept existing 0 · removed 1 · errors 0 · flagged 1 · genius: offline
+written: embedded 2
+removed: placeholder 1
 bandcamp: off (offline)
 youtube music: off (offline)
 tekstowo: off (offline)
@@ -225,8 +231,14 @@ find sample_album -name .lyricsmith -prune -o -type f -exec shasum -a 256 {} + |
 ```
 
 The two listings match. The hidden `sample_album/.lyricsmith/` folder, holding the run
-folder and the lock, stays after an undo; remove it by hand once you no longer need the
-run.
+folder and the lock, stays after an undo. Once you no longer need its runs, `--mode accept`
+removes it: run it first without `--apply` to read what would go, then again with
+`--apply`. It copies each run's manifest to a records folder under your state folder, so
+for a sample run point `XDG_STATE_HOME` at a scratch folder first:
+
+```bash
+XDG_STATE_HOME="$(mktemp -d)" python "$ALBUM_DIR/album.py" --album sample_album --mode accept
+```
 
 ## 5. Strip
 

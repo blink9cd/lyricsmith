@@ -19,6 +19,7 @@ import cli_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import http_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_table as ltable  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_tally as lt  # noqa: E402 - import follows the sys.path bootstrap above
 import run_fakes  # noqa: E402 - import follows the sys.path bootstrap above
@@ -126,6 +127,44 @@ class RefusedTallyTest(fixtures.IsolatedCase):
         self.assertEqual([c.refused for c in tally], [0, 0, 0, 0, 0, 0])
 
 
+def blocked(kind: lm.LyricsKind, *, unsent: bool) -> lm.ProviderAttempt:
+    """A Genius *kind* step refused as blocked, *unsent* when an open breaker skipped it."""
+    facts = lrf.RefusalFacts(lrf.Refusal.BLOCKED, unsent=unsent)
+    return lm.ProviderAttempt(lm.ProviderKey(GENIUS, kind), False, ERROR, "", facts)
+
+
+class BreakerOpenTallyTest(fixtures.IsolatedCase):
+    """A track whose only refusals went unsent counts as breaker open, not refused."""
+
+    def genius(self, *tracks: tuple[lm.ProviderAttempt, ...]) -> lt.ProviderCount:
+        """Genius's tally over one fetch per track of *tracks*."""
+        fetches = [lt.TrackFetch(track, None) for track in tracks]
+        tally = lt.tally_providers(EVERY, fetches)
+        return next(count for count in tally if count.source is GENIUS)
+
+    def test_one_block_and_the_lookups_it_left_unsent(self) -> None:
+        tracks = [(blocked(U, unsent=False),)] + [(blocked(U, unsent=True),)] * 20
+        count = self.genius(*tracks)
+        self.assertEqual((count.refused, count.breaker_open), (1, 20))
+        self.assertEqual(count.describe(), "Genius 0/21 (1 refused, 20 breaker open)")
+
+    def test_a_track_with_a_sent_refusal_beside_an_unsent_one_is_refused(
+        self,
+    ) -> None:
+        count = self.genius((blocked(S, unsent=False), blocked(U, unsent=True)))
+        self.assertEqual((count.refused, count.breaker_open), (1, 0))
+
+    def test_an_attempt_kept_without_facts_counts_as_refused(self) -> None:
+        count = self.genius((attempt(GENIUS, U, TIMEOUT),))
+        self.assertEqual((count.refused, count.breaker_open), (1, 0))
+
+    def test_breaker_open_sits_between_refused_and_retried(self) -> None:
+        count = lt.ProviderCount(GENIUS, 0, 9, refused=1, retried=2, breaker_open=8)
+        self.assertEqual(
+            count.describe(), "Genius 0/9 (1 refused, 8 breaker open, 2 retried)"
+        )
+
+
 class TallyLineTest(fixtures.IsolatedCase):
     """The summary's providers line."""
 
@@ -188,7 +227,7 @@ class RunTallyLineTest(cli_fakes.CliCase):
         self.assertEqual(result.code, 0, result.stderr)
         self.assertEqual(
             result.stdout.splitlines()[-2],
-            "providers: LRCLIB 0/2 · NetEase 2/2 · YouTube Music - · Bandcamp - · Genius - · Tekstowo -",
+            "providers: LRCLIB 0/2 · NetEase 2/2 (2 synced) · YouTube Music - · Bandcamp - · Genius - · Tekstowo -",
         )
         self.assertEqual(len(canned.calls), 2)
 

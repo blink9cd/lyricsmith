@@ -486,7 +486,7 @@ class ProgressTest(RunCase):
         )
 
     def test_a_one_track_run_backs_up_1_track_not_tracks(self) -> None:
-        # Regression: the line once used a fixed plural.
+        # The noun follows the count, never a fixed plural.
         self.build((TrackSpec("01 Keeper.mp3", title="The Keeper"),))
         self.run_album()
         self.assertEqual(self.progress[0], "backing up 1 track")

@@ -3,7 +3,8 @@
 Every other module here builds against what this one fixes: the errors one module
 raises and another acts on (held in `lyrics_errors`, re-exported here), the lyrics
 values, one ID3 lyrics frame held verbatim, a track's tags, and the fetch chain's
-provider seam, result and sidecar state. Its two siblings complete the interface:
+sources (held in `lyrics_source`, re-exported here), provider seam, result and
+sidecar state. Its two siblings complete the interface:
 `lyrics_records` (the Genius key, the check's verdict, the per-track outcome, the run
 manifest) and `lyrics_stages` (a `typing.Protocol` per stage function, so the type
 checker holds every implementation to one signature).
@@ -17,8 +18,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from types import MappingProxyType
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 from lyrics_errors import LyricsError as LyricsError
 from lyrics_errors import ConfigError as ConfigError
@@ -29,8 +29,14 @@ from lyrics_errors import ReadBackError as ReadBackError
 from lyrics_errors import SidecarDecodeError as SidecarDecodeError
 from lyrics_errors import TagVersionError as TagVersionError
 from lyrics_errors import TrackNotInRunError as TrackNotInRunError
+from lyrics_errors import UnreadableRunError as UnreadableRunError
+from lyrics_source import SOURCE_LABELS as SOURCE_LABELS
+from lyrics_source import Source as Source
 
 from lyrics_cap import refuse_oversized_frames
+
+if TYPE_CHECKING:  # a cycle at run time: lyrics_refusal builds on this module
+    from lyrics_refusal import RefusalFacts
 
 _MS_PER_SECOND = 1000
 _MS_PER_MINUTE = 60 * _MS_PER_SECOND
@@ -299,53 +305,6 @@ def lyrics_from_frames(frames: Sequence[FrameRecord], lang: str) -> Lyrics | Non
 # --- The fetch chain -------------------------------------------------------------
 
 
-class Source(StrEnum):
-    """Where a track's lyrics came from.
-
-    The values are what a run's manifest records, kept as they are so every manifest,
-    old or new, still reads and undoes. What a person reads is the `label`: ``str()``
-    and formatting both give it, so a summary, a progress line or an error message
-    names each provider as the provider writes its own name.
-    """
-
-    SIDECAR = "sidecar"
-    #: The track's own lyrics frames, served like a sidecar of the same kind.
-    FRAMES = "frames"
-    #: No step asks it any more; kept so a manifest an earlier run wrote still reads.
-    MUSIXMATCH = "Musixmatch"
-    LRCLIB = "Lrclib"
-    NETEASE = "NetEase"
-    GENIUS = "Genius"
-    #: An album's Bandcamp page, found through MusicBrainz.
-    BANDCAMP = "Bandcamp"
-    #: YouTube Music's anonymous web route.
-    YOUTUBE_MUSIC = "YouTube Music"
-    #: Tekstowo.pl's plain search and song pages.
-    TEKSTOWO = "Tekstowo"
-    #: A timed ``.lrc`` the transcribe tool made, labeled so in its header (`machine_label`).
-    MACHINE_TRANSCRIPT = "machine transcript"
-    #: A timed ``.lrc`` the sync tool made, labeled so in its header (`machine_label`).
-    MACHINE_TIMED = "machine timed"
-
-    @property
-    def label(self) -> str:
-        """The name shown to a person: the value, unless `SOURCE_LABELS` gives another."""
-        return SOURCE_LABELS.get(self.value, self.value)
-
-    def __str__(self) -> str:
-        """The `label`. The manifest stores the value: JSON encodes the string itself."""
-        return self.label
-
-    def __format__(self, format_spec: str) -> str:
-        """The `label`, formatted by *format_spec*: a str enum would format its value."""
-        return format(self.label, format_spec)
-
-
-#: Display labels that differ from the value, keyed by the value. Kept outside the
-#: class, where the enum would read an assignment as one more member.
-SOURCE_LABELS: Mapping[str, str] = MappingProxyType({"Lrclib": "LRCLIB"})
-
-
 class QueryMarker(StrEnum):
     """A way the search query departed from the track's own artist and title tags."""
 
@@ -407,12 +366,13 @@ class AttemptOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class ProviderAttempt:
-    """One provider call: which step, on which query, and how it ended."""
+    """One provider call: which step, on which query, how it ended; a failure's facts."""
 
     key: ProviderKey
     query_stripped: bool
     outcome: AttemptOutcome
     detail: str
+    facts: RefusalFacts | None = None
 
 
 #: The attempt outcomes that are a provider's failure, not its answer: a track's

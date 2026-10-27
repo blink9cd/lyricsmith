@@ -12,6 +12,7 @@ Reading a .lrc and probing a folder's case rule are the only I/O; nothing here w
 from __future__ import annotations
 
 import os
+import stat
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -44,12 +45,32 @@ def is_ours(lrc_text: str) -> bool:
     return False
 
 
+def read_flags() -> int:
+    """How a .lrc is opened: read-only, never blocking, binary.
+
+    Never blocking, so a FIFO pipe with no writer opens at once; binary, so the bytes
+    are the file's own. A flag a platform lacks is 0 there, and each is read at the
+    open, never once at import. The album tool reads with these same flags (its
+    `lyrics_files.read_flags`); a test where both tools are on the path pins the two
+    together.
+    """
+    return (
+        os.O_RDONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
+
+
 def read_lrc(path: Path) -> str | None:
     """A .lrc's text, None when there is none, '' when it cannot be read (not ours).
 
     A dangling symlink, or anything else at the name that is not a regular file, is
-    present but not ours, and is never opened: a FIFO blocks in open() and a link to
-    a device such as /dev/zero reads without end, which would hang even a dry run.
+    present but not ours, and is never read: a FIFO blocks in a plain open() and a
+    link to a device such as /dev/zero reads without end, which would hang even a dry
+    run. The name is checked first, then opened without blocking (`read_flags`) and
+    told again by the opened descriptor's own fstat, so a FIFO or device swapped in
+    between the two is refused there too, never waited on.
 
     Only the first `LRC_READ_CAP_BYTES` are read, all `is_ours` needs, so a huge or
     sparse sidecar is never read whole: a header block running past the cap is
@@ -62,11 +83,21 @@ def read_lrc(path: Path) -> str | None:
     if not path.is_file():
         return "" if os.path.lexists(path) else None
     try:
-        with path.open("rb") as stream:
-            head = stream.read(LRC_READ_CAP_BYTES)
+        head = _read_head(path)
     except OSError:
         return ""
-    return head.decode("utf-8-sig", errors="replace")
+    return "" if head is None else head.decode("utf-8-sig", errors="replace")
+
+
+def _read_head(path: Path) -> bytes | None:
+    """The first `LRC_READ_CAP_BYTES` of *path*, None when it opens as no regular file."""
+    descriptor = os.open(path, read_flags())
+    # Told before fdopen, which itself refuses a folder with an error of its own.
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        return None
+    with os.fdopen(descriptor, "rb") as stream:
+        return stream.read(LRC_READ_CAP_BYTES)
 
 
 def choose_action(lrc_text: str | None, txt_exists: bool, overwrite: bool) -> Action:

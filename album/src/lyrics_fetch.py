@@ -19,8 +19,9 @@ keep their place.
 Placeholder lyrics held (`lyrics_placeholder`), in a sidecar or a frame, are no
 lyrics held and never serve; an answer that is one is nothing found. So is an answer
 the track's duration rules out, given one that can be read: synced lines whose latest
-starts past the end, or more words a second than any song is sung at (`lyrics_accept`,
-the check's `past end` and `too many words` rows), its attempt detail naming the row.
+starts past the end, or more words a second than any song is sung at
+(`lyrics_step_answer`, the check's `past end` and `too many words` rows), its attempt
+detail naming the row.
 A timed answer declined far past the end (`far_past_end`) is another song, so a later
 plain answer of that song, in the same fetch, its stripped-title retry included, is
 declined too (`SameSong`).
@@ -43,6 +44,10 @@ times out is an error for that step only; the chain moves on. An answer is clean
 parsed after the watchdog returns, so an oversized one is refused unread, and the chain
 moves on as for any other answer it does not accept.
 
+A provider a breaker guards (`lyrics_breakers`: LRCLIB, NetEase, Genius, Bandcamp) is
+not asked while its breaker is open; its step records a refusal of the breaker's last
+reason instead, and each call that is made tells the breaker how it ended (`attempt`).
+
 The real table, with its LRC adapters and the Bandcamp, YouTube Music, Genius and
 Tekstowo steps, is `lyrics_table`'s.
 Nothing here prints; every attempt comes back in the `FetchResult` instead.
@@ -53,24 +58,25 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias, TypeVar, runtime_checkable
+from typing import TypeAlias, TypeVar
 
 # What a step accepts from an answer, and the attempt details saying why, live in
-# `lyrics_accept`; re-exported, so the chain's callers and tests read them from here.
-from lyrics_accept import DETAIL_ACCEPTED as DETAIL_ACCEPTED
-from lyrics_accept import DETAIL_IMPLAUSIBLE as DETAIL_IMPLAUSIBLE
-from lyrics_accept import DETAIL_NOTHING as DETAIL_NOTHING
-from lyrics_accept import DETAIL_PLACEHOLDER as DETAIL_PLACEHOLDER
-from lyrics_accept import DETAIL_SAME_SONG as DETAIL_SAME_SONG
-from lyrics_accept import DETAIL_TOO_LARGE as DETAIL_TOO_LARGE
-from lyrics_accept import DETAIL_UNTIMED as DETAIL_UNTIMED
-from lyrics_accept import FAR_PAST_END_FACTOR as FAR_PAST_END_FACTOR
-from lyrics_accept import SameSong as SameSong
-from lyrics_accept import clean_genius_text as clean_genius_text
-from lyrics_accept import far_past_end as far_past_end
-from lyrics_accept import judge_answer as judge_answer
-from lyrics_accept import normalize_answer as normalize_answer
+# `lyrics_step_answer`; re-exported, so the chain's callers and tests read them from here.
+from lyrics_step_answer import DETAIL_ACCEPTED as DETAIL_ACCEPTED
+from lyrics_step_answer import DETAIL_IMPLAUSIBLE as DETAIL_IMPLAUSIBLE
+from lyrics_step_answer import DETAIL_NOTHING as DETAIL_NOTHING
+from lyrics_step_answer import DETAIL_PLACEHOLDER as DETAIL_PLACEHOLDER
+from lyrics_step_answer import DETAIL_SAME_SONG as DETAIL_SAME_SONG
+from lyrics_step_answer import DETAIL_TOO_LARGE as DETAIL_TOO_LARGE
+from lyrics_step_answer import DETAIL_UNTIMED as DETAIL_UNTIMED
+from lyrics_step_answer import FAR_PAST_END_FACTOR as FAR_PAST_END_FACTOR
+from lyrics_step_answer import SameSong as SameSong
+from lyrics_step_answer import clean_genius_text as clean_genius_text
+from lyrics_step_answer import far_past_end as far_past_end
+from lyrics_step_answer import judge_answer as judge_answer
+from lyrics_step_answer import normalize_answer as normalize_answer
 from lyrics_answer import LrcAnswer
+from lyrics_breakers import BreakerGuard, guard_of
 
 # PROVIDER_DEADLINE_S, how long one provider call may run before it is abandoned as a
 # timeout, lives with the HTTP layer, whose retries must end within it; it is read
@@ -92,7 +98,16 @@ from lyrics_model import (
     TrackQuery,
 )
 from lyrics_placeholder import unless_placeholder
+
+# What a provider may say of itself lives in `lyrics_provider_kinds`; re-exported, so the
+# chain's callers and tests read each from here.
+from lyrics_provider_kinds import AnswersEveryKind as AnswersEveryKind
+from lyrics_provider_kinds import AsksSelectively as AsksSelectively
+from lyrics_provider_kinds import KeepsAnswers as KeepsAnswers
+from lyrics_provider_kinds import OwnsDeadline as OwnsDeadline
+from lyrics_provider_kinds import skips as skips
 from lyrics_providers import ProviderTimeout, error_detail
+from lyrics_refusal import RefusalFacts, classify
 from lyrics_titles import stripped_retry
 
 _T = TypeVar("_T")
@@ -141,50 +156,6 @@ def run_with_deadline(call: Callable[[], _T], deadline_s: float) -> _T:
     if errors:
         raise errors[0]
     return values[0]
-
-
-@runtime_checkable
-class OwnsDeadline(Protocol):
-    """A provider that retries inside one call, and so sets its own whole-call bound.
-
-    The watchdog uses that bound as given, with no input of the chain's, so it cannot
-    disagree with the moment the provider itself gives up.
-    """
-
-    def step_deadline_s(self) -> float:
-        """The bound for one whole call."""
-
-
-@runtime_checkable
-class AsksSelectively(Protocol):
-    """A provider that sends no request for some queries, and says which beforehand.
-
-    The chain skips it for those, recording no attempt: an attempt would count the
-    provider as asked in the run's tally (`lyrics_tally`) for a track it never asked
-    about, and a provider that had stopped working would hide behind those counts.
-    """
-
-    def asks(self, query: TrackQuery) -> bool:
-        """False when a call for *query* would send no request."""
-
-
-def skips(provider: Provider, query: TrackQuery) -> bool:
-    """True when *provider* says it would send no request for *query*."""
-    return isinstance(provider, AsksSelectively) and not provider.asks(query)
-
-
-@runtime_checkable
-class AnswersEveryKind(Protocol):
-    """A provider whose one call settles every kind of step for a query.
-
-    The chain asks it once per query within a track's fetch and keeps the answer, or
-    the failure, for its other kind's step (`_ask`), so a plain pass sends nothing a
-    synced pass already sent. The method's name is one no single-kind provider carries,
-    since the protocol check reads only that the attribute exists.
-    """
-
-    def answer_all_kinds(self, query: TrackQuery) -> LrcAnswer:
-        """The provider's text of each kind for *query*."""
 
 
 #: What one track's fetch heard from each every-kind provider, by its source and the
@@ -243,6 +214,57 @@ def _ask(
     return answer.text(key.kind)
 
 
+def _fresh_call(
+    key: ProviderKey, provider: Provider, query: TrackQuery, heard: Heard
+) -> bool:
+    """Whether *key*'s step would send *provider* a request.
+
+    Not when it re-reads what *heard* holds, nor when the provider keeps what an
+    earlier call heard for *query* (`KeepsAnswers`).
+    """
+    if isinstance(provider, KeepsAnswers) and provider.kept(query):
+        return False
+    return (
+        not isinstance(provider, AnswersEveryKind) or (key.source, query) not in heard
+    )
+
+
+def _asked(
+    key: ProviderKey,
+    provider: Provider,
+    query: TrackQuery,
+    deadline_s: float,
+    heard: Heard,
+) -> tuple[str | None, ProviderAttempt | None, BaseException | None]:
+    """*provider*'s text for *key*'s step (`_ask`), or the attempt and error it failed with."""
+    try:
+        return _ask(key, provider, query, deadline_s, heard), None, None
+    except ProviderTimeout as timeout:
+        timed_out = AttemptOutcome.TIMEOUT
+        return (
+            None,
+            _refused(key, query, timed_out, str(timeout), classify(timeout)),
+            timeout,
+        )
+    # Any provider failure is that step's error; the chain moves on either way. Its
+    # detail is the error's short form, never its message (`error_detail`); its facts
+    # are read from the error itself (`classify`), a failure `_ask` kept included.
+    except Exception as error:
+        detail, facts = error_detail(error), classify(error)
+        return None, _refused(key, query, AttemptOutcome.ERROR, detail, facts), error
+
+
+def _refused(
+    key: ProviderKey,
+    query: TrackQuery,
+    outcome: AttemptOutcome,
+    detail: str,
+    facts: RefusalFacts,
+) -> ProviderAttempt:
+    """The attempt of a step that refused or failed, with its refusal's *facts*."""
+    return ProviderAttempt(key, query.stripped, outcome, detail, facts)
+
+
 def attempt(
     key: ProviderKey,
     provider: Provider,
@@ -257,22 +279,36 @@ def attempt(
 
     An answer is judged against the track's *duration_s* (`judge_answer`), and against
     the songs *same_song* holds declined in this track's fetch, none when None.
+
+    A provider its breaker guards (`lyrics_breakers`) is not asked while the breaker is
+    open: the step records a refusal of the breaker's last reason instead, marked
+    unsent, since no request went out. A step that
+    calls it tells the guard how the call ended; one that re-reads what the provider's
+    call for its other kind heard, or what it kept from an earlier track's call, does
+    neither, so one call counts once and a kept outcome is read while the breaker is
+    open.
     """
+    guard = guard_of(provider)
+    if guard is not None and not _fresh_call(key, provider, query, heard):
+        guard = None
+    if guard is not None and (shut := guard.shut()) is not None:
+        return None, _refused(key, query, AttemptOutcome.ERROR, shut.detail, shut.facts)
+    text, failed, error = _asked(key, provider, query, deadline_s, heard)
+    _settle(guard, error, None if failed is None else failed.facts)
+    if failed is not None:
+        return None, failed
     songs = SameSong() if same_song is None else same_song
-    try:
-        text = _ask(key, provider, query, deadline_s, heard)
-    except ProviderTimeout as timeout:
-        return None, ProviderAttempt(
-            key, query.stripped, AttemptOutcome.TIMEOUT, str(timeout)
-        )
-    # Any provider failure is that step's error; the chain moves on either way. Its
-    # detail is the error's short form, never its message (`error_detail`).
-    except Exception as error:
-        detail = error_detail(error)
-        return None, ProviderAttempt(key, query.stripped, AttemptOutcome.ERROR, detail)
     lyrics, detail = songs.judge(normalize_answer(text, key), duration_s)
     outcome = AttemptOutcome.EMPTY if lyrics is None else AttemptOutcome.ANSWERED
     return lyrics, ProviderAttempt(key, query.stripped, outcome, detail)
+
+
+def _settle(
+    guard: BreakerGuard | None, error: BaseException | None, facts: RefusalFacts | None
+) -> None:
+    """Tell *guard*, when there is one, how its step's call ended."""
+    if guard is not None:
+        guard.settle(error, facts)
 
 
 def _run_pass(

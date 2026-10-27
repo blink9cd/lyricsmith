@@ -24,7 +24,7 @@ from at_types import (
 from tests._cli import CliCase
 from tests._isolation import write_fake_whisper
 
-RE_LINE = "[re:lyricsmith transcribe 0.1.0; whisper.cpp 1.9.5; ggml-large-v3-turbo]"
+RE_LINE = "[re:lyricsmith transcribe 0.2.0; whisper.cpp 1.9.5; ggml-large-v3-turbo]"
 HAND = "[ar:someone]\n[00:01.00] An invented hand-made line.\n"
 #: A name that would clear the screen if it reached the terminal raw.
 HOSTILE = "bad\x1b[2Jname.mp3"

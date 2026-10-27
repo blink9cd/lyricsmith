@@ -11,12 +11,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import http_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_match as lmatch  # noqa: E402 - import follows the sys.path bootstrap above
@@ -24,14 +25,6 @@ import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap 
 import lyrics_providers as lp  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_youtube_reply as ly  # noqa: E402 - import follows the sys.path bootstrap above
 import youtube_replies as yr  # noqa: E402 - import follows the sys.path bootstrap above
-
-# The shared profile, as test_lyrics_genre explains: registered, never a decorator.
-settings.register_profile(
-    "album_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_properties")
 
 #: JSON-like values keyed by the names YouTube Music's replies use.
 _JSON = http_fakes.json_values(

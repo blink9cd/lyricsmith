@@ -29,6 +29,7 @@ import lyrics_manifest as lmf  # noqa: E402 - import follows the sys.path bootst
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_recorder  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_table as ltable  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_tally  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_youtube_music as lym  # noqa: E402 - import follows the sys.path bootstrap above
@@ -92,7 +93,9 @@ class StoppingStep:
         """Stop for the run, as a ``429`` would, and raise the stop."""
         self.calls.append(query)
         self.stop = lyc.Stop("HTTP 429", UNTIL, self.write_error)
-        raise lym.YouTubeMusicStopped("HTTP 429")
+        raise lym.YouTubeMusicStopped(
+            "HTTP 429", lrf.RefusalFacts(lrf.Refusal.RATE_LIMITED, 429)
+        )
 
     def __call__(self, query: lm.TrackQuery) -> str | None:  # pragma: no cover
         # Never called: the chain asks a provider that has answer_all_kinds

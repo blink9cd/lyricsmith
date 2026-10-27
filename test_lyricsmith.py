@@ -6,6 +6,7 @@ cases run each entry file with ``--help`` only, alone and through the dispatcher
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
 import os
@@ -21,12 +22,13 @@ from unittest import mock
 import lyricsmith
 
 _HERE = Path(__file__).resolve().parent
-# bounded_run, the shared library the help cases run each entry file through, sits
-# directly under the project root, this file's own folder.
-# See stdio_utf8/stdio_utf8.md, "How this project's tools import it", for why
-# each is ONE fixed candidate rather than a search up the ancestors, and why a
-# missing copy fails its import below by name.
-sys.path.append(str(_HERE / "bounded_run"))
+# The project's manifest reader, in its own folder beside this file: it puts the shared
+# libraries the project's pyproject.toml names on sys.path, bounded_run among them.
+_READER_DIR = str(_HERE / "lyricsmith_project")
+sys.path[:] = [_READER_DIR, *(entry for entry in sys.path if entry != _READER_DIR)]
+import lyricsmith_project  # noqa: E402 - import follows the sys.path bootstrap above
+
+lyricsmith_project.add_shared_libraries()
 
 import bounded_run  # noqa: E402 - import follows the sys.path bootstrap above
 
@@ -89,28 +91,29 @@ class DispatchTest(unittest.TestCase):
         for name in lyricsmith.COMMANDS:
             self.assertIn(name, err.getvalue())
 
-    def test_no_command_exits_2(self) -> None:
-        with (
-            contextlib.redirect_stderr(io.StringIO()),
-            self.assertRaises(SystemExit) as stop,
-        ):
-            lyricsmith.main([])
-        self.assertEqual(stop.exception.code, 2)
-
-    def test_an_option_before_the_command_exits_2(self) -> None:
-        with (
-            contextlib.redirect_stderr(io.StringIO()),
-            self.assertRaises(SystemExit) as stop,
-        ):
-            lyricsmith.main(["--mode", "album"])
-        self.assertEqual(stop.exception.code, 2)
+    def test_no_command_an_option_first_or_a_tool_left_unlocated_exits_2(self) -> None:
+        failure = lyricsmith_project.SharedLibraryError("not here")
+        for argv in ([], ["--mode", "album"], ["sweep"]):
+            with (
+                mock.patch.object(lyricsmith, "_load_main", side_effect=failure),
+                contextlib.redirect_stderr(io.StringIO()) as err,
+                self.assertRaises(SystemExit) as stop,
+            ):
+                lyricsmith.main(argv)
+            with self.subTest(argv=argv):
+                self.assertEqual(stop.exception.code, 2)
+                said, loaded = err.getvalue(), argv == ["sweep"]
+                self.assertEqual("SharedLibraryError: not here" in said, loaded, said)
+                self.assertEqual("usage:" in said, not loaded, said)
 
     def test_version_prints_the_project_version(self) -> None:
         out = io.StringIO()
         with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as stop:
             lyricsmith.main(["--version"])
         self.assertEqual(stop.exception.code, 0)
-        self.assertIn("0.1.0", out.getvalue())
+        version = lyricsmith_project.project_version()
+        self.assertNotEqual(version, lyricsmith_project.UNKNOWN_VERSION)
+        self.assertIn(version, out.getvalue())
 
     def test_the_dispatchers_own_name_is_argv0s_and_its_epilog_follows(self) -> None:
         out = io.StringIO()
@@ -121,9 +124,7 @@ class DispatchTest(unittest.TestCase):
         ):
             lyricsmith.main()
         self.assertTrue(out.getvalue().startswith("usage: renamed.py "), out.getvalue())
-        self.assertIn(
-            "Run `renamed.py COMMAND --help`", " ".join(out.getvalue().split())
-        )
+        self.assertIn("Run `renamed.py COMMAND --help`", _words(out.getvalue()))
 
     def test_the_dispatchers_help_names_each_command(self) -> None:
         out = io.StringIO()
@@ -132,6 +133,7 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(stop.exception.code, 0)
         for name in lyricsmith.COMMANDS:
             self.assertIn(name, out.getvalue())
+        self.assertIn("Prerequisites:", out.getvalue())
 
 
 class LoadTest(unittest.TestCase):
@@ -149,42 +151,27 @@ class LoadTest(unittest.TestCase):
         lyricsmith._load_main("album")
         self.assertEqual(sys.path.count(folder), 1)
 
-
-class VersionTest(unittest.TestCase):
-    """The version is the pyproject's, and 'unknown' whenever it cannot be read."""
-
-    def setUp(self) -> None:
-        """A scratch folder for the stand-in pyproject files."""
-        scratch = tempfile.TemporaryDirectory()
-        self.addCleanup(scratch.cleanup)
-        self.config = Path(scratch.name) / "pyproject.toml"
-
-    def test_the_project_files_version(self) -> None:
-        self.config.write_text(
-            '[project]\nversion = "9.8.7"\n', encoding="utf-8", newline="\n"
+    def test_loading_album_loads_no_other_tools_code(self) -> None:
+        done = bounded_run.run_bounded(
+            [sys.executable, "-I", "-c", _ALBUM_ONLY_CHILD, str(_HERE)],
+            timeout=_HELP_TIMEOUT_S,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         )
-        self.assertEqual(lyricsmith.project_version(self.config), "9.8.7")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.split(), [])
 
-    def test_a_missing_file_is_unknown(self) -> None:
-        self.assertEqual(lyricsmith.project_version(self.config), "unknown")
 
-    def test_a_malformed_file_is_unknown(self) -> None:
-        self.config.write_text("[project\n", encoding="utf-8", newline="\n")
-        self.assertEqual(lyricsmith.project_version(self.config), "unknown")
-
-    def test_a_version_that_is_not_text_is_unknown(self) -> None:
-        self.config.write_text(
-            "[project]\nversion = 1\n", encoding="utf-8", newline="\n"
-        )
-        self.assertEqual(lyricsmith.project_version(self.config), "unknown")
-
-    def test_a_project_that_is_not_a_table_is_unknown(self) -> None:
-        self.config.write_text('project = "x"\n', encoding="utf-8", newline="\n")
-        self.assertEqual(lyricsmith.project_version(self.config), "unknown")
-
-    def test_a_file_that_is_not_utf8_is_unknown(self) -> None:
-        self.config.write_bytes(b'[project]\nversion = "\xff"\n')
-        self.assertEqual(lyricsmith.project_version(self.config), "unknown")
+#: A child that loads the album tool through the dispatcher, then prints each module of
+#: the other tools that came with it: their entry modules, and their src/ prefixes.
+_ALBUM_ONLY_CHILD = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import lyricsmith
+lyricsmith._load_main("album")
+others = ("transcribe", "sync", "sweep")
+print(*(name for name in sys.modules
+        if name in others or name.startswith(("at_", "sy_", "sweep_"))))
+"""
 
 
 class HelpTest(unittest.TestCase):
@@ -208,130 +195,288 @@ class HelpTest(unittest.TestCase):
                 )
 
 
-#: Every entry file that finds the shared libraries by the bounded upward search.
-_ENTRY_FILES = (
-    "lyricsmith.py",
-    "album/album.py",
-    "album/samples/build_sample_album.py",
-    "sweep/sweep.py",
-    "transcribe/transcribe.py",
-)
-#: Every shared library an entry file finds that way, the project's own tools aside.
-_HELPERS = ("stdio_utf8", "help_formatter", "run_lock", "library_walk")
-#: The library album's private modules find by a search of their own (lyrics_silence),
-#: bounded the same way; planted above the tree like the others.
-_ALBUM_OWN = "bounded_run"
-#: The entry files that load album's private modules, so fail without that library.
-_ALBUM_LOADERS = (
-    "album/album.py",
-    "album/samples/build_sample_album.py",
-    "sweep/sweep.py",
-)
+#: The locator's calls every file that runs it makes.
+_LOCATOR_CALLS = frozenset({"add_shared_libraries", "confirm_from"})
+#: Call sites the located cases leave out: this suite, which locates bounded_run for
+#: itself and runs every other call site.
+_NOT_LOCATED = frozenset({"test_lyricsmith.py"})
+#: Folders whose files the scan skips: the locator and its own suite, which call it on
+#: invented manifests, and the export's policy files.
+_UNSCANNED = frozenset({"lyricsmith_project", "export", "__pycache__"})
+#: The folders whose files are imported, never run: each must import alone.
+_IMPORTED_FOLDERS = frozenset({"src", "tests"})
+
+
+def _calls_the_locator(file: Path) -> bool:
+    """Whether *file* calls the locator anywhere in it."""
+    tree = ast.parse(file.read_text(encoding="utf-8"), str(file))
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in _LOCATOR_CALLS
+        for node in ast.walk(tree)
+    )
+
+
+def _locator_call_sites() -> list[tuple[str, str]]:
+    """Each file that runs the locator, as ("entry" | "module", its path), sorted.
+
+    Found by reading every file, so a new call site is covered without being listed.
+    """
+    sites = []
+    for file in sorted(_HERE.rglob("*.py")):
+        relative = file.relative_to(_HERE)
+        if _UNSCANNED & set(relative.parts) or relative.as_posix() in _NOT_LOCATED:
+            continue
+        if _calls_the_locator(file):
+            imported = _IMPORTED_FOLDERS & set(relative.parts[:-1])
+            sites.append(("module" if imported else "entry", relative.as_posix()))
+    return sites
+
+
+#: Every file the located cases run or import.
+_SITES = _locator_call_sites()
+
+
+#: Where the copy's manifest names each library: a folder no upward search looks in
+#: first, below the copy's root, where a decoy of each library sits instead.
+_VENDORED = "vendored"
 #: A planted library's whole body: importing it announces itself and stops the run.
 _PLANTED = "raise SystemExit('PLANTED ' + __file__)\n"
+#: What prefixes each line the child below prints for a shared library it loaded.
+_LOADED = "LOADED"
+#: The child each case runs, isolated: it runs an entry file with --help as its own
+#: script would run (after the dispatcher's command, for a kind of "entry:<command>"),
+#: or imports a private module alone with its src/ folder on the path, then prints the
+#: file each shared library it loaded came from. Any decoy folders go just after the
+#: script's own, in order, where PYTHONPATH would put them.
+_LOCATED_CHILD = f"""
+import importlib, os, runpy, sys
+kind, target, decoys, names = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+kind, _, command = kind.partition(":")
+folder, file_name = os.path.split(target)
+sys.path[:0] = [folder, *(decoys.split(os.pathsep) if decoys else [])]
+if kind == "entry":
+    sys.argv = [target, *command.split(), "--help"]
+    try:
+        runpy.run_path(target, run_name="__main__")
+    except SystemExit as stop:
+        if stop.code:
+            raise
+else:
+    importlib.import_module(os.path.splitext(file_name)[0])
+for name in names:
+    if name in sys.modules:
+        print("{_LOADED}", name, sys.modules[name].__file__)
+"""
 
 
-class BoundedSearchTest(unittest.TestCase):
-    """Each tool finds its libraries at one fixed place, directly under the project root.
+class LocatedLibrariesTest(unittest.TestCase):
+    """Each entry file takes its libraries from the folders the project's manifest names.
 
-    A tree missing its copy of a library must fail by that library's name, and never
-    import a same-named folder from anywhere else: planted above it (in a shared temporary
-    folder, or the home folder), or elsewhere in a repository that encloses it.
+    The copy's manifest names each library in a folder below the copy's root, so a
+    search up the ancestors would meet a decoy first: one at the copy's root, and one in
+    each folder above the copy (a shared temporary folder, or the home folder). A copy
+    lacking any one library fails naming it; a copy holding all of them loads each from
+    its named folder and never a decoy.
     """
 
     def setUp(self) -> None:
         scratch = tempfile.TemporaryDirectory()
         self.addCleanup(scratch.cleanup)
         self.top = Path(scratch.name).resolve()
-        if any((folder / ".git").exists() for folder in self.top.parents):
-            self.skipTest("the temporary folder sits inside a repository")
         self.home = self.top / "home"
         self.home.mkdir()
-        for name in (*_HELPERS, _ALBUM_OWN):
-            (self.top / name).mkdir()
-            (self.top / name / f"{name}.py").write_text(
-                _PLANTED, encoding="utf-8", newline="\n"
-            )
-
-    def copy_project(self, parent: Path) -> Path:
-        """This project's files, its shared libraries left out, copied into *parent*."""
-        copy = parent / "lyricsmith"
+        self.real = lyricsmith_project.shared_library_folders()
+        self.names = [folder.name for folder in self.real]
+        self.project = self.top / "unpacked" / "lyricsmith"
+        # The copy leaves out any library folder this tree carries beside the tools.
         shutil.copytree(
             _HERE,
-            copy,
-            ignore=shutil.ignore_patterns("__pycache__", ".*", *_HELPERS, _ALBUM_OWN),
+            self.project,
+            ignore=shutil.ignore_patterns("__pycache__", ".*", *self.names),
         )
-        return copy
-
-    def vendor(self, folder: Path, names: Sequence[str]) -> None:
-        """The real shared libraries *names*, copied into *folder* as this tree ships them."""
-        for name in names:
+        for name in self.names:
+            self.plant_decoys(name)
+        self.vendored = self.project / _VENDORED
+        for folder in self.real:
             shutil.copytree(
-                _HERE / name,
-                folder / name,
+                folder,
+                self.vendored / folder.name,
                 ignore=shutil.ignore_patterns("__pycache__"),
             )
+        listed = ", ".join(f'"{_VENDORED}/{name}"' for name in self.names)
+        (self.project / "pyproject.toml").write_text(
+            f"[tool.lyricsmith]\nshared_libraries = [{listed}]\n",
+            encoding="utf-8",
+            newline="\n",
+        )
 
-    def help_of(self, project: Path) -> dict[str, subprocess.CompletedProcess[str]]:
-        """Each entry file's --help, run isolated with HOME in the scratch folder."""
+    def plant_decoys(self, name: str) -> None:
+        """A decoy *name* library at the copy's root and in each folder above it."""
+        for parent in (self.project, self.project.parent, self.top):
+            decoy = parent / name
+            decoy.mkdir()
+            (decoy / f"{name}.py").write_text(_PLANTED, encoding="utf-8", newline="\n")
+
+    def plant_shadows(self, names: Sequence[str]) -> Path:
+        """A folder of planted modules, one per name in *names*; the folder."""
+        shadows = self.top / "shadows"
+        shadows.mkdir(exist_ok=True)
+        for name in names:
+            planted = shadows / f"{name}.py"
+            planted.write_text(_PLANTED, encoding="utf-8", newline="\n")
+        return shadows
+
+    def located(
+        self, *decoys: Path, only: Sequence[tuple[str, str]] = ()
+    ) -> dict[str, subprocess.CompletedProcess[str]]:
+        """Each entry file's --help, and each private module imported alone, isolated.
+
+        Run with HOME and the working folder in the scratch folder, *decoys* just after
+        the script's folder, over the (kind, target) runs in *only* when not empty.
+        """
         env = {**os.environ, "HOME": str(self.home), "PYTHONDONTWRITEBYTECODE": "1"}
         return {
-            entry: bounded_run.run_bounded(
-                [sys.executable, "-I", str(project / entry), "--help"],
+            f"{kind} {target}": bounded_run.run_bounded(
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    _LOCATED_CHILD,
+                    kind,
+                    str(self.project / target),
+                    os.pathsep.join(map(str, decoys)),
+                    *self.names,
+                ],
                 timeout=_HELP_TIMEOUT_S,
                 env=env,
+                cwd=self.home,
             )
-            for entry in _ENTRY_FILES
+            for kind, target in only or _SITES
         }
 
-    def assert_refused_by_name(self, project: Path) -> None:
-        """Every entry file fails naming a missing library, and nothing planted ran."""
-        for entry, done in self.help_of(project).items():
-            with self.subTest(entry=entry):
-                self.assertNotIn("PLANTED", done.stderr)
-                self.assertNotEqual(done.returncode, 0)
-                self.assertRegex(
-                    done.stderr,
-                    r"No module named '(" + "|".join((*_HELPERS, _ALBUM_OWN)) + ")'",
-                )
+    def assert_refused(
+        self, done: subprocess.CompletedProcess[str], *names: str
+    ) -> None:
+        """*done* failed naming the error and *names*, and never ran a planted module.
 
-    def assert_runs(self, project: Path) -> None:
-        """Every entry file's --help succeeds, and nothing planted ran."""
-        for entry, done in self.help_of(project).items():
-            with self.subTest(entry=entry):
-                self.assertNotIn("PLANTED", done.stderr)
+        An entry file exits 2; a private module raises the error, as an import does.
+        """
+        self.assertNotIn("PLANTED", done.stdout + done.stderr)
+        if done.args[4].startswith("entry"):
+            self.assertEqual(done.returncode, 2, done.stderr)
+            self.assertNotIn("Traceback", done.stderr)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("SharedLibraryError", done.stderr)
+        for name in names:
+            self.assertIn(name, done.stderr)
+
+    def test_the_call_sites_are_found_by_reading_the_files(self) -> None:
+        self.assertIn(("entry", "lyricsmith.py"), _SITES)
+        self.assertIn(("module", "transcribe/tests/__init__.py"), _SITES)
+
+    def test_each_named_folder_that_is_missing_fails_by_name(self) -> None:
+        for name in self.names:
+            away = self.vendored / f"{name}.away"
+            (self.vendored / name).rename(away)
+            try:
+                runs = self.located()
+            finally:
+                away.rename(self.vendored / name)
+            for target, done in runs.items():
+                with self.subTest(missing=name, target=target):
+                    self.assert_refused(
+                        done, f"'{_VENDORED}/{name}'", lyricsmith_project.CONFIG_KEY
+                    )
+
+    def test_a_same_named_library_earlier_on_the_path_is_refused(self) -> None:
+        shadows = self.plant_shadows([*self.names, "lyricsmith_project", "album"])
+        for target, done in self.located(shadows).items():
+            with self.subTest(target=target):
+                self.assert_refused(done, str(shadows), self.names[0])
+
+    def test_a_reader_earlier_on_the_path_is_never_imported(self) -> None:
+        shadows = self.plant_shadows(["lyricsmith_project"])
+        # The real reader is on the path too, behind the decoy: it must still win.
+        reader = self.project / "lyricsmith_project"
+        for target, done in self.located(shadows, reader).items():
+            with self.subTest(target=target):
+                self.assertNotIn("PLANTED", done.stdout + done.stderr)
                 self.assertEqual(done.returncode, 0, done.stderr)
 
-    def test_album_modules_own_library_is_fixed_too(self) -> None:
-        project = self.copy_project(self.top / "unpacked")
-        self.vendor(project, _HELPERS)
-        for entry, done in self.help_of(project).items():
-            with self.subTest(entry=entry):
+    def test_a_sibling_tool_earlier_on_the_path_is_refused(self) -> None:
+        shadows = self.plant_shadows(["album"])
+        # Each tool that checks a sibling, run alone and through the dispatcher.
+        alone = [("entry", f"{name}/{name}.py") for name in ("sweep", "sync")]
+        via = [(f"entry:{name}", "lyricsmith.py") for name in ("sweep", "sync")]
+        runs = self.located(shadows, only=alone + via)
+        self.assertEqual(len(runs), 4)
+        for target, done in runs.items():
+            with self.subTest(target=target):
+                self.assert_refused(done, "'album'", str(shadows / "album.py"))
+
+    def test_each_library_loads_from_its_named_folder(self) -> None:
+        loaded: set[str] = set()
+        for target, done in self.located().items():
+            with self.subTest(target=target):
                 self.assertNotIn("PLANTED", done.stderr)
-                if entry in _ALBUM_LOADERS:
-                    self.assertNotEqual(done.returncode, 0)
-                    self.assertIn(f"No module named '{_ALBUM_OWN}'", done.stderr)
-                else:
-                    self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                found = _loaded_from(done.stdout)
+                # Every entry file imports stdio_utf8 or bounded_run, so none passes
+                # empty; a private module that only locates them may import none.
+                if done.args[4] == "entry":
+                    self.assertTrue(found.keys() & {"stdio_utf8", "bounded_run"})
+                for name, file in found.items():
+                    self.assertEqual(file.parent, self.vendored / name)
+                # bounded_run puts its sibling stdio_utf8 first on sys.path: that is
+                # the located one only while the two share a parent folder.
+                if "bounded_run" in found:
+                    self.assertEqual(
+                        found["stdio_utf8"].parent, self.vendored / "stdio_utf8"
+                    )
+                loaded |= found.keys()
+        # live_pid_guard is imported only by bounded_run's own tests.
+        self.assertEqual(loaded, set(self.names) - {"live_pid_guard"})
 
-    def test_a_copy_elsewhere_in_an_enclosing_repository_is_never_used(self) -> None:
-        repo = self.top / "repo"
-        repo.mkdir()
-        (repo / ".git").write_text(
-            "gitdir: <placeholder>\n", encoding="utf-8", newline="\n"
+
+#: The sibling tool folders an entry file puts on sys.path for itself.
+_SIBLING_TOOLS = ("album", "transcribe", "sweep", "sync")
+#: A child that starts with every tool folder on sys.path, imports the tools that add
+#: their siblings, then prints how often each tool folder is on it.
+_SIBLINGS_CHILD = """
+import sys
+folders = sys.argv[1:]
+sys.path[:0] = folders
+import sweep, sync
+print(" ".join(str(sys.path.count(folder)) for folder in folders))
+"""
+
+
+class SiblingFoldersTest(unittest.TestCase):
+    """A tool that adds its sibling tools' folders adds none already on sys.path."""
+
+    def test_a_sibling_folder_already_on_the_path_is_not_added_again(self) -> None:
+        folders = [str(_HERE / name) for name in _SIBLING_TOOLS]
+        done = bounded_run.run_bounded(
+            [sys.executable, "-I", "-c", _SIBLINGS_CHILD, *folders],
+            timeout=_HELP_TIMEOUT_S,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         )
-        project = self.copy_project(repo / "projects")
-        self.vendor(repo / "utilities", [*_HELPERS, _ALBUM_OWN])
-        self.assert_refused_by_name(project)
-        self.vendor(project, [*_HELPERS, _ALBUM_OWN])
-        self.assert_runs(project)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.split(), ["1"] * len(folders))
 
-    def test_a_missing_library_fails_by_name(self) -> None:
-        project = self.copy_project(self.top / "unpacked")
-        self.vendor(project, [_ALBUM_OWN])
-        self.assert_refused_by_name(project)
-        self.vendor(project, _HELPERS)
-        self.assert_runs(project)
+
+def _loaded_from(stdout: str) -> dict[str, Path]:
+    """Each shared library the located child reported loading, and its file."""
+    return {
+        name: Path(file)
+        for _, name, file in (
+            line.split(" ", 2)
+            for line in stdout.splitlines()
+            if line.startswith(_LOADED + " ")
+        )
+    }
 
 
 def _words(text: str) -> str:

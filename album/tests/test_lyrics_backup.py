@@ -10,6 +10,7 @@ invented.
 from __future__ import annotations
 
 import datetime as dt
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -337,6 +338,50 @@ class BackupFailureTest(BackupCase):
         assert manifest.tracks[0].after is not None
         assert manifest.tracks[0].after.error is not None
         self.assertEqual(manifest.tracks[0].after.error.exc_type, "ReadBackError")
+
+
+@unittest.skipIf(not getattr(os, "O_NOFOLLOW", 0), "no O_NOFOLLOW to refuse a link")
+class LinkedProofTest(BackupCase):
+    """A proof read finding a link under a name it just wrote refuses it, unread."""
+
+    def back_up_linking(self, frame: lm.FrameRecord, suffix: str) -> lr.Manifest:
+        """Back *frame* up, each written file ending *suffix* swapped for a link.
+
+        The link leads outside the run folder, to the very bytes the write left, so
+        a proof that read through it would pass.
+        """
+        real = lyrics_files.write_confirmed
+
+        def writing_then_linking(target: Path, data: bytes) -> None:
+            real(target, data)
+            if target.name.endswith(suffix):
+                outside = self.tmp / f"outside-{target.name}"
+                target.rename(outside)
+                try:
+                    target.symlink_to(outside)
+                except (OSError, NotImplementedError) as error:
+                    self.skipTest(f"symlinks unavailable: {error}")
+
+        with mock.patch.object(lyrics_files, "write_confirmed", writing_then_linking):
+            return self.back_up(self.track(frames=(frame,)))
+
+    def assert_refused(self, manifest: lr.Manifest) -> None:
+        """The one track's backup failed, at the backup stage."""
+        (track,) = manifest.tracks
+        self.assertIsNone(track.before)
+        assert track.after is not None and track.after.error is not None
+        self.assertIs(track.after.error.stage, lr.ErrorStage.BACKUP)
+
+    def test_a_frame_export_swapped_for_a_link_is_refused(self) -> None:
+        self.assert_refused(self.back_up_linking(tb.uslt(_LYRIC), ".txt"))
+
+    def test_an_exact_copy_swapped_for_a_link_is_refused(self) -> None:
+        lossy = tb.sylt((40, "counted"), time_format=tb.MPEG_FRAMES)
+        self.assert_refused(self.back_up_linking(lossy, _EXACT))
+
+
+#: The ending of a frame's exact JSON copy.
+_EXACT = ".frames.json"
 
 
 class LoadBeforeFramesTest(BackupCase):

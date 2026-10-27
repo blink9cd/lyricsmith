@@ -4,10 +4,11 @@ The dispatcher turns no input into output of its own: each command is its tool, 
 tool's samples are the hand run. Each runs the tool's entry file directly, and the same
 steps run through the dispatcher by putting `python lyricsmith.py COMMAND` in place of the
 entry file, from this project's root folder. The printed program name then reads
-`lyricsmith album` (or `lyricsmith sweep`, `lyricsmith transcribe`, `lyricsmith sync`) where the samples
-show the entry file's name; nothing else in the output changes. The paths a sample
-names relative to its tool's folder gain that folder from the root: `transcribe`'s
-`diff` reads `transcribe/samples/jfk.lrc` and `transcribe/samples/jfk.txt` there.
+`lyricsmith album` (or `lyricsmith sweep`, `lyricsmith transcribe`, `lyricsmith sync`)
+where the samples show the entry file's name; nothing else in the output changes. The
+paths a sample names relative to its tool's folder gain that folder from the root:
+`transcribe`'s `diff` reads `transcribe/samples/jfk.lrc` and `transcribe/samples/jfk.txt`
+there.
 
 | Command | Its samples |
 | --- | --- |

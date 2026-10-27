@@ -54,6 +54,8 @@ TRACKS = (
 #: The stage's write_manifest call that records the first track. The fake backup
 #: writes its own manifest without going through the stage.
 FIRST_TRACK_RECORD = 1
+#: How undo and check open their refusal of a run whose manifest cannot be read.
+_UNREADABLE = f"run {run_fakes.RUN_ID!r}: its manifest could not be read"
 
 
 class StopCase(cli_fakes.CliCase):
@@ -149,7 +151,8 @@ class AlbumLevelOSErrorTest(StopCase):
 
         self.overrides["read_manifest"] = read_manifest
         result = self.run_album("--mode", "check")
-        self.assert_one_line_error(result, "manifest unreadable")
+        self.assert_one_line_error(result, _UNREADABLE)
+        self.assertIn("(manifest unreadable)", result.stderr)
 
     def test_a_manifest_unreadable_in_undo_exits_2(self) -> None:
         (self.album / lr.RUN_FOLDER_NAME / run_fakes.RUN_ID).mkdir(parents=True)
@@ -160,7 +163,8 @@ class AlbumLevelOSErrorTest(StopCase):
 
         self.overrides["read_manifest"] = read_manifest
         result = self.run_album("--mode", "undo")
-        self.assert_one_line_error(result, "manifest unreadable")
+        self.assert_one_line_error(result, _UNREADABLE)
+        self.assertIn("(manifest unreadable)", result.stderr)
         self.assertFalse(run_fakes.lock_held(self.album))
 
     def test_a_run_folder_gone_before_the_lock_is_no_run_to_undo(self) -> None:
@@ -193,12 +197,13 @@ class AlbumLevelOSErrorTest(StopCase):
         result = self.run_album("--mode", "check")
         self.assert_one_line_error(result, f"no run {run_fakes.RUN_ID!r} under")
 
-    def test_a_manifest_missing_from_a_run_folder_is_the_os_error(self) -> None:
+    def test_a_manifest_missing_from_a_run_folder_is_an_unreadable_run(self) -> None:
         # The run is still there, so this is a damaged run, not a missing one.
         (self.album / lr.RUN_FOLDER_NAME / run_fakes.RUN_ID).mkdir(parents=True)
         self.overrides["read_manifest"] = lyrics_manifest.read_manifest
         result = self.run_album("--mode", "undo")
-        self.assert_one_line_error(result, "[Errno 2]")
+        self.assert_one_line_error(result, _UNREADABLE)
+        self.assertIn("[Errno 2]", result.stderr)
         self.assertIn(lr.MANIFEST_NAME, result.stderr)
 
 

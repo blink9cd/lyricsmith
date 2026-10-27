@@ -41,6 +41,9 @@ class TokenizeTest(sy_cases.IsolatedCase):
     def test_digits_and_punctuation_are_dropped(self) -> None:
         self.assertEqual(list(tx.tokenize(["4 me!"]).ids), _ids("ME"))
 
+    def test_an_accented_letter_keeps_its_base_letter(self) -> None:
+        self.assertEqual(tx.tokenize(["Café naïve"]), tx.tokenize(["Cafe naive"]))
+
     def test_a_section_header_has_nothing_to_align(self) -> None:
         tokens = tx.tokenize(["[Chorus]", "la"])
         self.assertNotIn(0, tokens.line_of)

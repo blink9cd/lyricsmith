@@ -1,8 +1,8 @@
 """The sweep's reports as text: the survey, the final table, the undo and resume commands.
 
 Albums are named relative to the library; a command a person may paste names the album
-or the library by its full path, quoted for the shell. Every line passes through the
-album tool's `printable`, and every table cell before its column is measured, as the
+or the library by its full path, quoted for the shell. Every line passes through
+`stdio_utf8.spell_unsafe`, and every table cell before its column is measured, as the
 album tool's own reports do: a folder name is text the sweep did not write, and one
 holding a control character prints as visible escapes, its row still lined up. A
 pasted command then holds those escapes as text, the trade-off the album tool's own
@@ -12,15 +12,19 @@ backup footer makes. Nothing here prints.
 from __future__ import annotations
 
 import shlex
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
-from lyrics_outcomes import printable
+import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
+from lyrics_model import Source
+from stdio_utf8 import spell_unsafe
 
 from sweep_child import IMPLAUSIBLE_OPTION, REFETCH_OPTION
-from sweep_ledger import LedgerEntry
+from sweep_ledger import LedgerEntry, Outcome
 from sweep_run import StopReason, SweepOptions, SweepReport
 from sweep_survey import AlbumSurvey, VisitPlan
+from sweep_totals import total_lines
+from sweep_waiting import PassedOver, waiting_lines
 
 #: Said after every survey, so the uploads a first sweep can cause are expected.
 RESAVE_NOTE = (
@@ -42,6 +46,7 @@ _SWEEP_HEADER = (
     "written",
     "unchanged",
     "not found",
+    "removed",
     "no lyrics expected",
     "silent",
     "kept",
@@ -63,7 +68,7 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
 
     Each cell is made printable first, so its column is measured as it prints.
     """
-    rows = [tuple(map(printable, row)) for row in rows]
+    rows = [tuple(map(spell_unsafe, row)) for row in rows]
     widths = [max(len(row[i]) for row in (header, *rows)) for i in range(len(header))]
     return [
         _GAP.join(
@@ -75,8 +80,8 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
 
 
 def _text(lines: Iterable[str]) -> str:
-    """*lines* as printed text, each one through `printable`."""
-    return "".join(f"{printable(line)}\n" for line in lines)
+    """*lines* as printed text, each one through `spell_unsafe`."""
+    return "".join(f"{spell_unsafe(line)}\n" for line in lines)
 
 
 def _name(album: Path, library: Path) -> str:
@@ -111,6 +116,17 @@ def _plan_lines(plan: VisitPlan, library: Path, *, refetches: list[str]) -> list
     return lines
 
 
+def _owes(name: str, debt: Sequence[Source]) -> str:
+    """Album *name* and the providers it owes, as the survey and the run name them."""
+    return f"{name}  owes: {', '.join(map(str, debt))}"
+
+
+def _earlier_lines(earlier: Mapping[str, Sequence[Source]]) -> list[str]:
+    """The albums ``--owe-earlier-runs`` adds to the visits, each with its debt."""
+    lines = [f"owed by earlier runs, visited again: {len(earlier)}"]
+    return lines + [f"  {_owes(name, debt)}" for name, debt in earlier.items()]
+
+
 def format_survey(
     surveys: Sequence[AlbumSurvey],
     library: Path,
@@ -118,6 +134,8 @@ def format_survey(
     *,
     refetch_untimed: bool = False,
     refetch_implausible: bool = False,
+    earlier: Mapping[str, Sequence[Source]] | None = None,
+    waiting: Sequence[PassedOver] = (),
 ) -> str:
     """The survey: a row per album, the totals, the tracks named, the albums to visit.
 
@@ -127,7 +145,10 @@ def format_survey(
     The table describes every album's tracks; *plan* says which albums a run visits
     and which it passes over as done. *refetch_untimed* says the plan is the refetch
     pass's, so the restart hint names that pass's option; *refetch_implausible*, which
-    keeps the pass, is named there too.
+    keeps the pass, is named there too. *earlier*, under ``--owe-earlier-runs``, is
+    each album that option adds to the visits, with its debt; None without it.
+    *waiting* is each owed album a run would pass over, its whole debt held, which
+    *plan* already leaves out of its visits (`sweep_waiting.split_waiting`).
     """
     albums = [s for s in surveys if s.has_mp3]
     total = AlbumSurvey(
@@ -158,6 +179,9 @@ def format_survey(
         refetch_untimed=refetch_untimed, refetch_implausible=refetch_implausible
     )
     lines += _plan_lines(plan, library, refetches=refetches)
+    lines += waiting_lines(waiting)
+    if earlier is not None:
+        lines += _earlier_lines(earlier)
     lines += RESAVE_NOTE.splitlines()
     return _text(lines)
 
@@ -173,6 +197,7 @@ def _sweep_row(entry: LedgerEntry) -> tuple[str, ...]:
         counts.written,
         counts.unchanged,
         counts.not_found,
+        counts.removed,
         counts.no_lyrics_expected,
         counts.silent,
         counts.kept,
@@ -239,10 +264,25 @@ def format_sweep(
     options: SweepOptions,
     undo_prog: Sequence[str],
 ) -> str:
-    """The final report: the albums visited, each one's undo, and why it stopped."""
+    """The final report: the albums visited, their totals, each one's undo, the stop.
+
+    The totals (`sweep_totals`) follow the table; then each owed album, with what it
+    owes, then each owed album passed over, with what it waits on, then each album's
+    undo command.
+    """
     lines = [f"already done: {report.skipped_done}"]
-    if report.visited:
-        lines += _table(_SWEEP_HEADER, [_sweep_row(v.entry) for v in report.visited])
+    if not report.visited:
+        lines += waiting_lines(report.passed_over)
+    else:
+        entries = [v.entry for v in report.visited]
+        lines += _table(_SWEEP_HEADER, [_sweep_row(entry) for entry in entries])
+        lines += total_lines(entries)
+        lines += [
+            _owes(entry.album, entry.owed_providers)
+            for entry in entries
+            if entry.outcome is Outcome.OWED
+        ]
+        lines += waiting_lines(report.passed_over)
         lines += [
             f"{v.entry.album}  undo: {undo_command(undo_prog, v.album, v.entry.run_id)}"
             for v in report.visited
@@ -275,7 +315,8 @@ def resume_command(
 ) -> str:
     """The command that resumes this sweep, named by *prog*'s words: never ``--restart``.
 
-    It carries *changed_list* when there is one, so the next leg adds to the same list.
+    It carries *changed_list* when there is one, so the next leg adds to the same list,
+    and ``--owe-earlier-runs`` when given, so it still owes what it has not revisited.
     """
     parts = [*prog, "--mode", "run", "--library", str(library)]
     if options.lang is not None:
@@ -286,6 +327,8 @@ def resume_command(
         refetch_untimed=options.refetch_untimed,
         refetch_implausible=options.refetch_implausible,
     )
+    if options.owe_earlier_runs:
+        parts.append("--owe-earlier-runs")
     parts += options.skip
     parts += ["--pause-seconds", str(options.pause_s)]
     parts += ["--stop-after", str(options.stop_after)]

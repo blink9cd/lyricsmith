@@ -89,9 +89,6 @@ _WRITE_ENCODING = "utf-8"
 #: The most bytes a sidecar under the cap can hold: UTF-8 takes at most four bytes a
 #: character, and a byte-order mark three more. A larger file is refused unread.
 _MAX_SIDECAR_BYTES = 4 * MAX_LYRICS_CHARS + len(codecs.BOM_UTF8)
-#: Opens a file without following a link at its last step. Windows has no such flag;
-#: there a file opens as it always did.
-_NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
 class SidecarTooLargeError(LyricsError):
@@ -135,17 +132,13 @@ def read_bounded(source: Path, name: str) -> bytes:
 
     Reads one byte more than text under the cap can take, so an oversized file is
     known by that byte alone and never read whole: `SidecarTooLargeError`, naming
-    *name*. *source* is opened without following a link at its last step, so a file
-    swapped for a link since it was looked at is an error, never read through. It is
-    opened in binary mode, so the bytes are the file's own on every platform.
+    *name*. Read through `lyrics_files.read_regular` without following a link at the
+    last step, so a file swapped since it was looked at, for a link or for a FIFO pipe,
+    is an error at once, never read through or waited on. Binary mode, so the bytes
+    are the file's own on every platform: the backup's copy and the rename's hash are
+    made from them.
     """
-    # O_BINARY exists only on Windows, where a descriptor opened without it is in text
-    # mode: a read there turns each CRLF into LF and stops at Ctrl-Z, and the backup's
-    # copy and the rename's hash are made from these bytes.
-    flags = os.O_RDONLY | _NO_FOLLOW | getattr(os, "O_BINARY", 0)
-    descriptor = os.open(source, flags)
-    with os.fdopen(descriptor, "rb") as handle:
-        data = handle.read(_MAX_SIDECAR_BYTES + 1)
+    data = lyrics_files.read_regular(source, _MAX_SIDECAR_BYTES + 1, follow=False)
     if len(data) > _MAX_SIDECAR_BYTES:
         raise SidecarTooLargeError(
             f"{name} is too large: over {_MAX_SIDECAR_BYTES} bytes"
@@ -448,7 +441,7 @@ def _holds(target: Path, data: bytes) -> bool:
     """
     if sidecar_entry(target) is not Slot.FILE or target.stat().st_size != len(data):
         return False
-    return target.read_bytes() == data
+    return lyrics_files.read_regular(target, follow=False) == data
 
 
 def write_sidecar(mp3: Path, lyrics: Lyrics) -> SidecarWrite | None:

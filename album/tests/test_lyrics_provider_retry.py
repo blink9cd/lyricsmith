@@ -8,6 +8,7 @@ lyric is invented.
 
 from __future__ import annotations
 
+import itertools
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -24,6 +25,7 @@ import http_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_fetch as lf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_http as lh  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_providers as lp  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_table as ltable  # noqa: E402 - import follows the sys.path bootstrap above
 
 S = lm.LyricsKind.SYNCED
@@ -106,6 +108,27 @@ class LrclibRetryTest(ProviderRetryCase):
         self.assertEqual(self.ask(lm.Source.LRCLIB, server), SYNCED_TEXT)
         self.assertEqual(server.paths(), ["/api/get", "/api/get"])
 
+    def test_a_search_answering_any_server_error_is_retried(self) -> None:
+        for status in (500, 501, 505):
+            with self.subTest(status=status):
+                self.clock.sleeps.clear()
+                server = QueuedServer(
+                    {"/api/get": [404], "/api/search": [status, [RECORD]]}
+                )
+                self.assertEqual(self.ask(lm.Source.LRCLIB, server), SYNCED_TEXT)
+                self.assertEqual(server.count("/api/search"), 2)
+                self.assertEqual(self.clock.sleeps, [lh.RETRY_WAITS_S[0]])
+
+    def test_a_search_answering_another_client_error_is_not_retried(self) -> None:
+        for status in (400, 404, 410, 422):
+            with self.subTest(status=status):
+                server = QueuedServer({"/api/get": [404], "/api/search": [status]})
+                with self.assertRaises(lp.HttpStatusError) as raised:
+                    self.ask(lm.Source.LRCLIB, server)
+                self.assertEqual(raised.exception.status, status)
+                self.assertEqual(server.count("/api/search"), 1)
+                self.assertEqual(self.clock.sleeps, [])
+
     def test_a_lookup_server_error_still_falls_to_the_search_unretried(self) -> None:
         server = QueuedServer({"/api/get": [503], "/api/search": [[RECORD]]})
         self.assertEqual(self.ask(lm.Source.LRCLIB, server), SYNCED_TEXT)
@@ -116,16 +139,16 @@ class LrclibRetryTest(ProviderRetryCase):
 class NeteaseRetryTest(ProviderRetryCase):
     """NetEase's search and its lyric request each get another try."""
 
-    def test_each_request_answering_503_is_retried(self) -> None:
+    def test_each_request_answering_a_server_error_is_retried(self) -> None:
         paths = {"search": "/api/search/get", "lyric": "/api/song/lyric"}
-        for name, failing in paths.items():
-            with self.subTest(request=name):
+        for (name, failing), status in itertools.product(paths.items(), (503, 500)):
+            with self.subTest(request=name, status=status):
                 self.clock.sleeps.clear()
                 answers: dict[str, list[object]] = {
                     paths["search"]: [NETEASE_SEARCH],
                     paths["lyric"]: [NETEASE_LYRIC],
                 }
-                answers[failing].insert(0, 503)
+                answers[failing].insert(0, status)
                 server = QueuedServer(answers)
                 self.assertEqual(self.ask(lm.Source.NETEASE, server), SYNCED_TEXT)
                 self.assertEqual(server.count(failing), 2)

@@ -64,6 +64,7 @@ from lyrics_bandcamp_page import (
     parse_album_page,
     parse_music_page,
 )
+from lyrics_breakers import BreakerGuard
 from lyrics_http import TextReply, cookie_free_session, get_text
 from lyrics_match import (
     Hit,
@@ -220,6 +221,16 @@ def _from_site(
     return _first_with_lyrics(session, music.url, entries, ask)
 
 
+def _slot(query: TrackQuery) -> tuple[str, str, str]:
+    """The key *query*'s album is kept under.
+
+    The whole title tells an edition tag from the bare one; the matcher's key still
+    tells apart tags with no letter or digit, whose whole titles are empty.
+    """
+    album, artist = (query.album or "").strip(), query.artist.strip()
+    return (title_key(album), _whole_title(album), artist_key(artist))
+
+
 @dataclass
 class BandcampProvider:
     """The Bandcamp step: each album looked up once, under a lock, its tracks kept."""
@@ -227,6 +238,11 @@ class BandcampProvider:
     musicbrainz: MusicBrainzClient
     clock: Callable[[], float] = time.monotonic
     page_session: Callable[[], requests.Session] = cookie_free_session
+    #: The run's breaker for this provider, shared by its steps; the fetch layer asks
+    #: it before each call (`lyrics_breakers`). None leaves the steps unguarded.
+    breaker: BreakerGuard | None = field(
+        default=None, kw_only=True, compare=False, repr=False
+    )
     _albums: dict[tuple[str, str, str], AlbumOutcome] = field(
         default_factory=dict, init=False
     )
@@ -260,13 +276,31 @@ class BandcampProvider:
             ask = _SiteAsk(album, query, self.clock, give_up_at)
             return _from_site(session, found.url, ask)
 
+    def kept(self, query: TrackQuery) -> bool:
+        """Whether a call for *query* would read an outcome an earlier lookup kept.
+
+        Read under the lock, never waiting for it: a lookup under way holds it, and
+        until it ends nothing is kept for its album. The fetch layer reads this so a
+        kept answer or failure, which sends nothing, tells the breaker nothing
+        (`lyrics_provider_kinds.KeepsAnswers`).
+        """
+        # An accepted race: a `kept` finding the lock held reads the call as fresh, so a
+        # call made while another lookup is under way tells the breaker its outcome even
+        # if that outcome turns out kept. A lookup that ended in an error can then count
+        # twice, and a kept answer read that way can close a half-open breaker. Waiting
+        # for the lock instead would stall the chain behind a lookup it may not need.
+        if not self.asks(query) or not self.lock.acquire(blocking=False):
+            return False
+        try:
+            return _slot(query) in self._albums
+        finally:
+            self.lock.release()
+
     def _outcome(self, query: TrackQuery, give_up_at: float) -> AlbumOutcome:
         """The album's kept outcome, looked up under the lock the first time it is asked."""
         with held_until(self.lock, self.clock, give_up_at, "Bandcamp"):
             album, artist = (query.album or "").strip(), query.artist.strip()
-            # The whole title tells an edition tag from the bare one; the matcher's key
-            # still tells apart tags with no letter or digit, whose whole titles are empty.
-            slot = (title_key(album), _whole_title(album), artist_key(artist))
+            slot = _slot(query)
             if slot not in self._albums:
                 try:
                     self._albums[slot] = self._look_up(query, album, artist, give_up_at)

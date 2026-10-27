@@ -95,7 +95,9 @@ mirror under `--output-dir`.
 
 A `.lrc` is **ours** when one of its header lines, the lines before its first timestamped
 line, is exactly `[by:machine transcript]` once surrounding whitespace is stripped. A `.lrc`
-that cannot be read counts as not ours. Only its first 64 KiB is read (`LRC_READ_CAP_BYTES` in
+that cannot be read counts as not ours, and so does one that is not a regular file: a FIFO,
+socket or device under the name is opened without waiting on it and never read, even one
+swapped in after the name was looked at. Only its first 64 KiB is read (`LRC_READ_CAP_BYTES` in
 `src/at_plan.py`), far more than any header block, so a huge or sparse planted sidecar costs no
 more; a by-line past that point is not judged ours. A `.txt` carries no label, so a `.txt` alone is never
 ours and never replaced; a second run over the same folder skips every file it finished. A
@@ -140,17 +142,20 @@ two lines and keeps the timed body as it was:
 `[re:]` names the program that made the file and `[by:]` its author, the common LRC
 convention, so players that know the tags show them and the rest ignore them. Every value is
 read at run time: the tool's version from `[project].version` in the project's
-`pyproject.toml`, one folder above this tool's own (`unknown` when it cannot be read), the
-engine's from `whisper-cli --version`, and the model's name from its file's stem. A value's control, direction and separator
-characters are spelled as escapes, as on the terminal, so a line break in a model's file name
-cannot split the header. The `.txt` is left as whisper.cpp wrote it.
+`pyproject.toml`, through the project's manifest reader (`unknown` when it cannot be read;
+`../lyricsmith_project/lyricsmith_project.md`), the engine's from `whisper-cli --version`,
+and the model's name from its file's stem. A value's control, direction and separator
+characters are spelled as escapes (`stdio_utf8.spell_unsafe`), as on the terminal, so a line
+break in a model's file name cannot split the header. The `.txt` is left as whisper.cpp
+wrote it.
 
 A file is ours by its `[by:machine transcript]` line, never by its `[re:]` line.
 
 `lyricsmith album` knows a transcript by the same `[by:machine transcript]` line, so a file
 carrying it is a machine transcript to it: it still asks its timed providers, a timed answer
 replaces the transcript, and with none the transcript is embedded and its `.lrc` kept byte
-for byte (`album.md`, *Machine transcripts*).
+for byte (`../album/album.md`, *How a track's lyrics are found*, on machine-made `.lrc`
+files).
 
 ## Beside the album tool
 
@@ -213,9 +218,11 @@ found under <path>` and exits `0`. `fetch-models` prints one row per model: `pre
 
 Setup errors go to stderr, prefixed with the program's name. Every line that quotes a path or
 an argument value has its control characters spelled as escapes (`\x1b`), and its direction
-marks, embeddings, overrides, isolates and line and paragraph separators too (`\u202e`), so a
-hostile file name can neither steer the terminal nor print as another name. That includes argparse's own messages, such as a stray
-argument's "unrecognized arguments" error, escaped line by line so the usage keeps its shape.
+marks, embeddings, overrides, isolates and line and paragraph separators too (`\u202e`), by
+the shared `stdio_utf8.spell_unsafe` the album tool uses, so a hostile file name can neither
+steer the terminal nor print as another name. That includes argparse's own messages, such as
+a stray argument's "unrecognized arguments" error, escaped line by line so the usage keeps
+its shape.
 The usage, help and errors are printed without argparse's color (Python 3.14 and later), whose
 codes would otherwise show up as escaped text.
 
@@ -230,6 +237,10 @@ long recording. A call past the bound is that file's failure, and the run goes o
 | `0` | every file transcribed, skipped (a linked one among them) or refused; under `fetch-models`, every model present or downloaded |
 | `1` | any file failed (an output pair another file already claims, or a name that is not a regular file, among them), or a folder under `--path` could not be read; under `fetch-models`, any model failed |
 | `2` | a setup error found before any file is touched: no working `whisper-cli` (missing, unreadable, not executable, or printing no version), a missing or unreadable model, a `--path` that does not exist, cannot be read, is not a folder or a regular file, or names a `.lrc` or `.txt`, or an unusable option value (`--extensions lrc` or `txt` among them) |
+
+A shared library or a sibling tool's module that cannot be located, or that a same-named
+module would shadow, also exits `2`, before anything runs: see *Exit codes* in
+`../README.md`.
 
 One file's failure is that file's row and never stops the run; so is an unreadable folder's.
 

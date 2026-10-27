@@ -22,15 +22,14 @@ stands only on these hard rules:
 
 The stop rule: HTTP 403, 429 or 503; one redirect too many; a challenge page; or
 `UNRECOGNIZED_STOP_RUN` search pages, or song pages, in a row that its reader does not
-recognize. Each turns
-Tekstowo off for the rest of the run and writes the 24-hour cool-down
-(`lyrics_cooldown`); every later call raises `TekstowoStopped` unsent. One unrecognized
+recognize. Each turns Tekstowo off for the rest of the run and writes the 24-hour
+cool-down (`lyrics_cooldown`); every later call raises `TekstowoStopped` unsent. One unrecognized
 page short of that run is weak evidence of a block, so it is that track's error alone
 (`TekstowoUnrecognized`), and a page of the same kind read as expected starts its count
-again. The kinds are counted apart because every track's search
-page comes before its song page: one shared count would be reset each track, and a
-change to the song pages alone would never stop it. A page its reader recognizes is read whatever its words, so lyrics
-quoting a marker stop nothing. Any other error status, a refused redirect or start URL,
+again. The kinds are counted apart because every track's search page comes before
+its song page: one shared count would be reset each track, and a change to the song
+pages alone would never stop it. A page its reader recognizes is read whatever its
+words, so lyrics quoting a marker stop nothing. Any other error status, a refused redirect or start URL,
 or a body that is not UTF-8, is that track's error alone and leaves the count as it was.
 
 The step (`TekstowoProvider`) is the chain's last, after Genius's: it searches, opens
@@ -45,17 +44,19 @@ of its table while one holds. Nothing here prints.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import ClassVar, TypeVar
 from urllib.parse import quote
 
 from lyrics_cooldown import Stop
-from lyrics_cooling_client import CoolingClient, Refusal, status_refusal
+from lyrics_cooling_client import CoolingClient, Refusal, StoppedError, status_refusal
 from lyrics_hosts import is_https_on
 from lyrics_http import TOO_MANY_REDIRECTS, get_text
 from lyrics_match import Hit, has_artist, match_score, rank_hits
 from lyrics_model import Source, TrackQuery
 from lyrics_providers import HttpStatusError, ProviderError
+from lyrics_refusal import ClassedError, RefusalFacts, classify
+from lyrics_refusal_words import TEKSTOWO_CHALLENGE
 from lyrics_tekstowo_page import (
     SearchEntry,
     SearchPage,
@@ -81,26 +82,25 @@ UNRECOGNIZED_STOP_RUN = 3
 CHALLENGE_MARKERS = ("cf-chl", "<title>just a moment")
 #: The stop words a challenge and an unrecognized page record.
 CHALLENGE, SEARCH_NOT_RECOGNIZED, SONG_NOT_RECOGNIZED = (
-    "challenge page",
+    TEKSTOWO_CHALLENGE,
     "search page not recognized",
     "song page not recognized",
 )
 
 
-class TekstowoStopped(ProviderError):
+class TekstowoStopped(StoppedError):
     """Tekstowo refused or challenged a request, or had already; its detail is *what*."""
 
-    def __init__(self, what: str) -> None:
-        """Carry *what* as both the message's tail and the recorded detail."""
-        super().__init__(f"Tekstowo stopped: {what}", detail=what)
+    SOURCE: ClassVar[str] = "Tekstowo"
 
 
-class TekstowoUnrecognized(ProviderError):
+class TekstowoUnrecognized(ClassedError):
     """A page Tekstowo's reader did not recognize, short of a stop; its detail is *what*."""
 
     def __init__(self, what: str) -> None:
         """Carry *what* as both the message's tail and the recorded detail."""
-        super().__init__(f"Tekstowo page: {what}", detail=what)
+        facts = RefusalFacts(Refusal.UNRECOGNIZED)
+        super().__init__(f"Tekstowo page: {what}", detail=what, facts=facts)
 
 
 # fuzz-target
@@ -156,7 +156,7 @@ class TekstowoClient(CoolingClient):
 
     NAME: ClassVar[str] = "Tekstowo"
     MIN_INTERVAL_S: ClassVar[float] = TEKSTOWO_MIN_INTERVAL_S
-    stopped_error: ClassVar[type[ProviderError]] = TekstowoStopped
+    stopped_error: ClassVar[type[StoppedError]] = TekstowoStopped
 
     #: Per kind of page (its unrecognized word), how many in a row were unrecognized.
     unrecognized_runs: dict[str, int] = field(default_factory=dict, init=False)
@@ -187,29 +187,32 @@ class TekstowoClient(CoolingClient):
                 reason = stop_reason(error)
                 if reason is None:
                     raise
-                raise self.refuse(stop_refusal(error), reason) from error
+                # The error's own facts, its status, wait and server, under the stop's
+                # class: one redirect too many is a block, though its error is not.
+                facts = replace(classify(error), reason=stop_refusal(error))
+                raise self.refuse(facts, reason) from error
             page = read(text)
             if page is None:
                 if is_challenge(text):
-                    raise self.refuse(Refusal.BLOCKED, CHALLENGE)
-                raise self.refuse(Refusal.UNRECOGNIZED, unrecognized)
+                    raise self.refuse(RefusalFacts(Refusal.BLOCKED), CHALLENGE)
+                raise self.refuse(RefusalFacts(Refusal.UNRECOGNIZED), unrecognized)
             self.unrecognized_runs.pop(unrecognized, None)
             return page
 
-    def refuse(self, refusal: Refusal, what: str) -> ProviderError:
-        """The error for a *refusal* recorded as *what*: unrecognized pages are counted.
+    def refuse(self, facts: RefusalFacts, what: str) -> ProviderError:
+        """The error for a refusal of *facts* recorded as *what*: unrecognized pages count.
 
         An unrecognized page *what* names its kind, and each kind is counted apart:
         `UNRECOGNIZED_STOP_RUN` in a row stop the run, fewer are the track's error
         (`TekstowoUnrecognized`). Every other class stops at once
         (`CoolingClient.refuse`).
         """
-        if refusal is not Refusal.UNRECOGNIZED:
-            return super().refuse(refusal, what)
+        if facts.reason is not Refusal.UNRECOGNIZED:
+            return super().refuse(facts, what)
         run = self.unrecognized_runs.get(what, 0) + 1
         self.unrecognized_runs[what] = run
         if run >= UNRECOGNIZED_STOP_RUN:
-            return super().refuse(refusal, what)
+            return super().refuse(facts, what)
         return TekstowoUnrecognized(what)
 
 
@@ -242,12 +245,13 @@ class TekstowoProvider:
     def asks(self, query: TrackQuery) -> bool:
         """False for a query with no artist, and for every query once the client stopped.
 
-        The chain reads this to skip the step unrecorded (`lyrics_fetch.AsksSelectively`).
+        The chain reads this to skip the step unrecorded
+        (`lyrics_provider_kinds.AsksSelectively`).
         """
         return has_artist(query) and self.client.available()
 
     def step_deadline_s(self) -> float:
-        """The watchdog's bound for one call (`lyrics_fetch.OwnsDeadline`)."""
+        """The watchdog's bound for one call (`lyrics_provider_kinds.OwnsDeadline`)."""
         return TEKSTOWO_STEP_DEADLINE_S
 
     def __call__(self, query: TrackQuery) -> str | None:

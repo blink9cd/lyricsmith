@@ -15,8 +15,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 import lyrics_exit
 import sweep_child
+from lyrics_model import Source
 from sweep_tally import AlbumTally, tally_manifest
 
 
@@ -59,14 +61,14 @@ def tally_made_run(
     before: frozenset[str],
     result: sweep_child.ChildResult,
     *,
-    netease: bool,
+    synced: frozenset[Source],
     progress: Callable[[str], None],
 ) -> MadeRun:
     """The run made on *album* since *before*, its tally, and the child's result.
 
-    *name* is the album's name in a line said through *progress*. A child given
-    ``--no-netease`` (*netease* False) asked LRCLIB's synced step alone, so the tally
-    reads its refusal as every synced step's.
+    *name* is the album's name in a line said through *progress*. *synced* is the LRC
+    providers whose synced step the child asked (`sweep_owed.synced_asked`), so the
+    tally reads a refusal by each of them as every synced step's.
 
     No run is read for a child left unreaped, which may still be writing it, nor when
     the album tool could not run. A run whose manifest cannot be read has no run id,
@@ -89,7 +91,7 @@ def tally_made_run(
             run_id = _made_run_id(album, before, name, progress)
         except OSError as error:
             # The album tool ran, and may have changed tags: the album is no record,
-            # its exit code kept, never could not run (`sweep_run._visit`).
+            # its exit code kept, never could not run (`sweep_visits.visit_one`).
             progress(
                 f"{name}: the run folder cannot be listed after the album tool ran: "
                 f"{error}"
@@ -99,7 +101,7 @@ def tally_made_run(
         if manifest is None:
             return MadeRun(None, None, result)
         run_id = manifest.run_id
-        tally = tally_manifest(manifest, netease=netease)
+        tally = tally_manifest(manifest, synced=synced)
     except KeyboardInterrupt:
         return MadeRun(run_id, None, dataclasses.replace(result, interrupted=True))
     return MadeRun(run_id, tally, result)

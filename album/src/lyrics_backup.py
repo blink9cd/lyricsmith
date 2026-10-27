@@ -4,9 +4,10 @@
 `SYLT` / `USLT` frames and copies its sidecars there, and writes the manifest with
 state `RunState.BACKED_UP`. Only after that may a run change any track.
 
-- **The run id** is the start time in UTC, ``YYYYMMDDTHHMMSSZ``, with ``-2``, ``-3``
-  and so on when that folder already exists. The folder is created exclusively, so
-  two runs started in one second never share one.
+- **The run id** is the start time in UTC, ``YYYYMMDDTHHMMSSZ`` (`RUN_ID_FORMAT`,
+  whose derived pattern a listing reads it back with), with ``-2``, ``-3`` and so on
+  when that folder already exists. The folder is created exclusively, so two runs
+  started in one second never share one.
 - **Exports mirror the album.** A track ``CD1/01 Song.mp3`` exports to
   ``frames/CD1/01 Song.sylt.1.lrc`` and ``frames/CD1/01 Song.uslt.1.txt``, numbered
   per kind in stored order, and its sidecars copy to ``sidecars/CD1/01 Song.lrc`` /
@@ -79,10 +80,14 @@ from lyrics_sidecar import read_bounded, read_sidecar_text
 from lyrics_slots import LRC_SUFFIX, TXT_SUFFIX, Slot, sidecar_entry, sidecar_paths
 from lyrics_stages import BackUpAlbum, LoadBeforeFrames, LoadBeforeSidecar, SelectRun
 from lyrics_run_folders import (
-    NO_SUFFIX,
     RUN_FOLDER_NAME,
+    make_exclusive_dir,
     refuse_linked_run_folder,
 )
+
+# The run id's form lives with the pattern that reads it back, as this module imports
+# that one: deriving the pattern here would make the import run both ways.
+from lyrics_run_folders import RUN_ID_FORMAT as RUN_ID_FORMAT
 from lyrics_run_folders import newer_runs as newer_runs
 from lyrics_run_folders import run_folder as run_folder
 from lyrics_run_folders import run_order as run_order
@@ -90,8 +95,6 @@ from lyrics_run_folders import runs_newest_first as runs_newest_first
 from lyrics_run_folders import select_run as select_run
 from lyrics_tags import read_tags
 
-#: The run id's form: the run's start time in UTC.
-RUN_ID_FORMAT = "%Y%m%dT%H%M%SZ"
 #: Where a run folder keeps its frame exports and its sidecar copies.
 _FRAMES_DIR = "frames"
 _SIDECARS_DIR = "sidecars"
@@ -125,16 +128,7 @@ def create_run_dir(album: Path, started: datetime) -> Path:
     refuse_linked_run_folder(album)
     parent = album / RUN_FOLDER_NAME
     parent.mkdir(exist_ok=True)
-    base, suffix = run_id_base(started), NO_SUFFIX
-    while True:
-        run_id = base if suffix == NO_SUFFIX else f"{base}-{suffix}"
-        run_dir = parent / run_id
-        try:
-            run_dir.mkdir()
-        except FileExistsError:
-            suffix += 1
-            continue
-        return run_dir
+    return make_exclusive_dir(parent, run_id_base(started))
 
 
 # --- Exports and their proof ---------------------------------------------------------
@@ -181,8 +175,12 @@ def _reads_back(frame: FrameRecord, text: str) -> bool:
 
 
 def _read_text(path: Path) -> str:
-    """*path*'s bytes as UTF-8, newlines as stored."""
-    return path.read_bytes().decode(_ENCODING)
+    """*path*'s bytes as UTF-8, newlines as stored; a FIFO or folder there is refused.
+
+    The proof of a file the backup just wrote: a link found under the name since the
+    write is not the backup's own, so it is refused (an `OSError`), never read through.
+    """
+    return lyrics_files.read_regular(path, follow=False).decode(_ENCODING)
 
 
 def _read_capped(path: Path, name: str) -> bytes:
@@ -190,9 +188,10 @@ def _read_capped(path: Path, name: str) -> bytes:
 
     One byte more than `lyrics_manifest.MAX_MANIFEST_BYTES` is read, so an oversized
     file is known by that byte alone and never read whole: `ManifestSchemaError`.
+    Read through `lyrics_files.read_regular`, so a FIFO pipe or a folder there is
+    `NotRegularFileError` at once, never waited on.
     """
-    with path.open("rb") as handle:
-        data = handle.read(lyrics_manifest.MAX_MANIFEST_BYTES + 1)
+    data = lyrics_files.read_regular(path, lyrics_manifest.MAX_MANIFEST_BYTES + 1)
     if len(data) > lyrics_manifest.MAX_MANIFEST_BYTES:
         raise ManifestSchemaError(
             f"{name} is too large: over {lyrics_manifest.MAX_MANIFEST_BYTES} bytes"
@@ -204,7 +203,9 @@ def _write_exact(run_dir: Path, name: str, frame: FrameRecord) -> str:
     """Write *frame*'s exact JSON copy as *name*, proving it reads back; return *name*."""
     target = run_dir / name
     lyrics_files.write_confirmed(target, lyrics_manifest.frame_bytes(frame))
-    if lyrics_manifest.parse_frame(target.read_bytes()) != frame:
+    # A link under the name since the write is refused, as `_read_text` refuses one.
+    data = lyrics_files.read_regular(target, follow=False)
+    if lyrics_manifest.parse_frame(data) != frame:
         raise ReadBackError(f"the exact copy {target.name} does not read back")
     return name
 
@@ -393,7 +394,8 @@ def load_before_frames(run_dir: Path, before: TrackBefore) -> tuple[FrameRecord,
     wrote (an export edited to hold no time stamp, or not UTF-8, or an export or exact
     copy grown past `lyrics_manifest.MAX_MANIFEST_BYTES`, read no further),
     `OutsideRunFolderError` when an export or exact copy is reached through a link out
-    of the run folder, and the `OSError` reading it when an export is gone.
+    of the run folder, and the `OSError` reading it when an export is gone or is no
+    regular file (`lyrics_files.NotRegularFileError`: a FIFO pipe is never waited on).
     """
     return tuple(_load_frame(run_dir, export) for export in before.frames)
 
@@ -420,7 +422,8 @@ def load_before_sidecar(run_dir: Path, before: TrackBefore) -> Lyrics | None:
     copied and is never read. None when the backup copied neither.
     Raise `SidecarDecodeError` on a copy that is not UTF-8, `SidecarTooLargeError` on
     one past the lyrics cap, `OutsideRunFolderError` on one reached through a link out
-    of the run folder, and the `OSError` reading it when it is gone.
+    of the run folder, and the `OSError` reading it when it is gone or is no regular
+    file (`lyrics_files.NotRegularFileError`: a FIFO pipe is never waited on).
     """
     lrc = _copied_sidecar(before, LRC_SUFFIX)
     if lrc is not None:

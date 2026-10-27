@@ -27,7 +27,11 @@ stopped one), so the union starts from it, its paths first, unless the sweep is 
 ``--restart``, which starts a pass and so an empty list. An
 existing list that cannot be read, or that the contract refuses, raises
 `ExistingListError` and is left as it was: replacing it would drop tracks still owed a
-refresh. That, and a private folder that cannot be made (`ScratchFolderError`), are
+refresh. It is read through the album tool's `lyrics_files.read_regular`, up to
+`MAX_CHANGED_LIST_BYTES`: a FIFO pipe or a device is refused at once rather than
+waited on, and a larger file is refused too. A link is followed, since the operator
+named it. The list is written with the default mode: it is the operator's file, not
+the sweep's state. That, and a private folder that cannot be made (`ScratchFolderError`), are
 raised before any album is visited, as a `ChangedListError`, so the caller says so as
 itself. Nothing here prints.
 """
@@ -42,11 +46,16 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 import lyrics_album
 import lyrics_changed
 import lyrics_files
 from lyrics_model import LyricsError
 
+#: The largest existing list read: one absolute path a line, so a whole large
+#: library's every track lists in tens of MiB at most; a bound on what a file swapped
+#: in can make the sweep hold in memory.
+MAX_CHANGED_LIST_BYTES = 64 * 1024 * 1024
 #: The private folder's name prefix, so a folder left by a killed sweep says whose.
 _FOLDER_PREFIX = "lyricsmith-sweep-changed-"
 #: Each child's list's suffix in that folder.
@@ -207,18 +216,25 @@ def existing_paths(target: Path) -> tuple[str, ...]:
     """The paths the list file *target* already holds; none when there is no file.
 
     A folder on its path that is a file is no file either: the write reports that.
-    Raises `ExistingListError` for a file that cannot be read or that the list file
-    contract refuses (a last line with no linefeed, a relative path), which is never
-    replaced: only the user can tell what it was meant to hold.
+    Raises `ExistingListError` for a file that cannot be read, that is not a regular
+    file (a FIFO pipe is refused, never waited on), that is past
+    `MAX_CHANGED_LIST_BYTES`, or that the list file contract refuses (a last line
+    with no linefeed, a relative path), which is never replaced: only the user can
+    tell what it was meant to hold. A link is followed, as the operator named it.
     """
     try:
-        data = target.read_bytes()
+        data = lyrics_files.read_regular(target, MAX_CHANGED_LIST_BYTES + 1)
     except (FileNotFoundError, NotADirectoryError):
         return ()
     except OSError as error:
         raise ExistingListError(
             f"could not read --changed-list {target}: {error}"
         ) from error
+    if len(data) > MAX_CHANGED_LIST_BYTES:
+        raise ExistingListError(
+            f"--changed-list {target} is more than {MAX_CHANGED_LIST_BYTES} bytes, "
+            "so it is left as it was"
+        )
     paths = lyrics_changed.parse_changed_list(data)
     if paths is None:
         raise ExistingListError(

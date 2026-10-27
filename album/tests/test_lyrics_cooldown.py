@@ -14,27 +14,18 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import http_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_cooldown as lyc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_files  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
-
-# A registered profile, never an @settings decorator: the name and settings are
-# test_lyrics_genre's, so whichever suite loads first, the other's properties run under
-# the same profile (its comment gives the reasons).
-settings.register_profile(
-    "album_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_properties")
 
 YTM, TEKSTOWO = lm.Source.YOUTUBE_MUSIC, lm.Source.TEKSTOWO
 #: The moment the tests read as now, and a refusal an hour before it.
@@ -125,9 +116,9 @@ class RoundTripTest(fixtures.IsolatedCase):
         calls: list[tuple[Path, bytes]] = []
         real = lyrics_files.write_confirmed
 
-        def recording(target: Path, data: bytes) -> None:
+        def recording(target: Path, data: bytes, *, mode: int) -> None:
             calls.append((target, data))
-            real(target, data)
+            real(target, data, mode=mode)
 
         path = self.tmp / "youtube_music.json"
         with mock.patch.object(lyrics_files, "write_confirmed", recording):
@@ -228,6 +219,29 @@ class BrokenFileTest(fixtures.IsolatedCase):
             with self.assertRaises(ValueError):
                 lyc.parse_cooldown(padded, NOW)
         loads.assert_not_called()
+
+    def test_an_oversized_file_is_read_no_further_than_one_byte_past_the_cap(
+        self,
+    ) -> None:
+        path = self.tmp / "youtube_music.json"
+        path.write_bytes(b" " * (lyc.MAX_COOLDOWN_BYTES * 4))
+        seen: list[int] = []
+
+        def recording(data: bytes, now: datetime) -> lyc.CoolDown:
+            del now  # only the size handed over matters
+            seen.append(len(data))
+            raise ValueError("refused")
+
+        with mock.patch.object(lyc, "parse_cooldown", recording):
+            result = lyc.read_cooldown(path, NOW)
+        self.assertIsNone(result.cool_down)
+        self.assertEqual(seen, [lyc.MAX_COOLDOWN_BYTES + 1])
+
+    def test_read_state_reads_one_byte_past_the_cap_it_is_given(self) -> None:
+        path = self.tmp / "state.json"
+        path.write_bytes(b"x" * 64)
+        state, warning = lyc.read_state(path, len, "state", max_bytes=10)
+        self.assertEqual((state, warning), (11, None))
 
     def test_a_recursion_error_while_decoding_is_a_value_error(self) -> None:
         with mock.patch.object(lyc.json, "loads", side_effect=RecursionError):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import sy_located  # noqa: F401 - puts the other tools and libraries on sys.path
 import at_engine
 import sy_engine
 import sy_lrc
@@ -12,6 +13,7 @@ from sy_lines import Span, first_line_stretched, low_confidence, measure
 from sy_request import STATUS_TOO_LONG, Request
 from sy_text import Tokens, tokenize
 from sy_types import (
+    MAX_TRACK_S,
     TEMP_PREFIX,
     UNTIMED_OUTCOMES,
     Action,
@@ -25,18 +27,24 @@ from sy_types import (
 def time_or_skip(
     planned: Planned, model_dir: Path, label: Label, run: at_engine.Runner
 ) -> TrackResult:
-    """*planned*'s outcome: its skip, or the child run and the .lrc it gives."""
+    """*planned*'s outcome: its skip, or the child run and the .lrc it gives.
+
+    A track whose tags claim more than `MAX_TRACK_S` seconds is skipped with no child.
+    """
     skipped = UNTIMED_OUTCOMES.get(planned.action)
     if skipped is not None:
         return TrackResult(
             planned.audio, skipped, (planned.detail,) if planned.detail else ()
         )
+    seconds = sy_engine.track_seconds(planned.audio)
+    if seconds is not None and seconds > MAX_TRACK_S:
+        # The child would hold the whole decoded track in memory; none is started.
+        detail = f"{seconds:.0f} s, over the {MAX_TRACK_S} s cap"
+        return TrackResult(planned.audio, Outcome.SKIP_LONG_TRACK, (detail,))
     tokens = tokenize(planned.lines)
     with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as work:
         request = Request(planned.audio, tokens.ids, model_dir)
-        aligned = sy_engine.align(
-            request, Path(work), run, sy_engine.track_seconds(planned.audio)
-        )
+        aligned = sy_engine.align(request, Path(work), run, seconds)
     if aligned.reply is None:
         return TrackResult(planned.audio, Outcome.ERROR_ALIGN, aligned.detail)
     if aligned.reply.status == STATUS_TOO_LONG:

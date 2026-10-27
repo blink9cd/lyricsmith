@@ -30,10 +30,10 @@ _MIN_GROUPED_TESTS_BY_FILE = {
     "test_isolation.py": 4,
     "test_at_types.py": 6,
     "test_at_models_manifest.py": 2,
-    "test_cli_options.py": 18,
+    "test_cli_options.py": 15,
     "test_at_engine.py": 11,
     "test_at_discover.py": 10,
-    "test_at_plan.py": 18,
+    "test_at_plan.py": 19,
     "test_at_label.py": 5,
     "test_at_place.py": 5,
     "test_at_summary.py": 5,
@@ -45,6 +45,7 @@ _MIN_GROUPED_TESTS_BY_FILE = {
     "test_cli_prog.py": 2,
     "test_cli_hardening.py": 13,
     "test_live_whisper.py": 1,
+    "test_at_located.py": 2,
 }
 
 

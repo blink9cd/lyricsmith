@@ -20,6 +20,7 @@ import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_cooldown as lyc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_cooling_client as lcc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_providers as lp  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
 from genius_fakes import FakeClock  # noqa: E402 - import follows the sys.path bootstrap above
 
 #: The fixed moment the invented client reads as now, aware UTC.
@@ -28,12 +29,10 @@ NOW = datetime(2026, 10, 21, 9, 30, tzinfo=UTC)
 ROOM_S = 100.0
 
 
-class InventedStopped(lp.ProviderError):
+class InventedStopped(lcc.StoppedError):
     """The invented source's stopped error."""
 
-    def __init__(self, what: str) -> None:
-        """Carry *what* as the detail."""
-        super().__init__(f"Invented stopped: {what}", detail=what)
+    SOURCE: ClassVar[str] = "Invented"
 
 
 class InventedClient(lcc.CoolingClient):
@@ -41,7 +40,7 @@ class InventedClient(lcc.CoolingClient):
 
     NAME: ClassVar[str] = "Invented"
     MIN_INTERVAL_S: ClassVar[float] = 2.0
-    stopped_error: ClassVar[type[lp.ProviderError]] = InventedStopped
+    stopped_error: ClassVar[type[lcc.StoppedError]] = InventedStopped
 
 
 class StatusRefusalTest(fixtures.IsolatedCase):
@@ -54,7 +53,8 @@ class StatusRefusalTest(fixtures.IsolatedCase):
             503: lcc.Refusal.OVERLOADED,
             504: lcc.Refusal.OVERLOADED,
             403: lcc.Refusal.BLOCKED,
-            500: lcc.Refusal.BLOCKED,
+            500: lcc.Refusal.OVERLOADED,
+            400: lcc.Refusal.UNRECOGNIZED,
             302: lcc.Refusal.BLOCKED,
         }
         for status, expected in cases.items():
@@ -84,7 +84,7 @@ class RefuseTest(_ClientCase):
                 client = InventedClient(
                     self.tmp / kind.name / "s.json", now=lambda: NOW
                 )
-                error = client.refuse(kind, "HTTP 429")
+                error = client.refuse(lrf.RefusalFacts(kind), "HTTP 429")
                 self.assertIsInstance(error, InventedStopped)
                 self.assertEqual(error.detail, "HTTP 429")
                 assert client.stop is not None
@@ -95,10 +95,28 @@ class RefuseTest(_ClientCase):
                 self.assertEqual(read.what, "HTTP 429")
                 self.assertFalse(client.available())
 
+    def test_the_stop_carries_its_class_and_status(self) -> None:
+        error = self.client.refuse(
+            lrf.RefusalFacts(lcc.Refusal.OVERLOADED, 503), "HTTP 503"
+        )
+        self.assertEqual(str(error), "Invented stopped: HTTP 503")
+        facts = lrf.RefusalFacts(lcc.Refusal.OVERLOADED, 503)
+        self.assertEqual(lrf.classify(error), facts)
+        with self.assertRaises(InventedStopped) as raised:
+            with self.client.turn(self.clock() + ROOM_S):
+                self.fail("a stopped client took a turn")
+        self.assertEqual(lrf.classify(raised.exception), facts)
+
+    def test_a_stop_with_no_status_names_none(self) -> None:
+        error = self.client.refuse(
+            lrf.RefusalFacts(lcc.Refusal.BLOCKED), "challenge page"
+        )
+        self.assertEqual(lrf.classify(error), lrf.RefusalFacts(lcc.Refusal.BLOCKED))
+
     def test_a_failed_write_still_stops(self) -> None:
         failing = mock.patch.object(lyc, "write_cooldown", side_effect=OSError("full"))
         with failing:
-            self.client.refuse(lcc.Refusal.BLOCKED, "challenge page")
+            self.client.refuse(lrf.RefusalFacts(lcc.Refusal.BLOCKED), "challenge page")
         assert self.client.stop is not None
         self.assertIsNotNone(self.client.stop.write_error)
         self.assertFalse(self.state.exists())
@@ -106,7 +124,7 @@ class RefuseTest(_ClientCase):
 
     def test_the_stop_is_kept_to_the_second(self) -> None:
         self.client.now = lambda: NOW.replace(microsecond=123_456)
-        self.client.refuse(lcc.Refusal.RATE_LIMITED, "HTTP 429")
+        self.client.refuse(lrf.RefusalFacts(lcc.Refusal.RATE_LIMITED), "HTTP 429")
         assert self.client.stop is not None
         self.assertEqual(self.client.stop.until, NOW + lyc.COOL_DOWN)
 
@@ -129,7 +147,7 @@ class TurnTest(_ClientCase):
         self.assertEqual(self.client.pacer.last, 1002.0)
 
     def test_the_deadline_is_checked_before_the_stop(self) -> None:
-        self.client.refuse(lcc.Refusal.BLOCKED, "challenge page")
+        self.client.refuse(lrf.RefusalFacts(lcc.Refusal.BLOCKED), "challenge page")
         with self.assertRaises(lp.ProviderTimeout) as raised:
             with self.client.turn(self.clock()):
                 self.fail("a turn ran past its deadline")
@@ -138,7 +156,7 @@ class TurnTest(_ClientCase):
     def test_the_stop_is_checked_before_the_pace(self) -> None:
         with self.client.turn(self.clock() + ROOM_S):
             pass
-        self.client.refuse(lcc.Refusal.BLOCKED, "challenge page")
+        self.client.refuse(lrf.RefusalFacts(lcc.Refusal.BLOCKED), "challenge page")
         with self.assertRaises(InventedStopped) as raised:
             # The pace alone would outlast this deadline: the stop is raised first.
             with self.client.turn(self.clock() + 1.0):

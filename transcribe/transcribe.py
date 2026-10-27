@@ -4,12 +4,13 @@ The entry point of the project folder. It runs whisper.cpp's ``whisper-cli`` pro
 each audio file and never downloads anything during a transcribe run; only
 ``--mode fetch-models`` reaches the network, and only for the two pinned models.
 Importing it puts the private modules, under ``src/``, on ``sys.path``, resolved from
-this file's own location, then the shared libraries it uses, found by searching
-upward, so everything imports by bare name wherever the folder is moved.
+this file's own location, then the shared libraries the project's ``pyproject.toml``
+names, through the manifest reader at the project root (``lyricsmith_project/``), so
+everything imports by bare name wherever the project is moved.
 
-This module owns the option layer, `build_parser` and `resolve_options`, the tool's
-own version, read from the project's pyproject.toml one folder up, and `main`, which
-dispatches to the two modes in ``src/at_modes.py``.
+This module owns the option layer, `build_parser` and `resolve_options`, and `main`,
+which dispatches to the two modes in ``src/at_modes.py`` with the project's version
+(`lyricsmith_project.project_version`).
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ import argparse
 import os
 import re
 import sys
-import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -28,14 +28,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 #: The private modules' folder, beside this file.
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
-# The shared libraries sit directly under the project root, this tool folder's
-# parent.
-# See stdio_utf8/stdio_utf8.md, "How this project's tools import it", for why
-# each is ONE fixed candidate rather than a search up the ancestors, and why a
-# missing copy fails its import below by name.
-sys.path += [
-    str(PROJECT_ROOT.parent / name) for name in ("stdio_utf8", "help_formatter")
-]
+# The project's manifest reader, in its own folder under the project root: it puts the
+# shared libraries the project's pyproject.toml names on sys.path, or fails naming the
+# one that is missing (lyricsmith_project/lyricsmith_project.md).
+_PROJECT_DIR = Path(__file__).resolve().parents[1]
+_READER_DIR = str(_PROJECT_DIR / "lyricsmith_project")
+# Moved first on sys.path, so no same-named module can stand in for the reader.
+sys.path[:] = [_READER_DIR, *(entry for entry in sys.path if entry != _READER_DIR)]
+import lyricsmith_project  # noqa: E402 - import follows the sys.path bootstrap above
+
+# Run as a script, a failure exits 2 naming it; imported, it raises.
+lyricsmith_project.add_shared_libraries(exit_on_failure=__name__ == "__main__")
 
 import at_engine  # noqa: E402 - import follows the sys.path bootstrap above
 import at_models  # noqa: E402 - import follows the sys.path bootstrap above
@@ -51,7 +54,6 @@ from at_types import (  # noqa: E402 - import follows the sys.path bootstrap abo
     SetupError,
 )
 
-UNKNOWN_VERSION = "unknown"
 #: A --path naming one of these would be its own output (output_paths keeps the stem).
 SIDECAR_SUFFIXES = frozenset({LRC_SUFFIX, TXT_SUFFIX})
 
@@ -85,23 +87,6 @@ Exit codes:
      missing or unreadable model, a --path that does not exist, cannot be read,
      is not a folder or a regular file, or names a .lrc or .txt, or an unusable
      option value"""
-
-
-class HelpFormatter(
-    help_formatter.ReqAwareDefaultsFormatter, argparse.RawDescriptionHelpFormatter
-):
-    """Every real default shown, the epilog's breaks kept.
-
-    The two bases override different methods, so they compose. A default of None is
-    no value a person could type, so it is not shown: each such option's help says
-    instead what leaving it out means.
-    """
-
-    def _get_help_string(self, action: argparse.Action) -> str | None:
-        """*action*'s help, with its default appended unless that default is None."""
-        if action.default is None:
-            return action.help
-        return super()._get_help_string(action)
 
 
 class _Writable(Protocol):
@@ -146,7 +131,7 @@ def build_parser(model_dir: Path, prog: str | None = None) -> argparse.ArgumentP
         prog=os.path.basename(sys.argv[0]) if prog is None else prog,
         description="Transcribe audio offline into a timed .lrc and a plain .txt "
         "with whisper.cpp's whisper-cli; or fetch its two pinned models.",
-        formatter_class=HelpFormatter,
+        formatter_class=help_formatter.RawNoneHidingFormatter,
         epilog=EPILOG,
     )
     parser.add_argument(
@@ -298,19 +283,6 @@ def resolve_options(namespace: argparse.Namespace) -> Options:
     )
 
 
-def read_tool_version(root: Path) -> str:
-    """[project].version from the pyproject.toml in root, else 'unknown'."""
-    try:
-        with (root / "pyproject.toml").open("rb") as stream:
-            project = tomllib.load(stream).get("project")
-    # tomllib decodes the bytes itself, so a file that is not UTF-8 raises
-    # UnicodeDecodeError rather than TOMLDecodeError.
-    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
-        return UNKNOWN_VERSION
-    version = project.get("version") if isinstance(project, dict) else None
-    return version if isinstance(version, str) else UNKNOWN_VERSION
-
-
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -337,7 +309,7 @@ def main(
         return at_modes.transcribe_mode(
             options,
             run,
-            tool_version=read_tool_version(PROJECT_ROOT.parent),
+            tool_version=lyricsmith_project.project_version(),
             prog=parser.prog,
         )
     except SetupError as error:

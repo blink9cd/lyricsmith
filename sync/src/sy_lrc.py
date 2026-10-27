@@ -1,8 +1,8 @@
 """The .lrc this tool writes, and the atomic write beside a track.
 
 The stamps are album's own format (`format_lrc`), so album reads the file back as written.
-The header line ``[by:machine timed]`` marks the file as this tool's. Only album reads
-that label (`machine_label`, through `plan_sidecars`), for both tools, so they never
+The header line ``[by:machine timed]`` marks the file as this tool's. This tool reads that
+label only through album (`machine_label`, by way of `plan_sidecars`), so the two never
 disagree: any edit to the line makes the file a person's, and this tool never re-times it.
 """
 
@@ -12,18 +12,29 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+import sy_located  # noqa: F401 - puts the other tools and libraries on sys.path
 from lyrics_files import replace_atomically
 from lyrics_model import SyncedLine, format_lrc
+from stdio_utf8 import spell_unsafe
 from sy_types import LRC_SUFFIX, MACHINE_BY_LINE, TOOL_LABEL, Label
 
 MS_PER_SECOND: Final = 1000
 
 
 def re_line(label: Label) -> str:
-    """The [re:] line naming this tool's, demucs's and torchaudio's versions."""
+    """The [re:] line naming this tool's, demucs's and torchaudio's versions.
+
+    Each version is escaped, as the transcribe tool escapes its label's: each is read
+    at run time and may hold a line break, which would split the header and put a line
+    of the value's before the by-line, so album would no longer read the file as ours.
+    """
+    tool, demucs, torchaudio = (
+        spell_unsafe(version)
+        for version in (label.tool, label.demucs, label.torchaudio)
+    )
     return (
-        f"[re:{TOOL_LABEL} {label.tool}; demucs {label.demucs} htdemucs; "
-        f"torchaudio {label.torchaudio} WAV2VEC2_ASR_BASE_960H]"
+        f"[re:{TOOL_LABEL} {tool}; demucs {demucs} htdemucs; "
+        f"torchaudio {torchaudio} WAV2VEC2_ASR_BASE_960H]"
     )
 
 

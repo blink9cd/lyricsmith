@@ -9,10 +9,14 @@ confirmed by reading the link back. A replace acts on the name itself: a link al
 under the target's name is replaced, never followed, so nothing is ever written through a
 link to somewhere else.
 
-`inside_run_folder` is the matching guard for reads: a path a run folder's manifest
-names, resolved, must still lie inside that run folder, so a link put there since (a
-linked ``frames/`` or ``sidecars/`` folder, or a linked file) never makes undo or the
-check read from somewhere else.
+`read_regular` and `open_regular` are the reads: each opens without blocking and
+refuses anything but a regular file by the opened descriptor itself, so a FIFO pipe
+swapped in after a name was looked at is an error at once, never a hang.
+
+`inside_run_folder` is the matching guard for where a read goes: a path a run folder's
+manifest names, resolved, must still lie inside that run folder, so a link put there
+since (a linked ``frames/`` or ``sidecars/`` folder, or a linked file) never makes undo
+or the check read from somewhere else.
 
 Every name made here fits in `NAME_MAX` bytes: a temporary name keeps only as much of
 its target's name as fits beside its random tag, and `fit_name` shortens a name some
@@ -28,12 +32,16 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import stat
+import sys
 import uuid
 from pathlib import Path
+from typing import BinaryIO, Literal, cast
 
 from lyrics_model import LyricsError, ReadBackError
 
-#: The mode a new file is created with, before the process umask narrows it.
+#: The mode a new file is created with, before the process umask narrows it, unless
+#: a write asks for another: a state file asks to be readable by its writer alone.
 _NEW_FILE_MODE = 0o666
 
 #: The longest file name, in bytes, APFS, ext4 and most other file systems take.
@@ -58,6 +66,104 @@ RECORD_ERRORS = (OSError, ReadBackError)
 
 class OutsideRunFolderError(LyricsError):
     """A path in a run folder resolves outside it, through a link put there since."""
+
+
+class NotRegularFileError(OSError):
+    """A file to read is something else: a folder, a FIFO pipe, a device."""
+
+
+#: Read until the end of the file: `read_regular`'s default limit.
+_WHOLE = -1
+#: Never block opening: a FIFO pipe with no writer otherwise waits forever. POSIX-only,
+#: so 0 on Windows, which has no FIFO in its file system.
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+#: Added to refuse a link at the last step; 0 where the platform lacks it.
+_NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
+#: The modes `open_regular` takes: reading, and updating in place.
+OpenMode = Literal["rb", "r+b"]
+
+
+def read_flags() -> int:
+    """The flags `read_regular` opens a file with: read-only, never blocking, binary.
+
+    O_CLOEXEC is POSIX-only and O_BINARY Windows-only; a flag a platform lacks is 0
+    there, leaving the open as it was. Read at each open, never once at import, so a
+    test can stand in Windows' O_BINARY on any host. transcribe opens a ``.lrc`` with
+    flags of its own, pinned to these by a test.
+    """
+    return (
+        os.O_RDONLY
+        | _NONBLOCK
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
+
+
+def _refuse_unless_regular(descriptor: int, path: Path, *, block: bool = False) -> None:
+    """Raise `NotRegularFileError` unless *descriptor* is a regular file; close it on error.
+
+    Told by the opened descriptor's own `fstat`, so a file swapped since it was looked
+    at cannot slip past; the error names *path*'s last part. With *block*, blocking is
+    then turned back on. Any error raised here, the refusal or a failed reset alike,
+    closes *descriptor* first, so a refused open never leaks one.
+    """
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise NotRegularFileError(f"{path.name} is not a regular file")
+        if block:
+            _turn_blocking_on(descriptor)
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _turn_blocking_on(descriptor: int) -> None:
+    """Make *descriptor*, opened without blocking, block as a plain open's would."""
+    # Windows has no O_NONBLOCK, so it has nothing to turn back off.
+    if sys.platform == "win32":
+        return  # pragma: only-on win32
+    os.set_blocking(descriptor, True)  # pragma: only-on posix
+
+
+def read_regular(path: Path, limit: int = _WHOLE, *, follow: bool = True) -> bytes:
+    """The first *limit* bytes of the regular file at *path*, all of it by default.
+
+    Opened without blocking (``O_NONBLOCK``), so a FIFO pipe with no writer opens at
+    once instead of waiting forever, then told by the opened descriptor's own `fstat`:
+    anything but a regular file raises `NotRegularFileError`, naming *path*'s last
+    part, before a byte is read. A link is followed, as a plain open follows it, and
+    the caller checks where it leads; without *follow*, a link at the last step is
+    refused by the open itself (``O_NOFOLLOW``, an `OSError`), so a file swapped for
+    a link since it was looked at is never read through. Binary mode, so the bytes
+    are the file's own on every platform.
+    """
+    descriptor = os.open(path, read_flags() | (0 if follow else _NO_FOLLOW))
+    # Told before `fdopen`, which itself refuses a folder with an error of its own.
+    _refuse_unless_regular(descriptor, path)
+    with os.fdopen(descriptor, "rb") as handle:
+        return handle.read(limit)
+
+
+def open_regular(path: Path, mode: OpenMode) -> BinaryIO:
+    """The regular file at *path*, opened in *mode*, for a caller that streams it.
+
+    For a reader that takes a file object rather than bytes, mutagen's among them.
+    Opened without blocking and told by the opened descriptor's own `fstat`, as
+    `read_regular` is, so a FIFO pipe or a device swapped in since the name was
+    looked at raises `NotRegularFileError` at once. Blocking is then turned back on,
+    so the file behaves as a plain `open` would. A link is followed. No mode creates
+    a file: a missing one raises `FileNotFoundError`, so a track removed in the
+    middle of a write is never made again as a stub. A failure after the open closes
+    the descriptor before it is raised.
+    """
+
+    def opener(name: str, flags: int) -> int:
+        """Open *name* with the flags `open` chose, never blocking; no mode creates."""
+        descriptor = os.open(name, flags | _NONBLOCK)
+        _refuse_unless_regular(descriptor, path, block=True)
+        return descriptor
+
+    return cast(BinaryIO, open(path, mode, opener=opener))
 
 
 def inside_run_folder(run_dir: Path, relative: str) -> Path:
@@ -121,12 +227,16 @@ def _temporary_beside(target: Path) -> Path:
     return target.with_name(f".{head}.{uuid.uuid4().hex}{_TEMP_SUFFIX}")
 
 
-def replace_atomically(target: Path, data: bytes) -> None:
+def replace_atomically(
+    target: Path, data: bytes, *, mode: int = _NEW_FILE_MODE
+) -> None:
     """Write *data* to *target* through a fsynced temporary file and one replace.
 
-    Missing parent folders are created. The temporary file is removed if anything
-    fails before the replace, which leaves the old *target*, if any, as it was. The
-    folder is synced after the replace, so the new name is on disk too.
+    The new file is made with *mode*, narrowed by the umask, and replaces whatever
+    mode the old one had. Missing parent folders are created. The temporary file is
+    removed if anything fails before the replace, which leaves the old *target*, if
+    any, as it was. The folder is synced after the replace, so the new name is on
+    disk too.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = _temporary_beside(target)
@@ -134,7 +244,7 @@ def replace_atomically(target: Path, data: bytes) -> None:
         # O_BINARY exists only on Windows, where a descriptor opened without it is in
         # text mode and each LF written lands as CRLF: undo restores these bytes exactly.
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
-        descriptor = os.open(temp, flags, _NEW_FILE_MODE)
+        descriptor = os.open(temp, flags, mode)
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(data)
             handle.flush()
@@ -143,10 +253,10 @@ def replace_atomically(target: Path, data: bytes) -> None:
     except BaseException:
         temp.unlink(missing_ok=True)
         raise
-    _sync_folder(target.parent)
+    sync_folder(target.parent)
 
 
-def _sync_folder(folder: Path) -> None:
+def sync_folder(folder: Path) -> None:
     """Flush *folder*'s entries to disk, so a replace inside it survives a power cut.
 
     A file's own fsync covers its bytes, not the name pointing at them. Where a
@@ -171,10 +281,15 @@ def _sync_folder(folder: Path) -> None:
         os.close(descriptor)
 
 
-def write_confirmed(target: Path, data: bytes) -> None:
-    """Replace *target* atomically with *data*; raise `ReadBackError` unless it reads back."""
-    replace_atomically(target, data)
-    if target.read_bytes() != data:
+def write_confirmed(target: Path, data: bytes, *, mode: int = _NEW_FILE_MODE) -> None:
+    """Replace *target* atomically with *data*; raise `ReadBackError` unless it reads back.
+
+    *mode* is the new file's, as `replace_atomically` takes it. The read-back never
+    follows a link: the replace left a regular file under the name, so a link found
+    there since is refused (an `OSError`), never read through.
+    """
+    replace_atomically(target, data, mode=mode)
+    if read_regular(target, follow=False) != data:
         raise ReadBackError(f"{target.name} did not read back as written")
 
 
@@ -193,6 +308,6 @@ def replace_with_link(target: Path, link: str) -> None:
     except BaseException:
         temp.unlink(missing_ok=True)
         raise
-    _sync_folder(target.parent)
+    sync_folder(target.parent)
     if os.readlink(target) != link:
         raise ReadBackError(f"{target.name} did not read back as the link recorded")

@@ -46,5 +46,12 @@ class NoRunError(LyricsError):
     """
 
 
+class UnreadableRunError(LyricsError):
+    """The chosen run's manifest could not be read; undo and check refuse that run.
+
+    The entry point exits 2: the run is never passed over for an older one.
+    """
+
+
 class TrackNotInRunError(LyricsError):
     """A requested track is not one the chosen run lists; the entry point exits 2."""

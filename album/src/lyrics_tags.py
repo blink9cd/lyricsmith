@@ -1,7 +1,8 @@
 """Read a track's tags and lyrics frames through mutagen; write, strip and restore them.
 
 `read_tags` reads the search query's artist and title, the audio duration, the ID3
-version and every `SYLT` / `USLT` frame verbatim, and `check_writable` says, changing
+version and every `SYLT` / `USLT` frame verbatim, `read_track_number` the track number
+as its tag writes it (for the sweep's silence list), and `check_writable` says, changing
 nothing, whether `write_lyrics` could save a track: its tag version and whether the file
 opens for writing. `write_lyrics` saves the frames `lyrics_frames` builds for an answer,
 unless the track already holds exactly those, and asks its pre-flight first, so an
@@ -47,8 +48,11 @@ therefore reads, and survives any save here, as only that last one; an embed who
 frames are already the ones read skips its save, and leaves the duplicates as they were.
 
 The save is mutagen's in-place one, not a temporary copy renamed over the file: a music
-library that tracks files by identity would lose a file given a new one. The caller holds
-the album lock. Nothing here prints.
+library that tracks files by identity would lose a file given a new one. Every read of
+a track goes through `lyrics_files.open_regular`, and mutagen is handed the open file:
+a FIFO pipe or a device swapped in under a track's name since it was found is
+`NotRegularFileError` at once, never waited on or read without end. A save opens the
+track that way too, for update. The caller holds the album lock. Nothing here prints.
 """
 
 from __future__ import annotations
@@ -76,6 +80,7 @@ from mutagen.id3 import (
 from mutagen.id3._id3v1 import find_id3v1
 from mutagen.mp3 import MP3
 
+from lyrics_files import NotRegularFileError, open_regular
 from lyrics_frames import (
     WRITABLE_MINORS,
     new_frames,
@@ -128,7 +133,8 @@ def _load(path: Path, *, load_v1: bool) -> ID3 | None:
     file with only a v1 tag loads with version 1.1, its fields as v2.4 frames.
     """
     try:
-        return ID3(path, translate=False, load_v1=load_v1)
+        with open_regular(path, "rb") as stream:
+            return ID3(stream, translate=False, load_v1=load_v1)
     except ID3NoHeaderError:
         return None
 
@@ -159,7 +165,8 @@ def _v2_version(tags: ID3 | None) -> tuple[int, int] | None:
 def _duration(path: Path) -> float | None:
     """The audio length in seconds, or None when no MPEG frame can be read."""
     try:
-        info = MP3(path).info
+        with open_regular(path, "rb") as stream:
+            info = MP3(stream).info
     except MutagenError:
         return None
     return float(info.length) if info is not None else None
@@ -266,6 +273,11 @@ def read_tags(path: Path) -> TrackTags:
     )
 
 
+def read_track_number(path: Path) -> str | None:
+    """*path*'s TRCK frame as written (``3/12``), or None when absent or blank."""
+    return _first_text(_load_id3(path), "TRCK")
+
+
 # --- Saving and confirming -------------------------------------------------------
 
 
@@ -284,7 +296,7 @@ def _v1_tail(path: Path) -> bytes:
     It sits in a private module: mutagen exposes no public way to keep a v1 tag as it
     is, and the exact pin holds the locator's behavior, which the suite proves.
     """
-    with path.open("rb") as stream:
+    with open_regular(path, "rb") as stream:
         _tag, offset = find_id3v1(stream)
         # A zero offset (no tag) reads from the end: no bytes.
         stream.seek(offset, os.SEEK_END)
@@ -293,7 +305,7 @@ def _v1_tail(path: Path) -> bytes:
 
 def _last_bytes(path: Path, count: int) -> bytes:
     """The last *count* bytes of *path*, or the whole file when it is shorter."""
-    with path.open("rb") as stream:
+    with open_regular(path, "rb") as stream:
         size = stream.seek(0, os.SEEK_END)
         stream.seek(max(size - count, 0))
         return stream.read()
@@ -307,13 +319,22 @@ def _save(tags: ID3, path: Path, minor: int) -> bytes:
     either removes the v1 tail or rebuilds it from the v2 tag, so the save removes it
     and the original bytes are appended back. A v2.3 frame holding several values
     keeps them null-separated, as stored: mutagen's default joins them with a slash,
-    which merges them into one value, and splits nothing back apart on reading.
-    Return the tail appended, which the read-back checks.
+    which merges them into one value, and splits nothing back apart on reading. The
+    track is opened by `open_regular`, the tail appended through it, so mutagen opens
+    no name; a refused open is raised as mutagen raised one, `MutagenError` from the
+    `OSError`. Return the tail appended, which the read-back checks.
     """
     tail = _v1_tail(path)
-    tags.save(path, v1=ID3v1SaveOptions.REMOVE, v2_version=minor, v23_sep=None)
-    if tail:
-        with path.open("ab") as stream:
+    try:
+        stream = open_regular(path, "r+b")
+    except OSError as error:
+        if isinstance(error, NotRegularFileError):
+            raise
+        raise MutagenError(error) from error
+    with stream:
+        tags.save(stream, v1=ID3v1SaveOptions.REMOVE, v2_version=minor, v23_sep=None)
+        if tail:
+            stream.seek(0, os.SEEK_END)
             stream.write(tail)
     return tail
 
@@ -365,15 +386,15 @@ def check_writable(path: Path) -> None:
     `TagVersionError` the write raises, since the tag is loaded as the write loads it,
     and a file the write cannot open for writing, raised as the open's `OSError`. A
     fresh run asks this before it strips, so it never strips a track either would
-    stop. Nothing else is foreseen: a full disk during the write still leaves a fresh
-    run's track stripped, and a file system that refuses an open for update is
-    refused here even where the write's own fallback could have saved it.
+    stop. A name that is no regular file (a FIFO pipe swapped in) raises
+    `lyrics_files.NotRegularFileError`, at once. Nothing else is foreseen: a full disk
+    during the write still leaves a fresh run's track stripped.
     """
     _write_target(path)
     # Opened as the save opens it, then closed unwritten: the open itself is the
     # authority on modes, ACLs and flags, where os.access answers for modes alone.
     # Closing a file nothing was written to leaves its bytes and mtime alone.
-    with path.open("r+b"):
+    with open_regular(path, "r+b"):
         pass
 
 

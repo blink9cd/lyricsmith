@@ -6,6 +6,7 @@ import contextlib
 import io
 
 import at_models
+import help_formatter
 import transcribe
 import at_types
 from tests._isolation import IsolatedCase
@@ -78,6 +79,13 @@ class OptionsTest(IsolatedCase):
         self.assertIsNone(options.path)
         self.assertEqual(options.extensions, frozenset())
 
+    def test_the_parser_uses_the_shared_formatter(self) -> None:
+        self.assertIs(
+            transcribe.build_parser(self.model_dir).formatter_class,
+            help_formatter.RawNoneHidingFormatter,
+        )
+        self.assertFalse(hasattr(transcribe, "HelpFormatter"))
+
     def test_help_shows_the_live_model_dir_and_the_modes(self) -> None:
         text = transcribe.build_parser(self.model_dir).format_help()
         # argparse wraps a long default across lines, so compare with whitespace removed.
@@ -125,37 +133,3 @@ class OptionsTest(IsolatedCase):
                 with self.assertRaises(at_types.SetupError) as caught:
                     self.resolve("--path", str(self.audio), "--extensions", value)
                 self.assertIn("this tool's outputs", str(caught.exception))
-
-
-class ToolVersionTest(IsolatedCase):
-    def test_the_manifest_version(self) -> None:
-        (self.root / "pyproject.toml").write_text(
-            '[project]\nversion = "0.1.0"\n', encoding="utf-8", newline="\n"
-        )
-        self.assertEqual(transcribe.read_tool_version(self.root), "0.1.0")
-
-    def test_fallbacks_give_unknown(self) -> None:
-        cases = {
-            "no file": None,
-            "bad toml": "[project\n",
-            "not a string": "[project]\nversion = 1\n",
-        }
-        for name, text in cases.items():
-            with self.subTest(name=name):
-                folder = self.root / name.replace(" ", "-")
-                folder.mkdir()
-                if text is not None:
-                    (folder / "pyproject.toml").write_text(
-                        text, encoding="utf-8", newline="\n"
-                    )
-                self.assertEqual(transcribe.read_tool_version(folder), "unknown")
-
-    def test_a_project_that_is_not_a_table_is_unknown(self) -> None:
-        (self.root / "pyproject.toml").write_text(
-            'project = "x"\n', encoding="utf-8", newline="\n"
-        )
-        self.assertEqual(transcribe.read_tool_version(self.root), "unknown")
-
-    def test_a_manifest_that_is_not_utf8_is_unknown(self) -> None:
-        (self.root / "pyproject.toml").write_bytes(b'[project]\nversion = "\xff"\n')
-        self.assertEqual(transcribe.read_tool_version(self.root), "unknown")

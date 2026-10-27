@@ -122,12 +122,12 @@ class RunListTest(ChangedListCase):
         real = lyrics_files.replace_atomically
         raised_once: list[Path] = []
 
-        def replace(target: Path, data: bytes) -> None:
+        def replace(target: Path, data: bytes, **mode: int) -> None:
             # Every other write (the manifest's) goes through as it is.
             if target == self.listed and not raised_once:
                 raised_once.append(target)
                 signal.raise_signal(signal.SIGINT)
-            real(target, data)
+            real(target, data, **mode)
 
         with mock.patch.object(lyrics_files, "replace_atomically", replace):
             result = self.with_list()
@@ -140,9 +140,9 @@ class RunListTest(ChangedListCase):
         real = lyrics_files.replace_atomically
         raised_once: list[Path] = []
 
-        def replace(target: Path, data: bytes) -> None:
+        def replace(target: Path, data: bytes, **mode: int) -> None:
             if target != self.listed:
-                real(target, data)
+                real(target, data, **mode)
                 return
             if not raised_once:
                 raised_once.append(target)
@@ -210,12 +210,12 @@ class LeftOutTest(cli_fakes.RealWiringCliCase):
         real = lyrics_files.replace_atomically
         raised_once: list[Path] = []
 
-        def replace(target: Path, data: bytes) -> None:
+        def replace(target: Path, data: bytes, **mode: int) -> None:
             # A Ctrl-C held through the first list write makes the tool write it again.
             if target == listed and not raised_once:
                 raised_once.append(target)
                 signal.raise_signal(signal.SIGINT)
-            real(target, data)
+            real(target, data, **mode)
 
         with mock.patch.object(lyrics_files, "replace_atomically", replace):
             result = self.run_album("--changed-list", str(listed))

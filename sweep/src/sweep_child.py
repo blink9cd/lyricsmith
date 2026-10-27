@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 from lyrics_bandcamp import BANDCAMP_STEP_DEADLINE_S
 from lyrics_fetch import (
     CHAIN,
@@ -49,7 +50,8 @@ from lyrics_fetch import (
 from lyrics_genius import genius_step_deadline_s
 from lyrics_manifest import read_manifest
 from lyrics_model import LyricsError, ProviderKey, Source
-from lyrics_options import MODE_RUN
+from lyrics_only import SEPARATOR, option_name
+from lyrics_options import MODE_RUN, ONLY_FLAG
 from lyrics_records import Manifest, run_folder
 from lyrics_run_folders import run_ids as run_ids
 from lyrics_silence import SILENCE_TIMEOUT_S
@@ -189,13 +191,16 @@ def album_argv(
     refetch_implausible: bool = False,
     changed_list: Path | None = None,
     interpreter: str = sys.executable,
+    only: Sequence[Source] = (),
     skip: Sequence[str] = (),
 ) -> list[str]:
     """The command running the album tool at *entry* on *album*: a run, never ``--fresh``.
 
     *refetch_untimed* adds ``--refetch-untimed``, the refetch pass's option,
     *refetch_implausible* ``--refetch-implausible``, and *changed_list*
-    ``--changed-list``, the file the child lists the MP3s it saved in;
+    ``--changed-list``, the file the child lists the MP3s it saved in; *only*, when
+    not empty, ``--only-providers`` naming those providers by the album tool's own
+    option names (`lyrics_only.option_name`), the revisit of an owed album; and
     *skip*, the `SKIP_OPTIONS` asked for, in their order, ends it.
     *interpreter* defaults to the one running the sweep, so the album tool gets the
     same installed packages. The album tool keeps its flags in its parser, so the
@@ -212,6 +217,8 @@ def album_argv(
         argv.append(IMPLAUSIBLE_OPTION)
     if changed_list is not None:
         argv += [CHANGED_LIST_OPTION, str(changed_list)]
+    if only:
+        argv += [ONLY_FLAG, SEPARATOR.join(option_name(source) for source in only)]
     argv += skip
     return argv
 

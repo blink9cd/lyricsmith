@@ -10,25 +10,16 @@ import sys
 import unittest
 from pathlib import Path
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_titles as lt  # noqa: E402 - import follows the sys.path bootstrap above
-
-# A registered profile, as test_lyrics_model registers its own: deadline=None because a
-# per-example deadline measures machine load, and too_slow suppressed because a cold
-# cache builds Hypothesis's unicode tables inside that health check's window.
-settings.register_profile(
-    "album_title_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_title_properties")
 
 
 class StripTitleSuffixesTest(fixtures.IsolatedCase):

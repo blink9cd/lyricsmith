@@ -1,11 +1,12 @@
 """lyricsmith sweep: run the album tool over a whole library, one album at a time.
 
-The entry point of the tool folder, and the only module here that writes output: the
-survey and the final report go to stdout, progress, notices and the album tool's own
-output to stderr. Importing it puts the folder's private modules, under ``src/``, on
-``sys.path``, resolved from this file's own location, then the shared libraries and the
-sibling tools it uses, the album tool among them, found by searching upward; importing
-the album tool puts the album tool's own private modules on the path too.
+The entry point of the tool folder, and with the silence pass (`sweep_silence`) the
+only module here that writes output: the survey and the final report go to stdout,
+progress, notices and the album tool's own output to stderr. Importing it puts the folder's private modules, under ``src/``, on
+``sys.path``, resolved from this file's own location, then the shared libraries the
+project's ``pyproject.toml`` names (``lyricsmith_project/``) and the sibling album
+tool's folder, both from fixed places; importing the album tool puts the album tool's
+own private modules on the path too.
 
 `main` parses the options, finds the library's albums through the shared walk, surveys
 them, and for ``--mode run`` hands the surveys to the sweep, which plans its visits
@@ -17,43 +18,66 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import functools
 import os
 import sys
-import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 #: The private modules' folder, beside this file.
 SRC_DIR = Path(__file__).resolve().parent / "src"
 sys.path.insert(0, str(SRC_DIR))
-# The shared libraries, and the sibling album tool, sit directly under the project
-# root, this file's grandparent.
-# See stdio_utf8/stdio_utf8.md, "How this project's tools import it", for why
-# each is ONE fixed candidate rather than a search up the ancestors, and why a
-# missing copy fails its import below by name.
-sys.path += [
-    str(Path(__file__).resolve().parents[1] / name)
-    for name in ("stdio_utf8", "library_walk", "album")
-]
+# The project's manifest reader, in its own folder under the project root: it puts the
+# shared libraries the project's pyproject.toml names on sys.path, or fails naming the
+# one that is missing (lyricsmith_project/lyricsmith_project.md).
+_PROJECT_DIR = Path(__file__).resolve().parents[1]
+_READER_DIR = str(_PROJECT_DIR / "lyricsmith_project")
+# Moved first on sys.path, so no same-named module can stand in for the reader.
+sys.path[:] = [_READER_DIR, *(entry for entry in sys.path if entry != _READER_DIR)]
+import lyricsmith_project  # noqa: E402 - import follows the sys.path bootstrap above
+
+# Run as a script, a failure exits 2 naming it; imported, it raises.
+lyricsmith_project.add_shared_libraries(exit_on_failure=__name__ == "__main__")
+# The sibling album tool, a fixed folder under the project root, added once, and
+# checked to be where `album` loads from before it is imported.
+_ALBUM_DIR = _PROJECT_DIR / "album"
+sys.path += [] if str(_ALBUM_DIR) in sys.path else [str(_ALBUM_DIR)]
+lyricsmith_project.confirm_from(
+    "album", _ALBUM_DIR, exit_on_failure=__name__ == "__main__"
+)
 
 import album  # noqa: E402 - import follows the sys.path bootstrap above
+import help_formatter  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_help  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_exit  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_prune_mode  # noqa: E402 - import follows the sys.path bootstrap above
 import stdio_utf8  # noqa: E402 - import follows the sys.path bootstrap above
+import sweep_accept  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_changed  # noqa: E402 - import follows the sys.path bootstrap above
-import sweep_child  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_lock  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_report  # noqa: E402 - import follows the sys.path bootstrap above
 from sweep_report import Words  # noqa: E402 - follows the bootstrap
 import sweep_run  # noqa: E402 - import follows the sys.path bootstrap above
+import sweep_silence  # noqa: E402 - import follows the sys.path bootstrap above
+import sweep_waiting  # noqa: E402 - import follows the sys.path bootstrap above
 from sweep_types import positive_int, seconds  # noqa: E402 - follows the bootstrap
+from sweep_wiring import Wiring, real_wiring  # noqa: E402 - follows the bootstrap
 from library_walk import DEFAULT_LIBRARY  # noqa: E402 - follows the bootstrap
-from lyrics_outcomes import printable  # noqa: E402 - follows the bootstrap
-from sweep_ledger import ledger_path  # noqa: E402 - follows the bootstrap
+from stdio_utf8 import spell_unsafe  # noqa: E402 - follows the bootstrap
+from sweep_ledger import ledger_path, read_records  # noqa: E402 - follows the bootstrap
+from sweep_options import (  # noqa: E402 - follows the bootstrap
+    EPILOG,
+    MODE_ACCEPT,
+    MODE_RUN,
+    MODE_SILENCE,
+    MODE_SURVEY,
+    build_options,
+    refuse_misplaced,
+)
 from sweep_survey import (  # noqa: E402 - follows the bootstrap
     AlbumSurvey,
     LibraryUnlistableError,
+    contained_albums,
     plan_visits,
     survey_library,
 )
@@ -64,81 +88,17 @@ ALBUM_ENTRY = Path(album.__file__).resolve()
 _PROG_FILE = Path(__file__).name
 
 
-MODE_SURVEY, MODE_RUN = "survey", "run"
 #: `os.name` on Windows, where a run is refused.
 _WINDOWS = "nt"
-#: The pause between albums, in seconds. Provisional, and conservative: tuned once the
-#: first limited run has measured what the providers tolerate.
+#: The pause between albums, in seconds. Conservative: it has run a whole library
+#: unchanged, and has not been tuned.
 DEFAULT_PAUSE_S = 10.0
-#: How many consecutive refused albums stop a run. Provisional, like the pause.
+#: How many consecutive refused albums stop a run. Conservative and untuned, like the
+#: pause.
 DEFAULT_STOP_AFTER = 3
-#: The options only a run uses, refused by the survey rather than silently ignored.
-_RUN_ONLY = (
-    ("offline", "--offline"),
-    *sweep_child.SKIP_OPTIONS,
-    ("limit", "--limit"),
-    ("restart", "--restart"),
-    ("changed_list", sweep_child.CHANGED_LIST_OPTION),
-)
-
-
-# --- Wiring --------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Wiring:
-    """What a run runs with: the album tool's child runner, the pause, the clock."""
-
-    run_child: sweep_child.ChildRunner
-    sleep: Callable[[float], None]
-    now: Callable[[], datetime]
-
-
-def _utc_now() -> datetime:
-    """Now, in UTC, which the ledger's time stamps are written in."""
-    return datetime.now(UTC)
-
-
-def real_wiring() -> Wiring:
-    """The real child runner, the real sleep, the UTC clock."""
-    return Wiring(sweep_child.run_child, time.sleep, _utc_now)
 
 
 # --- The options ---------------------------------------------------------------------
-
-
-_EPILOG = f"""\
-Prerequisites:
-  The album tool beside this one, with the project's dependencies installed
-  (mutagen, requests, urllib3, lyricsgenius); the album tool's own prerequisites
-  apply to every album a run visits. The library is a folder of Artist/Album
-  folders. A run needs a POSIX system (macOS, Linux); one run per library at a time.
-
-Output:
-  A survey prints each album's synced, untimed-only and no-lyrics tracks, the totals,
-  each track serving implausible lyrics under --refetch-implausible, the albums a run
-  would visit, and those the ledger holds as done, which a run passes
-  over; it only reads the ledger, writes nothing and contacts nothing. A run prints
-  a table of the albums it visited, each album's undo command, and, when it stopped
-  early, the command that resumes it. The album tool's own output, progress and
-  notices go to stderr. Each album visited is recorded in a ledger under
-  $XDG_STATE_HOME/lyricsmith/sweep/ or ~/.local/state/lyricsmith/sweep/, one per
-  library; a run skips the albums the ledger holds as done unless --restart is given.
-
-Exit codes:
-  0    finished: every album visited ended done (or offline), the album tool exiting {album.EXIT_OK}
-  1    finished, but an album did not: track errors, refused providers, an album
-       locked by another run, the per-album bound of {sweep_child.ALBUM_TIMEOUT_S:.0f} seconds, no run
-       recorded, an album the sweep could not run (its run folder unreadable, or
-       the album tool not started), a run the album tool made but could not record (its exit {album.EXIT_RECORD_NOT_WRITTEN};
-       the run is still tallied and its undo printed), an exit code the album
-       tool never gives, or the album tool left running when it would not stop
-  2    a usage problem, a library that is missing or cannot be listed, a ledger that
-       cannot be read or written (a run still prints its report so far), another
-       sweep already running on the library or its lock not taken, a run on Windows,
-       a --changed-list file whose last write failed, or its scratch folder not made
-  3    stopped after --stop-after consecutive albums whose providers only refused
-  130  interrupted (Ctrl-C); the album in hand is recorded, not done"""
 
 
 def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
@@ -147,8 +107,8 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         prog=prog,
         description="Run the album tool over every album of a library that has a "
         "track without synced lyrics, one album at a time.",
-        formatter_class=lyrics_help.HelpFormatter,
-        epilog=_EPILOG,
+        formatter_class=help_formatter.RawNoneHidingFormatter,
+        epilog=EPILOG,
     )
     parser.add_argument(
         "--library",
@@ -157,10 +117,19 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=(MODE_SURVEY, MODE_RUN),
+        choices=(MODE_SURVEY, MODE_RUN, MODE_ACCEPT, MODE_SILENCE),
         default=MODE_SURVEY,
         help="survey: count each album's tracks by the lyrics they hold, writing "
-        "nothing. run: run the album tool on each album a survey would visit.",
+        "nothing. run: run the album tool on each album a survey would visit. "
+        "accept: report, by the album tool's accept rules, what dropping each "
+        "album's runs and backups would remove; it removes them with --apply. "
+        "silence: measure every track's peak and list the silent ones, judged.",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="accept only: record each album's manifests outside the library, then "
+        "remove its .lyricsmith folder; without it accept only reports.",
     )
     parser.add_argument(
         "--lang",
@@ -187,7 +156,17 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "pass: the normal one, or the refetch pass beside --refetch-untimed. Not "
         "with --offline.",
     )
+    parser.add_argument(
+        "--owe-earlier-runs",
+        action="store_true",
+        help="A survey or run also counts as owed an album whose newest ledger line "
+        "is done but predates the owed outcome, owing each refusing provider it names "
+        "and each provider its run left out by a cool-down that could still answer "
+        "a track; a run asks it only those. Not with --restart, --offline or "
+        "--mode accept.",
+    )
     _add_run_options(parser)
+    parser.add_argument("--resume", type=Path, help=sweep_silence.RESUME_HELP)
     return parser
 
 
@@ -246,7 +225,8 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
         "--limit",
         type=positive_int,
         default=None,
-        help="run only: visit at most this many albums; every album left when omitted.",
+        help="run and silence only: visit at most this many albums; every album "
+        "left when omitted.",
     )
     parser.add_argument(
         "--restart",
@@ -263,44 +243,12 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def refuse_misplaced(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    """Exit 2 through *parser* when the survey is given an option only a run uses."""
-    if args.mode == MODE_SURVEY:
-        for attr, flag in _RUN_ONLY:
-            if getattr(args, attr) not in (None, False):
-                parser.error(f"{flag} cannot be used with --mode {MODE_SURVEY}")
-    # The album tool refuses the pair itself, so every album would only fail to run.
-    for refetch in sweep_report.refetch_options(
-        refetch_untimed=args.refetch_untimed,
-        refetch_implausible=args.refetch_implausible,
-    ):
-        if args.offline:
-            parser.error(f"{refetch} cannot be used with --offline")
-
-
-def _options(args: argparse.Namespace) -> sweep_run.SweepOptions:
-    """The sweep's options from the parsed command line."""
-    return sweep_run.SweepOptions(
-        lang=args.lang,
-        offline=args.offline,
-        pause_s=args.pause_seconds,
-        stop_after=args.stop_after,
-        limit=args.limit,
-        restart=args.restart,
-        refetch_untimed=args.refetch_untimed,
-        refetch_implausible=args.refetch_implausible,
-        skip=tuple(
-            flag for attr, flag in sweep_child.SKIP_OPTIONS if getattr(args, attr)
-        ),
-    )
-
-
 # --- The modes -----------------------------------------------------------------------
 
 
 def _notice(text: str) -> None:
     """One line of progress or notice, on stderr, its control characters made visible."""
-    print(printable(text), file=sys.stderr)
+    print(spell_unsafe(text), file=sys.stderr)
 
 
 def _skipped(name: str) -> None:
@@ -318,7 +266,7 @@ def _linked(name: str) -> None:
 
 def _survey(args: argparse.Namespace, library: Path) -> list[AlbumSurvey]:
     """Every album of *library* not reached through a link, surveyed in walk order."""
-    lang = sweep_run.lang_of(_options(args))
+    lang = sweep_run.lang_of(build_options(args))
     return survey_library(
         library,
         lang=lang,
@@ -329,30 +277,44 @@ def _survey(args: argparse.Namespace, library: Path) -> list[AlbumSurvey]:
 
 
 def _survey_mode(
-    args: argparse.Namespace, library: Path, _wiring: Wiring, _words: Words
+    args: argparse.Namespace, library: Path, wiring: Wiring, _words: Words
 ) -> int:
     """Print the survey; 2 if the ledger exists but cannot be read.
 
     The ledger is only read, as a run reads it, so the survey lists the albums a run
-    would visit and those it would pass over as done; a missing one is not made.
+    would visit and those it would pass over as done, and with --owe-earlier-runs
+    each album an earlier run owes, with its debt; a missing ledger is not made. The
+    providers' holds are read once, at the wiring's clock, so an owed album whose
+    whole debt is held is listed apart (`sweep_waiting`).
     """
     ledger = ledger_path(library, os.environ)
     try:
-        options = _options(args)
-        done = sweep_run.read_done(
-            ledger, sweep_run.lang_of(options), sweep_run.pass_of(options), _notice
-        )
+        records = read_records(ledger, _notice)
     except OSError as error:
         _notice(f"the ledger cannot be read: {ledger}: {error}")
         return sweep_run.EXIT_USAGE
     surveys = _survey(args, library)
-    plan = plan_visits(library, surveys, done, restart=False)
+    options = build_options(args)
+    read = sweep_run.ledger_plan(records, library, surveys, options, _notice)
+    plan = plan_visits(library, surveys, read.done, restart=False, last=read.challenged)
+    holds = sweep_waiting.read_holds(os.environ, wiring.now())
+    for warning in holds.warnings:
+        _notice(warning)
+    to_visit, waiting = sweep_waiting.split_waiting(
+        library, plan.to_visit, read.owed, holds.held
+    )
+    plan = dataclasses.replace(plan, to_visit=to_visit)
+    # An earlier run's album that waits is listed under the waiting heading alone.
+    waits = {passed.name for passed in waiting}
+    earlier = {name: d for name, d in read.earlier.items() if name not in waits}
     text = sweep_report.format_survey(
         surveys,
         library,
         plan,
         refetch_untimed=args.refetch_untimed,
         refetch_implausible=args.refetch_implausible,
+        earlier=earlier if args.owe_earlier_runs else None,
+        waiting=waiting,
     )
     print(text, end="")
     return sweep_run.EXIT_OK
@@ -377,14 +339,19 @@ def _sweep_held(
 ) -> int:
     """Visit each album that needs it and is not done, then print the report."""
     surveys = _survey(args, library)
-    options = _options(args)
+    options = build_options(args)
     with sweep_changed.changed_union(
         args.changed_list, _notice, restart=args.restart
     ) as changed:
         seams = sweep_run.SweepSeams(
             wiring.run_child, wiring.sleep, wiring.now, _notice, ALBUM_ENTRY
         )
-        seams = dataclasses.replace(seams, changed=changed)
+
+        def holds() -> sweep_waiting.HoldsRead:
+            """Every provider's hold, fresh, where and when the child will read them."""
+            return sweep_waiting.read_holds(os.environ, wiring.now())
+
+        seams = dataclasses.replace(seams, changed=changed, holds=holds)
         report = sweep_run.sweep(library, surveys, ledger, options, seams)
     print(
         sweep_report.format_sweep(
@@ -405,12 +372,42 @@ def _print_resume(args: argparse.Namespace, library: Path, words: Words) -> None
     command = sweep_report.resume_command(
         sweep_report.resume_prog(words, _PROG_FILE),
         library,
-        _options(args),
+        build_options(args),
         changed_list=args.changed_list,
     )
     # Escaped like the report: a library named with a control character prints as
     # visible escapes, so a pasted command then holds them as text.
-    print(printable(f"resume: {command}"))
+    print(spell_unsafe(f"resume: {command}"))
+
+
+def _accept_mode(
+    args: argparse.Namespace, library: Path, wiring: Wiring, words: Words
+) -> int:
+    """Hold the library's lock, accept each album, print the summary; 2 if it cannot.
+
+    The ledger's lock keeps it off a library a sweep run is visiting; it writes no
+    ledger line. The walk is the albums a run considers, linked ones dropped.
+    """
+    ledger = ledger_path(library, os.environ)
+    run = sweep_accept.AcceptRun(
+        library,
+        args.apply,
+        wiring.accept or sweep_accept.real_seams(),
+        wiring.now,
+        " ".join(sweep_report.resume_prog(words, _PROG_FILE)),
+        lambda text: print(text, end=""),
+        _notice,
+    )
+    try:
+        lyrics_prune_mode.refuse_unsafe_delete(MODE_ACCEPT)
+        with sweep_lock.held(sweep_lock.lock_path(ledger)):
+            albums = contained_albums(library, on_skip=_skipped, on_linked=_linked)
+            return sweep_accept.accept_library(run, albums)
+    except (sweep_lock.SweepLockError, lyrics_prune_mode.UnsafeDeleteError) as error:
+        _notice(f"{' '.join(words)}: {error}")
+        return sweep_run.EXIT_USAGE
+    except lyrics_exit.ReportNotWrittenError as error:
+        return lyrics_exit.lost_report_exit(error, " ".join(words), _notice)
 
 
 def album_prog(words: Words) -> Words:
@@ -421,6 +418,8 @@ def album_prog(words: Words) -> Words:
 _MODES: dict[str, Callable[[argparse.Namespace, Path, Wiring, Words], int]] = {
     MODE_SURVEY: _survey_mode,
     MODE_RUN: _run_mode,
+    MODE_ACCEPT: _accept_mode,
+    MODE_SILENCE: functools.partial(sweep_silence.silence_mode, prog_file=_PROG_FILE),
 }
 
 
@@ -458,11 +457,12 @@ def main(
         _notice(f"{parser.prog}: {error}")
         return sweep_run.EXIT_USAGE
     # Ctrl-C while the album tool runs, while its run is read, while the album's entry
-    # is made or written to the ledger, or during the pause is caught by the sweep:
-    # an entry in hand is written in full, then the report prints. Anywhere else (the
-    # survey, reading the ledger or writing a restart mark, taking the lock, or the
-    # few instructions either side of making an entry) it ends here: a run prints only
-    # the resume line, no report.
+    # is made or written to the ledger, or before the next album (its holds read, the
+    # pause, its link check, its album tool set up) is caught by the sweep: an entry in
+    # hand is written in full, then the report prints. Anywhere else (the survey,
+    # reading the ledger or writing a restart mark, taking the lock, or the few
+    # instructions either side of making an entry) it ends here: a run prints only the
+    # resume line, no report.
     except KeyboardInterrupt:
         _notice(f"{parser.prog}: interrupted")
         if args.mode == MODE_RUN:

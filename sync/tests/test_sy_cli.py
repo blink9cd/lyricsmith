@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
-import hashlib
 import io
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import unittest
 from collections.abc import Sequence
@@ -18,7 +18,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import sy_cases  # noqa: E402 - puts the tool, src/ and album's fixtures on the path
-import at_models  # noqa: E402 - import follows the sys.path bootstrap above
+import help_formatter  # noqa: E402 - reachable through the entry point's bootstrap
 import sy_embed  # noqa: E402 - import follows the sys.path bootstrap above
 import sy_lrc  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_model import Source  # noqa: E402 - follows the bootstrap above
@@ -26,20 +26,33 @@ from lyrics_sidecar import machine_label  # noqa: E402 - follows the bootstrap
 import sy_models  # noqa: E402 - import follows the sys.path bootstrap above
 import sy_modes  # noqa: E402 - import follows the sys.path bootstrap above
 import sync  # noqa: E402 - import follows the sys.path bootstrap above
-from sy_cases import fake_child, fake_opener, reply_for  # noqa: E402 - follows the bootstrap above
+from sy_cases import (  # noqa: E402 - follows the bootstrap above
+    DATA,
+    fake_child,
+    fake_opener,
+    invented_models,
+    reply_for,
+)
 from sweep_child import ChildResult  # noqa: E402 - follows the bootstrap above
-from sy_types import Label, Options, SetupError  # noqa: E402 - follows the bootstrap
+from sy_types import (  # noqa: E402 - follows the bootstrap
+    DEFAULT_EXTENSIONS,
+    DEMUXERS,
+    Action,
+    Label,
+    Options,
+    Outcome,
+    Planned,
+    SetupError,
+    TrackResult,
+)
 
 fixtures = sy_cases.fixtures
-DATA = b"an invented model file\n" * 100
-DIGEST = hashlib.sha256(DATA).hexdigest()
 #: Three invented models standing in for the pinned ones.
-TINY = tuple(
-    at_models.ModelFile(name, f"https://example.invalid/{name}", len(DATA), DIGEST)
-    for name in ("one.bin", "two.bin", "three.bin")
-)
+TINY = invented_models("one.bin", "two.bin", "three.bin")
 LINES = ("la la", "lo lo")
 VERSION = "9.9.9"
+#: The name the dispatcher gives the tool, which most cases run it under.
+DISPATCHED = "lyricsmith sync"
 
 
 class RecordingAlbum:
@@ -79,20 +92,29 @@ class CliTest(sy_cases.IsolatedCase):
         )
 
     def main(
-        self, *argv: str, seams: sy_modes.Seams | None = None
+        self,
+        *argv: str,
+        seams: sy_modes.Seams | None = None,
+        prog: str | None = DISPATCHED,
     ) -> tuple[int, str, str]:
-        """main() on *argv* plus the model folder; its exit code, stdout and stderr."""
+        """main() on *argv* plus the model folder, named *prog*; its code and output."""
         out, err = io.StringIO(), io.StringIO()
         full = [*argv, "--model-dir", str(self.models)]
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = sync.main(
-                full, seams=seams or self.seams(), opener=fake_opener(DATA)
+                full, seams=seams or self.seams(), opener=fake_opener(DATA), prog=prog
             )
         return code, out.getvalue(), err.getvalue()
 
     def listing(self) -> list[str]:
         """Every name under the album folder, sorted."""
         return sorted(str(p.relative_to(self.album)) for p in self.album.rglob("*"))
+
+    def test_the_parser_uses_the_shared_formatter(self) -> None:
+        self.assertIs(
+            sync.build_parser(self.models).formatter_class,
+            help_formatter.RawNoneHidingFormatter,
+        )
 
     def test_a_dry_run_prints_the_plan_and_times_nothing(self) -> None:
         before = self.listing()
@@ -108,6 +130,201 @@ class CliTest(sy_cases.IsolatedCase):
         self.assertEqual(code, 1)
         self.assertIn("ERROR text", out)
 
+    def test_a_dry_run_prints_a_refusals_reason_on_its_own_line(self) -> None:
+        self.audio.with_suffix(".txt").write_bytes(b"\xff\xfe\xfa")
+        _, out, _ = self.main("--path", str(self.album), "--dry-run")
+        self.assertNotIn("\\x0a", out)
+        rows = out.splitlines()
+        (row,) = (index for index, line in enumerate(rows) if "ERROR text" in line)
+        self.assertTrue(rows[row + 1].startswith("    01 A.txt"), rows[row + 1])
+
+    def test_a_flac_only_album_embeds_nothing_and_keeps_its_sidecar(self) -> None:
+        flac_album = self.tmp / "Flac"
+        track = fixtures.TrackSpec("01 F.flac", seconds=1.0, txt="\n".join(LINES))
+        (flac,) = fixtures.build_album(flac_album, (track,))
+        argv = ("--path", str(flac_album), "--extensions", "flac")
+        code, out, _ = self.main(*argv, "--embed")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.embed.calls, [])
+        self.assertIn(f"stays a sidecar: {flac.with_suffix('.lrc')}", out)
+        self.assertNotIn("embed not done", out)
+        code, out, _ = self.main(*argv, "--overwrite")
+        self.assertEqual(code, 0)
+        self.assertNotIn("embed them:", out)
+
+    def test_ctrl_c_while_timing_prints_the_footer_and_exits_130(self) -> None:
+        track = fixtures.TrackSpec("02 B.mp3", seconds=1.0, txt="\n".join(LINES))
+        (second,) = fixtures.build_album(self.album, (track,))
+        timed = fake_child(reply_for(LINES))
+
+        def child(
+            argv: Sequence[str], *, timeout: float
+        ) -> subprocess.CompletedProcess[str]:
+            """Times the first track; Ctrl-C lands while the second is timed."""
+            if self.audio.with_suffix(".lrc").exists():
+                raise KeyboardInterrupt
+            return timed(argv, timeout=timeout)
+
+        seams = dataclasses.replace(self.seams(), run=child)
+        code, out, _ = self.main("--path", str(self.album), "--embed", seams=seams)
+        self.assertEqual(code, 130)
+        self.assertEqual(self.embed.calls, [])
+        self.assertRegex(out, r"timed +01 A\.mp3")
+        self.assertIn("interrupted: timing stopped with 1 track(s) left", out)
+        self.assertIn(
+            f"embed them: lyricsmith album --offline --album {self.album}", out
+        )
+        self.assertFalse(second.with_suffix(".lrc").exists())
+
+    def test_ctrl_c_while_a_written_tracks_row_prints_keeps_its_album_command(
+        self,
+    ) -> None:
+        printed = sy_modes.say
+        rows: list[str] = []
+
+        def say(line: str) -> None:
+            """Ctrl-C lands as the first track's timed row is printed, and only then."""
+            if not rows:
+                rows.append(line)
+                raise KeyboardInterrupt
+            printed(line)
+
+        self.enterContext(mock.patch.object(sy_modes, "say", say))
+        code, out, _ = self.main("--path", str(self.album), "--embed")
+        self.assertEqual(code, 130)
+        self.assertRegex(rows[0], r"timed +01 A\.mp3")
+        self.assertEqual(self.embed.calls, [])
+        self.assertIn("interrupted: timing stopped with 0 track(s) left", out)
+        self.assertIn(
+            f"embed them: lyricsmith album --offline --album {self.album}", out
+        )
+
+    def test_ctrl_c_once_a_tracks_lrc_is_in_place_keeps_its_album_command(
+        self,
+    ) -> None:
+        write = sy_lrc.write_lrc
+
+        def write_then_interrupt(audio: Path, text: str) -> None:
+            """The .lrc is replaced into place; Ctrl-C lands before the write returns."""
+            write(audio, text)
+            raise KeyboardInterrupt
+
+        self.enterContext(mock.patch.object(sy_lrc, "write_lrc", write_then_interrupt))
+        code, out, _ = self.main("--path", str(self.album), "--embed")
+        self.assertEqual(code, 130)
+        self.assertTrue(self.audio.with_suffix(".lrc").exists())
+        self.assertEqual(self.embed.calls, [])
+        self.assertIn("interrupted: timing stopped with 0 track(s) left", out)
+        self.assertIn("\ntimed 1\n", out)
+        self.assertIn(
+            f"embed them: lyricsmith album --offline --album {self.album}", out
+        )
+
+    def test_ctrl_c_once_a_retimed_lrc_is_in_place_keeps_its_album_command(
+        self,
+    ) -> None:
+        self.assertEqual(self.main("--path", str(self.album))[0], 0)
+        write = sy_lrc.write_lrc
+
+        def write_then_interrupt(audio: Path, text: str) -> None:
+            """The new .lrc is replaced into place; Ctrl-C lands before the write returns."""
+            write(audio, text)
+            raise KeyboardInterrupt
+
+        self.enterContext(mock.patch.object(sy_lrc, "write_lrc", write_then_interrupt))
+        argv = ("--path", str(self.album), "--embed", "--overwrite")
+        code, out, _ = self.main(*argv)
+        self.assertEqual(code, 130)
+        self.assertEqual(self.embed.calls, [])
+        self.assertIn("interrupted: timing stopped with 0 track(s) left", out)
+        self.assertIn("\nre-timed 1\n", out)
+        self.assertIn(
+            f"embed them: lyricsmith album --offline --album {self.album}", out
+        )
+
+    def test_ctrl_c_beside_an_old_stamps_only_lrc_names_no_album_command(
+        self,
+    ) -> None:
+        self.audio.with_suffix(".lrc").write_bytes(b"[00:01.00]\n[00:02.00]\n")
+
+        def child(
+            argv: Sequence[str], *, timeout: float
+        ) -> subprocess.CompletedProcess[str]:
+            """Ctrl-C lands while the track is timed, before any .lrc is written."""
+            raise KeyboardInterrupt
+
+        seams = dataclasses.replace(self.seams(), run=child)
+        code, out, _ = self.main("--path", str(self.album), "--embed", seams=seams)
+        self.assertEqual(code, 130)
+        self.assertIn("interrupted: timing stopped with 1 track(s) left", out)
+        self.assertIn("\nnothing to time\n", out)
+        self.assertNotIn("embed them:", out)
+
+    def test_an_lrc_entry_that_is_no_new_file_is_never_named(self) -> None:
+        planned = Planned(self.audio, Action.TIME, lines=LINES)
+        lrc = self.audio.with_suffix(".lrc")
+        # A regular file outside the album: followed, the link would read as a new .lrc.
+        outside = self.tmp / "outside.lrc"
+        outside.write_bytes(b"[00:01.00]la la\n")
+        cases = (
+            ("a folder", lrc.mkdir, lrc.rmdir),
+            ("a dangling link", lambda: lrc.symlink_to("gone.lrc"), lrc.unlink),
+            ("a link to a file", lambda: lrc.symlink_to(outside), lrc.unlink),
+        )
+        for name, make, remove in cases:
+            with self.subTest(entry=name):
+                in_hand = sy_modes.InHand(0, planned, sy_modes.lrc_identity(lrc))
+                make()
+                try:
+                    self.assertEqual(sy_modes._written_in_hand(in_hand, 0), ())
+                finally:
+                    remove()
+
+    def test_only_a_new_lrc_for_the_track_in_hand_is_named(self) -> None:
+        lrc = self.audio.with_suffix(".lrc")
+        timed = Planned(self.audio, Action.TIME, lines=LINES)
+        skipped = Planned(self.audio, Action.SKIP_NO_TEXT)
+        fresh = sy_modes.InHand(0, timed, None)
+        lrc.write_bytes(b"[00:01.00]la la\n")
+        named = TrackResult(self.audio, Outcome.TIMED)
+        self.assertEqual(sy_modes._written_in_hand(fresh, 0), (named,))
+        self.assertEqual(sy_modes._written_in_hand(fresh, 1), ())
+        self.assertEqual(sy_modes._written_in_hand(None, 0), ())
+        unplanned = sy_modes.InHand(0, skipped, None)
+        self.assertEqual(sy_modes._written_in_hand(unplanned, 0), ())
+        same = sy_modes.InHand(0, timed, sy_modes.lrc_identity(lrc))
+        self.assertEqual(sy_modes._written_in_hand(same, 0), ())
+
+    def test_lrc_or_txt_extensions_are_refused(self) -> None:
+        for extensions in ("lrc", "mp3,.TXT"):
+            with self.subTest(extensions=extensions):
+                argv = ("--path", str(self.album), "--extensions", extensions)
+                code, _, err = self.main(*argv)
+                self.assertEqual(code, 2)
+                self.assertIn("not audio", err)
+
+    def test_an_extension_with_no_known_demuxer_is_refused(self) -> None:
+        for given, named in (
+            ("mp3,xyz", "xyz: no audio demuxer is allowed for it;"),
+            ("qqq,mp3,xyz", "qqq, xyz: no audio demuxer is allowed for them;"),
+        ):
+            with self.subTest(extensions=given):
+                argv = ("--path", str(self.album), "--extensions", given)
+                code, _, err = self.main(*argv)
+                self.assertEqual(code, 2)
+                self.assertIn(named, err)
+                self.assertIn(", ".join(sorted(DEMUXERS)), err)
+
+    def test_every_extension_with_a_demuxer_is_accepted(self) -> None:
+        argv = ("--path", str(self.album), "--extensions", ",".join(DEMUXERS))
+        code, out, _ = self.main(*argv, "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertRegex(out, r"time +01 A\.mp3")
+
+    def test_the_parser_defaults_to_the_shared_extensions(self) -> None:
+        default = sync.build_parser(self.models).get_default("extensions")
+        self.assertEqual(default, DEFAULT_EXTENSIONS)
+
     def test_a_dry_run_with_a_setup_problem_exits_2(self) -> None:
         broken = dataclasses.replace(self.seams(), which=lambda name: None)
         code, out, _ = self.main("--path", str(self.album), "--dry-run", seams=broken)
@@ -118,7 +335,7 @@ class CliTest(sy_cases.IsolatedCase):
         code, out, _ = self.main("--path", str(self.album))
         self.assertEqual(code, 0)
         text = self.audio.with_suffix(".lrc").read_text(encoding="utf-8")
-        tool = sync.transcribe.read_tool_version(sync.PROJECT_ROOT.parent)
+        tool = sync.lyricsmith_project.project_version()
         self.assertEqual(
             text.splitlines()[0], sy_lrc.re_line(Label(tool, VERSION, VERSION))
         )
@@ -127,6 +344,20 @@ class CliTest(sy_cases.IsolatedCase):
         self.assertIn(
             f"embed them: lyricsmith album --offline --album {self.album}", out
         )
+
+    def test_run_alone_its_commands_name_the_entry_files(self) -> None:
+        _, out, _ = self.main("--path", str(self.album), prog=None)
+        self.assertIn(f"embed them: album.py --offline --album {self.album}", out)
+        (self.models / "two.bin").write_bytes(b"x")
+        _, _, err = self.main("--path", str(self.album), prog=None)
+        folder = shlex.quote(str(self.models))
+        fetch = f"fetch them: sync.py --mode fetch-models --model-dir {folder}"
+        self.assertIn(fetch, err)
+
+    def test_dispatched_its_commands_name_the_dispatcher(self) -> None:
+        (self.models / "two.bin").write_bytes(b"x")
+        _, _, err = self.main("--path", str(self.album))
+        self.assertIn("fetch them: lyricsmith sync --mode fetch-models", err)
 
     def test_embed_runs_album_offline_on_each_written_folder(self) -> None:
         code, out, _ = self.main("--path", str(self.album), "--embed")
@@ -214,7 +445,9 @@ class CliTest(sy_cases.IsolatedCase):
             "run", None, frozenset({"mp3"}), False, False, False, self.models
         )
         with self.assertRaises(SetupError):
-            sy_modes.run_mode(options, self.seams(), tool_version=VERSION)
+            sy_modes.run_mode(
+                options, self.seams(), tool_version=VERSION, prog=("sync.py",)
+            )
 
     def test_help_shows_each_default_and_the_epilog(self) -> None:
         out = io.StringIO()

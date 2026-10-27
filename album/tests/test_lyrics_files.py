@@ -98,12 +98,35 @@ class AtomicWriteTest(fixtures.IsolatedCase):
     def test_a_write_that_does_not_read_back_is_an_error(self) -> None:
         target = self.tmp / "c.txt"
 
-        def short_write(path: Path, data: bytes) -> None:
+        def short_write(path: Path, data: bytes, *, mode: int) -> None:
             path.write_bytes(data[:-1])
 
         with (
             mock.patch.object(lyrics_files, "replace_atomically", short_write),
             self.assertRaises(lm.ReadBackError),
+        ):
+            lyrics_files.write_confirmed(target, b"abc")
+
+    @unittest.skipIf(not getattr(os, "O_NOFOLLOW", 0), "no O_NOFOLLOW to refuse a link")
+    def test_a_link_swapped_in_after_the_replace_is_refused_on_read_back(self) -> None:
+        target = self.tmp / "c.txt"
+        elsewhere = self.tmp / "elsewhere.txt"
+        elsewhere.write_bytes(b"abc")
+        real = lyrics_files.replace_atomically
+
+        def replacing_then_linking(path: Path, data: bytes, *, mode: int) -> None:
+            real(path, data, mode=mode)
+            path.unlink()
+            try:
+                path.symlink_to(elsewhere)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"symlinks unavailable: {error}")
+
+        with (
+            mock.patch.object(
+                lyrics_files, "replace_atomically", replacing_then_linking
+            ),
+            self.assertRaises(OSError),
         ):
             lyrics_files.write_confirmed(target, b"abc")
 

@@ -28,9 +28,11 @@ for old argparse, not against CPython's current output.
 
 Entry point assumptions
 -----------------------
-Importers bind :class:`ReqAwareDefaultsFormatter` as their parser's ``formatter_class``
-and nothing else. The module is pure -- no I/O, no filesystem access, no config -- so it
-carries no ``stdio_utf8`` dependency and cannot fail at import time.
+Importers bind :class:`ReqAwareDefaultsFormatter` -- or :class:`RawNoneHidingFormatter`,
+for a CLI whose epilog is laid out by hand and whose ``None`` defaults mean "not given"
+-- as their parser's ``formatter_class`` and nothing else. The module is pure -- no I/O,
+no filesystem access, no config -- so it carries no ``stdio_utf8`` dependency and cannot
+fail at import time.
 """
 
 from __future__ import annotations
@@ -54,5 +56,26 @@ class ReqAwareDefaultsFormatter(argparse.ArgumentDefaultsHelpFormatter):
         ``SUPPRESS`` handling and its ``%(default)s`` interpolation intact.
         """
         if action.required:
+            return action.help
+        return super()._get_help_string(action)
+
+
+class RawNoneHidingFormatter(
+    ReqAwareDefaultsFormatter, argparse.RawDescriptionHelpFormatter
+):
+    """Show real defaults; hide them for required options and a ``None`` default.
+
+    Also keeps the description's and epilog's line breaks, for an epilog that lays out
+    prerequisites or exit codes as a table. The two bases override different methods, so
+    they compose. A default of ``None`` is no value a person could type, so it is not
+    shown: each such option's help should say instead what leaving it out means.
+    """
+
+    def _get_help_string(self, action: argparse.Action) -> str | None:
+        """Return *action*'s help, with its default appended unless that is ``None``.
+
+        A non-``None`` default delegates, so the required-option override still applies.
+        """
+        if action.default is None:
             return action.help
         return super()._get_help_string(action)

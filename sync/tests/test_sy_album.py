@@ -1,7 +1,7 @@
 """The sync tool's .lrc as album reads it: labeled machine timed, its lines intact.
 
-album's `machine_label` is the one reader of the label, for both tools: the sync tool
-plans a re-time from the label `plan_sidecars` reports.
+The sync tool reads the label only through album's `machine_label`: it plans a re-time
+from the label `plan_sidecars` reports.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ TEXT = sy_lrc.lrc_text(Label("0", "0", "0"), ("A gull", "[Chorus]"), (1.0, 2.0))
 
 
 class AlbumAgreesTest(sy_cases.IsolatedCase):
-    """The file the sync tool writes, as album, its one label reader, reads it."""
+    """The file the sync tool writes, as album reads it."""
 
     def test_album_labels_it_machine_timed(self) -> None:
         self.assertIs(lsc.machine_label(TEXT), lm.Source.MACHINE_TIMED)

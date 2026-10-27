@@ -112,6 +112,7 @@ class CompareCase(fixtures.IsolatedCase):
             stages or run_fakes.make_stages(run_fakes.FakeRunFolder()),
             lang=run_fakes.LANG,
             deadline_s=run_fakes.DEADLINE_S,
+            notice=self.fail,
         )
 
     def one(

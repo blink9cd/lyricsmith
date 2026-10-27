@@ -134,6 +134,48 @@ def printable(text: str) -> str:
     return text.encode(ENCODING, ESCAPE_ERRORS).decode(ENCODING)
 
 
+#: The first code point past Latin-1: below it an escape takes two hex digits.
+_LATIN1_END = 0x100
+
+#: Every control character a terminal can act on -- C0 (tab and newline among them),
+#: DEL and C1 -- then the direction marks (the Arabic letter mark among them),
+#: embeddings, overrides and isolates and the line and paragraph separators, each of
+#: which can make a printed name read as another.
+_UNSAFE_CODES = (
+    *range(0x00, 0x20),
+    0x7F,
+    *range(0x80, 0xA0),
+    0x061C,
+    0x200E,
+    0x200F,
+    *range(0x202A, 0x202F),
+    *range(0x2066, 0x206A),
+    0x2028,
+    0x2029,
+)
+
+#: ``str.translate`` table: each unsafe code point to its escape, lowercase hex, never
+#: Python's short forms -- a tab is ``\x09``, not ``\t``.
+_UNSAFE_ESCAPES = {
+    code: f"\\x{code:02x}" if code < _LATIN1_END else f"\\u{code:04x}"
+    for code in _UNSAFE_CODES
+}
+
+
+# fuzz-target
+def spell_unsafe(text: str) -> str:
+    r"""Return *text* with each character a terminal would act on spelled as its escape.
+
+    C0, DEL and C1 print as ``\xNN``; the direction marks, embeddings, overrides,
+    isolates and the line and paragraph separators as ``\uXXXX``. Every other
+    character -- accents, CJK, emoji, a lone surrogate -- comes back unchanged. A
+    backslash is not escaped, so the result is a fixed point. Unlike ``printable``,
+    which escapes only what UTF-8 cannot encode, this guards a terminal from a name
+    the tool did not write; a message can need both.
+    """
+    return text.translate(_UNSAFE_ESCAPES)
+
+
 def print_escaped(line: str, stream: IO[str]) -> None:
     """Print one line to *stream*, escaped so that a lone surrogate cannot make it raise.
 

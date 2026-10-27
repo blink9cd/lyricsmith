@@ -98,6 +98,22 @@ def challenge(status: int) -> lp.HttpStatusError:
     return lp.HttpStatusError(lm.Source.GENIUS, status)
 
 
+def ticker(clock: FakeClock, spends: list[float]) -> Callable[[], float]:
+    """A call-time reader moving *clock* on by each of *spends* in turn, then reading it.
+
+    Given as a fake client's clock, it makes each answer take the time named, so a call
+    spends its deadline without sleeping.
+    """
+    pending = list(spends)
+
+    def tick() -> float:
+        """Spend the next answer's time, then read the clock."""
+        clock.now += pending.pop(0) if pending else 0.0
+        return clock.now
+
+    return tick
+
+
 def paced_genius(client: FakeGeniusClient, clock: FakeClock) -> lg.GeniusProvider:
     """A GeniusProvider on *client*, with the fake clock and sleeper."""
     client.clock = clock

@@ -3,8 +3,10 @@
 A run and a compare each resolve the optional providers, their cool-downs and the
 Genius key, ask the providers, and print the summary; a dry run plans the album and
 prints the plan. `discover`, the album and its tracks with each link skipped, is
-shared with a strip. The entry point passes its own notice writer, so
-this module owns no stream of its own: only the summary goes to stdout from here.
+shared with a strip. A run and a compare each hand on only the steps of the
+providers --only-providers names, whatever table the wiring built (`lyrics_only`).
+The entry point passes its own notice writer, so this module owns no stream of its
+own: only the summary goes to stdout from here.
 """
 
 from __future__ import annotations
@@ -16,12 +18,14 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import lyrics_album
+import lyrics_breakers
 import lyrics_changed
 import lyrics_choices
 import lyrics_compare
 import lyrics_cooldown
 import lyrics_exit
 import lyrics_modes
+import lyrics_only
 import lyrics_run
 import lyrics_silence
 import lyrics_summary
@@ -68,6 +72,8 @@ def _report_cooling_on_failure(
     for source in lyrics_cooldown.STATE_FILES:
         with contextlib.suppress(OSError):
             _cooling_report(source, chosen, providers, notice)
+    with contextlib.suppress(OSError):
+        lyrics_breakers.report_write_errors(providers, notice)
 
 
 def _dry_run(
@@ -110,12 +116,18 @@ def run_mode(
     if args.dry_run:
         return _dry_run(args, album, tracks, wiring, prog, notice)
     no_lyrics_genres = lyrics_choices.no_lyrics_choice(args, wiring.environ, notice)
-    chosen = lyrics_choices.optional_providers(args, wiring.environ, wiring.now, notice)
+    # Genius first: whether a key was found decides whether its breaker file is read.
     key, label = lyrics_choices.genius_choice(args, wiring.environ, notice)
+    chosen = lyrics_choices.optional_providers(
+        args, wiring.environ, wiring.now, notice, genius=key is not None
+    )
     providers = (
         {}
         if args.offline
-        else wiring.build_providers(key, PROVIDER_DEADLINE_S, chosen.settings)
+        else lyrics_only.restrict(
+            wiring.build_providers(key, PROVIDER_DEADLINE_S, chosen.settings),
+            args.only_providers,
+        )
     )
     genius = GeniusState.CONFIGURED if key is not None else GeniusState.ABSENT
     lang = args.lang or DEFAULT_LANG
@@ -132,6 +144,7 @@ def run_mode(
         youtube_music=chosen.reader(Source.YOUTUBE_MUSIC, providers),
         ffmpeg=ffmpeg,
         tekstowo=chosen.reader(Source.TEKSTOWO, providers),
+        retried=chosen.retried(),
     )
     try:
         report = lyrics_run.run_album(
@@ -150,6 +163,7 @@ def run_mode(
     with lyrics_exit.report_writes():
         youtube_label = _cooling_report(Source.YOUTUBE_MUSIC, chosen, providers, notice)
         tekstowo_label = _cooling_report(Source.TEKSTOWO, chosen, providers, notice)
+        lyrics_breakers.report_write_errors(providers, notice)
         written = lyrics_changed.write_changed_list(
             args.changed_list,
             lambda: lyrics_changed.run_changed(album, report.tracks),
@@ -176,9 +190,14 @@ def compare_mode(
     """Compare each untimed-only track's lyrics with the providers' answers; write nothing."""
     album, found = discover(args, notice)
     tracks = lyrics_album.track_selection(album, found, args.track)
-    chosen = lyrics_choices.optional_providers(args, wiring.environ, wiring.now, notice)
     key, label = lyrics_choices.genius_choice(args, wiring.environ, notice)
-    providers = wiring.build_providers(key, PROVIDER_DEADLINE_S, chosen.settings)
+    chosen = lyrics_choices.optional_providers(
+        args, wiring.environ, wiring.now, notice, genius=key is not None
+    )
+    providers = lyrics_only.restrict(
+        wiring.build_providers(key, PROVIDER_DEADLINE_S, chosen.settings),
+        args.only_providers,
+    )
     try:
         report = lyrics_compare.compare_album(
             album,
@@ -187,6 +206,7 @@ def compare_mode(
             wiring.stages,
             lang=args.lang or DEFAULT_LANG,
             deadline_s=PROVIDER_DEADLINE_S,
+            notice=notice,
         )
     except BaseException:
         _report_cooling_on_failure(chosen, providers, notice)
@@ -194,6 +214,7 @@ def compare_mode(
     with lyrics_exit.report_writes():
         youtube_label = _cooling_report(Source.YOUTUBE_MUSIC, chosen, providers, notice)
         tekstowo_label = _cooling_report(Source.TEKSTOWO, chosen, providers, notice)
+        lyrics_breakers.report_write_errors(providers, notice)
         summary = lyrics_summary.format_compare(
             report,
             album=album,

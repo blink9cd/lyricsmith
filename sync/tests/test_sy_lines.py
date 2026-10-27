@@ -44,8 +44,8 @@ def _alignment(draw: hs.DrawFn) -> tuple[tuple[int, ...], tuple[sl.Span, ...], i
 
 class LineStartsTest(sy_cases.IsolatedCase):
     def test_a_separator_early_in_a_pause_does_not_move_the_next_line(self) -> None:
-        # The bug the first trial run had: the separator before line 2 sits at frame 2,
-        # where the pause after line 1 begins; line 2 is sung at frame 50.
+        # The separator before line 2 sits at frame 2, where the pause after line 1
+        # begins; line 2 is sung at frame 50, and must start there.
         line_of = (0, NO_LINE, 1)
         spans = (S(0, 1, 0.9), S(2, 3, 0.9), S(50, 51, 0.9))
         self.assertEqual(sl.line_starts(line_of, spans, 2, 0.5), (0.0, 25.0))
@@ -54,8 +54,15 @@ class LineStartsTest(sy_cases.IsolatedCase):
         line_of = (1,)
         self.assertEqual(sl.line_starts(line_of, (S(8, 9, 0.5),), 2, 0.5), (4.0, 4.0))
 
-    def test_a_last_line_with_no_letters_takes_the_previous_start(self) -> None:
-        self.assertEqual(sl.line_starts((0,), (S(8, 9, 0.5),), 2, 0.5), (4.0, 4.0))
+    def test_a_last_line_with_no_letters_starts_where_the_last_sung_line_ends(
+        self,
+    ) -> None:
+        # A trailing [Outro] stamped at the last sung line's start would tie with it,
+        # and a player showing the later of two tied lines would hide the sung one.
+        line_of = (0, 0, NO_LINE, 1, 1)
+        spans = (S(2, 3, 0.5), S(4, 5, 0.5), S(5, 6, 0.5), S(8, 9, 0.5), S(10, 12, 0.5))
+        starts = sl.line_starts(line_of, spans, 4, 0.5)
+        self.assertEqual(starts, (1.0, 4.0, 6.0, 6.0))
 
     def test_no_letters_at_all_start_at_zero(self) -> None:
         self.assertEqual(sl.line_starts((), (), 2, 0.5), (0.0, 0.0))
@@ -75,6 +82,26 @@ class LineStartsTest(sy_cases.IsolatedCase):
 class MeasureTest(sy_cases.IsolatedCase):
     def test_frames_needed_counts_a_blank_between_repeats(self) -> None:
         self.assertEqual(sl.frames_needed((5, 5, 6)), 4)
+
+    def test_frames_needed_adds_no_blank_between_different_tokens(self) -> None:
+        self.assertEqual(sl.frames_needed((5, 6, 7)), 3)
+
+    def test_a_track_with_nothing_aligned_measures_zero_and_is_low_confidence(
+        self,
+    ) -> None:
+        timing = sl.measure((), (), 2, 0.02)
+        self.assertEqual(timing, sl.Timing((0.0, 0.0), 0.0, 0.0, 0.0, 2))
+        self.assertTrue(sl.low_confidence(timing))
+        self.assertFalse(sl.first_line_stretched(timing))
+
+    def test_a_first_line_well_over_twice_the_median_span_is_stretched(self) -> None:
+        # Line spans of 5, 2 and 2 frames: the first is two and a half times the median.
+        line_of = (0, 0, NO_LINE, 1, 1, NO_LINE, 2, 2)
+        spans = (
+            S(0, 1, 0.5), S(4, 5, 0.5), S(5, 6, 0.5), S(6, 7, 0.5),
+            S(7, 8, 0.5), S(8, 9, 0.5), S(9, 10, 0.5), S(10, 11, 0.5),
+        )  # fmt: skip
+        self.assertTrue(sl.first_line_stretched(sl.measure(line_of, spans, 3, 0.02)))
 
     def test_confidence_is_the_median_of_each_lines_mean(self) -> None:
         line_of = (0, 0, NO_LINE, 1, NO_LINE, 2)

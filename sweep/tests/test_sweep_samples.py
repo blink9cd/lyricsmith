@@ -7,7 +7,8 @@ then run in process, with the arguments and the state directory the README's com
 lines give, from the folder the library sits in. Every block, commands and outputs,
 must appear in the README as written, each output must equal its block with its
 placeholders filled in, and the undo must hand back each album as it was built, byte
-for byte.
+for byte. The silence pass's preview and its resume run with the host's real ffmpeg,
+and are skipped without one.
 """
 
 from __future__ import annotations
@@ -16,8 +17,10 @@ import contextlib
 import io
 import os
 import shlex
+import shutil
 import subprocess
 import sys
+import unittest
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from unittest import mock
@@ -48,6 +51,8 @@ _SWEEP_PREFIX = (
     "python",
     "$TOOLS/sweep/sweep.py",
 )
+#: ffmpeg on PATH at import, or None: the silence pass's steps need a real one.
+_FFMPEG = shutil.which("ffmpeg")
 #: How each undo command line starts, as the shell splits it.
 _UNDO_PREFIX = ("python", "$TOOLS/album/album.py")
 
@@ -79,6 +84,16 @@ XDG_STATE_HOME="$PWD/state" python "$TOOLS/sweep/sweep.py" \\
   --library library --mode run --offline --pause-seconds 0
 """
 
+SILENCE_COMMAND = """\
+XDG_STATE_HOME="$PWD/state" python "$TOOLS/sweep/sweep.py" \\
+  --library library --mode silence --limit 1
+"""
+
+SILENCE_RESUME_COMMAND = """\
+XDG_STATE_HOME="$PWD/state" python "$TOOLS/sweep/sweep.py" \\
+  --mode silence --library "<library>" --resume "<list>"
+"""
+
 UNDO_COMMANDS = """\
 python "$TOOLS/album/album.py" \\
   --album "library/The Invented Quartet/Sample Album" --mode undo --run-id "<run-id-1>"
@@ -103,12 +118,43 @@ note: an album whose lyrics were embedded by other tools may have each track
 
 RUN = """\
 already done: 0
-album                                           run  exit  outcome  written  unchanged  not found  no lyrics expected  silent  kept  errors  flagged  refusing
-The Invented Quartet/Sample Album        <run-id-1>     0  offline        2          0          3                   1       0     0       0        1         0
-The Made-Up Trio/Untimed Album           <run-id-2>     0  offline        2          0          0                   0       0     0       0        0         0
+album                                           run  exit  outcome  written  unchanged  not found  removed  no lyrics expected  silent  kept  errors  flagged  refusing
+The Invented Quartet/Sample Album        <run-id-1>     0  offline        2          0          2        1                   1       0     0       0        1         0
+The Made-Up Trio/Untimed Album           <run-id-2>     0  offline        2          0          0        0                   0       0     0       0        0         0
+written: embedded 4
+removed: placeholder 1
 The Invented Quartet/Sample Album  undo: album.py --album '<library>/The Invented Quartet/Sample Album' --mode undo --run-id <run-id-1>
 The Made-Up Trio/Untimed Album  undo: album.py --album '<library>/The Made-Up Trio/Untimed Album' --mode undo --run-id <run-id-2>
 finished; albums left: 0
+"""
+
+SILENCE_PREVIEW = """\
+already done: 0
+albums measured: 1
+tracks measured: 6
+silent: 6
+  likely meant: 0
+  likely a ripping mistake: 6
+  unsure: 0
+not measured: 0
+limit reached; albums left: 2
+list: <list>
+page: <page>
+resume: sweep.py --mode silence --library <library> --resume <list>
+"""
+
+SILENCE_RESUMED = """\
+already done: 1
+albums measured: 2
+tracks measured: 3
+silent: 3
+  likely meant: 0
+  likely a ripping mistake: 3
+  unsure: 0
+not measured: 0
+finished; albums left: 0
+list: <list>
+page: <page>
 """
 
 UNDO_SAMPLE = """\
@@ -165,6 +211,13 @@ def _filled(block: str, run_ids: Sequence[str], library: Path) -> str:
         block = block.replace(placeholder.rjust(len(run_id)), run_id)
         block = block.replace(placeholder, run_id)
     return block.replace("<library>", str(library))
+
+
+def _placed(block: str, values: dict[str, str]) -> str:
+    """*block* with each placeholder of *values* replaced by its value."""
+    for placeholder, value in values.items():
+        block = block.replace(placeholder, value)
+    return block
 
 
 class SampleSweepTest(sf.IsolatedCase):
@@ -226,6 +279,13 @@ class SampleSweepTest(sf.IsolatedCase):
         os.environ["PATH"] = sf.env_without_ffmpeg(self.tmp)["PATH"]
         return self._call(sweep.main, "sweep.py", argv)
 
+    def _silence(self, command: str) -> tuple[int, str]:
+        """Run the README's silence *command* with the host's PATH, ffmpeg on it."""
+        (words,) = _command_lines(command)
+        argv = self._arguments(words, _SWEEP_PREFIX)
+        os.environ["XDG_STATE_HOME"] = str(Path.cwd() / "state")
+        return self._call(sweep.main, "sweep.py", argv)
+
     def _undo(self, words: Sequence[str]) -> tuple[int, str]:
         """Run one of the README's album undo command lines."""
         argv = self._arguments(words, _UNDO_PREFIX)
@@ -261,8 +321,44 @@ class SampleSweepTest(sf.IsolatedCase):
         self.assertEqual(untimed, (0, _filled(UNDO_UNTIMED, ids, self.library)))
         self.assertEqual(_snapshot(self.library), built)
 
+    @unittest.skipIf(_FFMPEG is None, "ffmpeg not on PATH")
+    def test_the_silence_preview_and_its_resume_print_what_the_readme_shows(
+        self,
+    ) -> None:
+        code, preview = self._silence(SILENCE_COMMAND)
+        (listed,) = (self.work / "state" / "lyricsmith" / "silence").glob("*.tsv")
+        names = {
+            "<list>": str(listed),
+            "<page>": str(listed.with_suffix(".html")),
+            "<library>": str(self.library),
+        }
+        self.assertEqual((code, preview), (0, _placed(SILENCE_PREVIEW, names)))
+        code, resumed = self._silence(_placed(SILENCE_RESUME_COMMAND, names))
+        self.assertEqual((code, resumed), (0, _placed(SILENCE_RESUMED, names)))
+        lines = listed.read_text(encoding="utf-8").splitlines()[1:]
+        rows = [line for line in lines if not line.startswith("#")]
+        self.assertEqual(len(rows), 9)
+        self.assertTrue(
+            all(row.startswith("likely a ripping mistake\t") for row in rows)
+        )
+        self.assertEqual(
+            [line.split("\t")[1] for line in lines if line.startswith("#")],
+            [_SAMPLE, _SECOND, _UNTIMED],
+        )
+        page = listed.with_suffix(".html").read_text(encoding="utf-8")
+        for heading, count in (
+            ("Likely a ripping mistake", 9),
+            ("Unsure", 0),
+            ("Not measured", 0),
+            ("Likely meant", 0),
+        ):
+            self.assertIn(f'{heading} <span class="count">{count}</span>', page)
+
     def test_the_readme_shows_every_block_verbatim(self) -> None:
         readme = _README.read_text(encoding="utf-8")
         commands = (BUILD, SURVEY_COMMAND, RUN_COMMAND, UNDO_COMMANDS)
-        for block in (*commands, SURVEY, RUN, UNDO_SAMPLE, UNDO_UNTIMED):
+        silence = (SILENCE_COMMAND, SILENCE_RESUME_COMMAND, SILENCE_PREVIEW)
+        for block in (*commands, *silence, SILENCE_RESUMED, SURVEY, RUN):
+            self.assertIn(block, readme)
+        for block in (UNDO_SAMPLE, UNDO_UNTIMED):
             self.assertIn(block, readme)

@@ -236,6 +236,21 @@ class KeptCurrentTest(ChangedCase):
         self.assertEqual(code, sweep_run.EXIT_INTERRUPTED)
         self.assertEqual(self.changed(), [self.a1 / "01 Timed.mp3"])
 
+    def test_a_ctrl_c_once_a_list_is_handed_out_absorbs_it_as_never_started(
+        self,
+    ) -> None:
+        # The list is handed out as the album tool's command is built; Ctrl-C lands
+        # before the command is done, so the album tool never starts.
+        with mock.patch.object(
+            sweep_child, "album_argv", side_effect=KeyboardInterrupt
+        ):
+            code, stderr = self.sweep()
+        self.assertEqual(code, sweep_run.EXIT_INTERRUPTED)
+        self.assertEqual(self.fake.albums(), [])
+        self.assertIn("Artist/A1", stderr)
+        self.assertIn("the album tool could not start", stderr)
+        self.assertEqual(self.changed(), [self.a1 / name for name in _NEEDY])
+
 
 class RefusalAndFailureTest(ChangedCase):
     """The survey refuses the option, and a list that cannot be written is exit 2."""

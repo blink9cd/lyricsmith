@@ -18,12 +18,23 @@ import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_choices as lch  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_config as lc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_exit as lx  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_genre import NO_LYRICS_GENRES  # noqa: E402 - follows the bootstrap
 
 
-def _args(*, offline: bool = False, no_genius: bool = False) -> argparse.Namespace:
+def _args(
+    *,
+    offline: bool = False,
+    no_genius: bool = False,
+    only_providers: frozenset[lm.Source] | None = None,
+) -> argparse.Namespace:
     """The options the choices read, with no config file named."""
-    return argparse.Namespace(offline=offline, no_genius=no_genius, config=None)
+    return argparse.Namespace(
+        offline=offline,
+        no_genius=no_genius,
+        config=None,
+        only_providers=only_providers,
+    )
 
 
 @dataclass(frozen=True)
@@ -50,6 +61,16 @@ class GeniusChoiceTest(fixtures.IsolatedCase):
     def test_no_genius_skips_the_step(self) -> None:
         got = lch.genius_choice(_args(no_genius=True), {}, self.notices.append)
         self.assertEqual((got, self.notices), ((None, "skipped"), []))
+
+    def test_left_out_by_only_providers_skips_it_and_looks_for_no_key(self) -> None:
+        only = frozenset({lm.Source.LRCLIB})
+        got = lch.genius_choice(_args(only_providers=only), {}, self.notices.append)
+        self.assertEqual((got, self.notices), ((None, "skipped"), []))
+
+    def test_named_by_only_providers_looks_for_its_key(self) -> None:
+        only = frozenset({lm.Source.GENIUS})
+        got = lch.genius_choice(_args(only_providers=only), {}, self.notices.append)
+        self.assertEqual(got, (None, "absent"))
 
     def test_no_key_anywhere_is_absent_with_one_notice(self) -> None:
         got = lch.genius_choice(_args(), {}, self.notices.append)

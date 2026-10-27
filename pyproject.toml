@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lyricsmith"
-version = "0.1.0"
+version = "0.2.0"
 description = "Find, check, transcribe and time an album's lyrics: album, sweep, transcribe and sync."
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -53,6 +53,24 @@ sync = [
   "torchaudio==2.11.0",
 ]
 
+# Where the shared libraries the tools import live, read by lyricsmith_project/ at the
+# start of every entry file and put on sys.path in this order. Each path is relative to
+# this file's own folder, never searched for: a folder named here that is missing fails
+# by name. They are appended to sys.path, and each library's module must then load
+# from its named folder: a same-named module earlier on it (PYTHONPATH, site-packages)
+# fails the run, naming both, rather than being run in its place. Each library is a
+# folder directly under this repository's root.
+[tool.lyricsmith]
+shared_libraries = [
+  "stdio_utf8",
+  "help_formatter",
+  "run_lock",
+  "bounded_run",
+  "library_walk",
+  "live_pid_guard",
+  "html_page",
+]
+
 [tool.setuptools]
 # Deliberately empty. Every tool is run directly and puts its own sibling folders on
 # sys.path, so nothing here is imported from an installed location: installing this
@@ -82,11 +100,11 @@ convention = "pep257"
 python_version = "3.12"
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
-# The tools reach the shared libraries, and each other, through a sys.path bootstrap at
-# run time, and import their src/ modules by bare name after inserting src/. mypy cannot
-# see a runtime insert, so these entries are what make those imports resolve. album/tests
-# is here because sweep's suites reuse album's test helpers, so no other folder here may
-# define a test module by any of those names.
+# The tools reach the shared libraries [tool.lyricsmith] names, and each other, through a
+# sys.path bootstrap at run time, and import their src/ modules by bare name after
+# inserting src/. mypy cannot see a runtime insert, so these entries are what make those
+# imports resolve. album/tests is here because sweep's suites reuse album's test helpers,
+# so no other folder here may define a test module by any of those names.
 mypy_path = [
   "$MYPY_CONFIG_FILE_DIR/stdio_utf8",
   "$MYPY_CONFIG_FILE_DIR/help_formatter",
@@ -97,6 +115,8 @@ mypy_path = [
   "$MYPY_CONFIG_FILE_DIR/bounded_run/src",
   "$MYPY_CONFIG_FILE_DIR/library_walk",
   "$MYPY_CONFIG_FILE_DIR/live_pid_guard",
+  "$MYPY_CONFIG_FILE_DIR/html_page",
+  "$MYPY_CONFIG_FILE_DIR/lyricsmith_project",
   "$MYPY_CONFIG_FILE_DIR/album",
   "$MYPY_CONFIG_FILE_DIR/album/src",
   "$MYPY_CONFIG_FILE_DIR/album/tests",
@@ -144,11 +164,14 @@ exclude = ["bounded_run/samples"]
 # Libraries with no CLI: nothing in them turns an input into an output a human could run
 # by hand. bounded_run is deliberately NOT here: it does ship a samples/ pair.
 exempt = [
+  # The project's own manifest reader, a library with no command line like the others.
+  "lyricsmith_project",
   "stdio_utf8",
   "help_formatter",
   "run_lock",
   "library_walk",
   "live_pid_guard",
+  "html_page",
 ]
 
 [tool.stdio_policy]

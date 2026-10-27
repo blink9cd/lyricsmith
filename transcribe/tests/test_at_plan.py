@@ -309,6 +309,13 @@ class PresentLinkTest(IsolatedCase):
             self.assertEqual(at_plan.read_lrc(lrc), "")
         opened.assert_not_called()
 
+    def test_a_folder_that_passed_the_file_check_is_present_not_ours(self) -> None:
+        # A folder swapped in after the file check opens, and its own fstat refuses it.
+        folder = self.root / "one.lrc"
+        folder.mkdir()
+        with mock.patch.object(Path, "is_file", return_value=True):
+            self.assertEqual(at_plan.read_lrc(folder), "")
+
     def test_a_txt_that_lexists_only_is_present(self) -> None:
         # Reaches plan_files' lexists branch without a real symlink.
         root = self.root / "lib"

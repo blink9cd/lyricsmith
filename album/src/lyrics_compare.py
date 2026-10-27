@@ -15,14 +15,15 @@ or above it agrees. A track that does not agree gets the weak hints too
 chain's own stripped-title rule (`lyrics_titles.stripped_retry`), applied to that one
 provider's answer rather than to a whole pass. Compare writes nothing into the album
 (a YouTube Music or Tekstowo refusal still writes its cool-down, through the client),
-takes no lock, makes no run folder, and prints nothing.
+takes no lock, makes no run folder, and prints nothing itself: a run whose manifest
+cannot be read is passed over, and named through the caller's notice.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -317,12 +318,18 @@ def compare_album(
     *,
     lang: str,
     deadline_s: float,
+    notice: Callable[[str], None],
 ) -> CompareReport:
     """Compare each of *tracks* under *album* with *providers*' answers; write nothing.
 
-    Each track's own source is read once from the album's run manifests.
+    Each track's own source is read once from the album's run manifests. A run whose
+    manifest cannot be read is passed over, and given to *notice* as one line, newest
+    first, before any provider is asked.
     """
     records = recorded_sources(album, stages.read_manifest)
+    for run_dir, kind in records.passed_over:
+        shown_run = run_dir.relative_to(album).as_posix()
+        notice(f"passed over the run {shown_run}: its manifest cannot be read ({kind})")
     rows = tuple(
         compare_track(
             album,

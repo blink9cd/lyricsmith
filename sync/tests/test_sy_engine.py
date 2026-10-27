@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -12,6 +14,7 @@ import sy_cases  # noqa: E402 - puts the tool, src/ and album's fixtures on the 
 import sy_engine  # noqa: E402 - import follows the sys.path bootstrap above
 import sy_request as rq  # noqa: E402 - import follows the sys.path bootstrap above
 from sy_cases import fake_child  # noqa: E402 - import follows the sys.path bootstrap above
+from sy_types import MAX_TRACK_S  # noqa: E402 - import follows the sys.path bootstrap above
 from sy_lines import Span  # noqa: E402 - import follows the sys.path bootstrap above
 
 REQUEST = rq.Request(Path("a.mp3"), (2, 3), Path("models"))
@@ -56,9 +59,11 @@ class EngineTest(sy_cases.IsolatedCase):
 
     def test_the_timeout_is_a_minute_plus_twice_the_length(self) -> None:
         self.assertEqual(sy_engine.child_timeout(100.0), 260.0)
-        self.assertEqual(
-            sy_engine.child_timeout(None), 60.0 + 2 * sy_engine.UNKNOWN_LENGTH_S
-        )
+        self.assertEqual(sy_engine.child_timeout(None), 60.0 + 2 * MAX_TRACK_S)
+
+    def test_the_timeout_never_trusts_a_length_past_the_longest_track(self) -> None:
+        self.assertEqual(sy_engine.child_timeout(1e9), 60.0 + 2 * MAX_TRACK_S)
+        self.assertEqual(MAX_TRACK_S, 3600)
 
     def test_the_argv_runs_the_child_with_this_interpreter(self) -> None:
         argv = sy_engine.child_argv(self.tmp)
@@ -72,3 +77,12 @@ class EngineTest(sy_cases.IsolatedCase):
         junk.write_bytes(b"not audio")
         self.assertIsNone(sy_engine.track_seconds(junk))
         self.assertIsNone(sy_engine.track_seconds(self.tmp / "gone.mp3"))
+
+    def test_only_a_positive_length_is_a_length(self) -> None:
+        for length, seconds in ((0.5, 0.5), (0, None), (-1.0, None), ("2", None)):
+            with self.subTest(length=length):
+                found = SimpleNamespace(info=SimpleNamespace(length=length))
+                audio = self.tmp / "a.mp3"
+                audio.write_bytes(b"")
+                with mock.patch.object(sy_engine.mutagen, "File", return_value=found):
+                    self.assertEqual(sy_engine.track_seconds(audio), seconds)

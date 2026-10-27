@@ -46,6 +46,11 @@ class PlanTest(sy_cases.IsolatedCase):
         expected = (Action.RETIME, ("A gull on the railing",))
         self.assertEqual((planned.action, planned.lines), expected)
 
+    def test_our_lrc_with_nothing_alignable_is_no_text_under_overwrite(self) -> None:
+        bare = sy_lrc.lrc_text(Label("0", "0", "0"), ("4 4", "1 2 3"), (1.0, 2.0))
+        planned = self.plan(lrc=bare, overwrite=True)
+        self.assertIs(planned.action, Action.SKIP_NO_TEXT)
+
     def test_someone_elses_lrc_is_never_re_timed(self) -> None:
         edited = OURS.replace("machine timed", "me")
         self.assertIs(self.plan(lrc=edited, overwrite=True).action, Action.SKIP_TIMED)
@@ -95,6 +100,14 @@ class PlanTest(sy_cases.IsolatedCase):
         audio.with_suffix(".lrc").symlink_to(kept.name)
         planned = sy_plan.plan_track(audio, overwrite=True)
         self.assertIs(planned.action, Action.SKIP_TIMED)
+
+    def test_a_link_at_the_lrc_name_is_never_timed_over(self) -> None:
+        track = fixtures.TrackSpec("01 A.mp3", seconds=1.0, txt="la la\n")
+        (audio,) = fixtures.build_album(self.tmp, (track,))
+        audio.with_suffix(".lrc").symlink_to("gone.lrc")
+        planned = sy_plan.plan_track(audio, overwrite=False)
+        expected = (Action.ERROR_TEXT, "01 A.lrc is a link: never replaced")
+        self.assertEqual((planned.action, planned.detail), expected)
 
     def test_names_differing_only_by_case_in_one_folder_share_a_lrc(self) -> None:
         first = Planned(self.tmp / "01 A.mp3", Action.TIME)

@@ -16,12 +16,13 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_manifest as lmf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
@@ -33,16 +34,6 @@ import tag_builders as tb  # noqa: E402 - import follows the sys.path bootstrap 
 # Bound to their protocols, so the type checker holds both to the orchestrator's calls.
 _WRITE: ls.WriteManifest = lmf.write_manifest
 _READ: ls.ReadManifest = lmf.read_manifest
-
-# A registered profile, never an @settings decorator: a fuzzing campaign
-# that re-applies its own settings to each property is refused by Hypothesis on a
-# decorated one.
-settings.register_profile(
-    "album_manifest_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_manifest_properties")
 
 
 class ManifestCodecTest(fixtures.IsolatedCase):

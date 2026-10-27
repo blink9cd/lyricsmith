@@ -21,12 +21,17 @@ from pathlib import Path
 from typing import Any, Final, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-# The shared stdio library sits directly under the project root, two folders above
-# this one.
-# See stdio_utf8/stdio_utf8.md, "How this project's tools import it", for why
-# each is ONE fixed candidate rather than a search up the ancestors, and why a
-# missing copy fails its import below by name.
-sys.path.append(str(Path(__file__).resolve().parents[2] / "stdio_utf8"))
+# The project's manifest reader, in its own folder under the project root: it puts the
+# shared libraries the project's pyproject.toml names on sys.path, or fails naming the
+# one that is missing (lyricsmith_project/lyricsmith_project.md).
+_PROJECT_DIR = Path(__file__).resolve().parents[2]
+_READER_DIR = str(_PROJECT_DIR / "lyricsmith_project")
+# Moved first on sys.path, so no same-named module can stand in for the reader.
+sys.path[:] = [_READER_DIR, *(entry for entry in sys.path if entry != _READER_DIR)]
+import lyricsmith_project  # noqa: E402 - import follows the sys.path bootstrap above
+
+# Run as a script, a failure exits 2 naming it; imported, it raises.
+lyricsmith_project.add_shared_libraries(exit_on_failure=__name__ == "__main__")
 
 import stdio_utf8  # noqa: E402 - follows the sys.path insert above
 from sy_lines import Span, frames_needed  # noqa: E402 - follows the sys.path insert above
@@ -38,7 +43,12 @@ from sy_request import (  # noqa: E402 - follows the sys.path insert above
     load_request,
 )
 from sy_text import BLANK, LABELS  # noqa: E402 - follows the sys.path insert above
-from sy_types import DEMUCS_BAG, WAV2VEC2_FILE  # noqa: E402 - follows the sys.path insert above
+from sy_types import (  # noqa: E402 - follows the sys.path insert above
+    DEMUCS_BAG,
+    DEMUXERS,
+    MAX_TRACK_S,
+    WAV2VEC2_FILE,
+)
 
 #: htdemucs's sample rate, stereo.
 MIX_RATE: Final = 44100
@@ -52,6 +62,10 @@ WINDOW_SAMPLES: Final = 20 * MODEL_RATE
 MIN_WINDOW_SAMPLES: Final = 400
 #: Decoding even a long track takes seconds; this bounds a stuck ffmpeg.
 DECODE_TIMEOUT_S: Final = 300
+#: ffmpeg's error lines a failed decode's message keeps. The parent shows the last five
+#: lines of this process's error output, one of them the exception's own first line, and
+#: a whitelist refusal takes four: its reason, then three lines on the failed open.
+FFMPEG_ERROR_LINES: Final = 4
 #: Keeps a silent track's normalization from dividing by zero.
 MIN_STD: Final = 1e-8
 #: demucs shifts the mix by a random offset before separating, drawn from Python's module
@@ -71,17 +85,89 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _refuse_network() -> None:
-    """Make every socket connection and name lookup in this process fail."""
+    """Make every socket connection, datagram send and name lookup in this process fail."""
 
     def refused(*_args: object, **_kwargs: object) -> NoReturn:
         raise OSError("the sync tool's child process never uses the network")
 
     for target, name in (
         (socket.socket, "connect"),
+        (socket.socket, "connect_ex"),
+        (socket.socket, "sendto"),
+        (socket.socket, "sendmsg"),
         (socket, "create_connection"),
         (socket, "getaddrinfo"),
     ):
         setattr(target, name, refused)
+
+
+def decode_argv(audio: Path) -> list[str]:
+    """The ffmpeg command line decoding *audio*, absolute, to raw stereo at `MIX_RATE`.
+
+    ffmpeg reads a name such as ``http:x.mp3`` or ``pipe:0`` as a protocol, so the track
+    is named ``file:`` plus its absolute path, and only the file protocol is allowed.
+    Only the audio demuxers `DEMUXERS` names may open it, so a track whose bytes are an
+    ffconcat or HLS playlist is refused rather than opening the files it names.
+    ``-t`` decodes no more than `MAX_TRACK_S`, whatever the tags claim, since the whole
+    decoded track is held in memory.
+    """
+    if not audio.is_absolute():
+        raise ValueError(f"the track must be named by an absolute path: {audio}")
+    return [
+        "ffmpeg",
+        "-nostdin",
+        "-v",
+        "error",
+        "-protocol_whitelist",
+        "file",
+        "-format_whitelist",
+        ",".join(sorted(set(DEMUXERS.values()))),
+        "-t",
+        str(MAX_TRACK_S),
+        "-i",
+        f"file:{audio}",
+        "-f",
+        "f32le",
+        "-ac",
+        "2",
+        "-ar",
+        str(MIX_RATE),
+        "-",
+    ]
+
+
+class DecodeError(RuntimeError):
+    """ffmpeg could not decode a track; the message ends with ffmpeg's own last lines."""
+
+
+def decoded_bytes(audio: Path) -> bytes:
+    """*audio* decoded by ffmpeg to raw stereo float samples at `MIX_RATE`.
+
+    A failure raises `DecodeError` carrying ffmpeg's last error lines, so the operator
+    reads ffmpeg's reason (``Format not on whitelist``, a corrupt frame) and not only
+    an exit code.
+    """
+    try:
+        # reliability: ignore[RL005] ffmpeg starts no child to hold the pipes open
+        done = subprocess.run(
+            decode_argv(audio),
+            capture_output=True,
+            check=True,
+            timeout=DECODE_TIMEOUT_S,
+        )
+    except subprocess.CalledProcessError as failed:
+        raise DecodeError(_failure_message(failed)) from None
+    return done.stdout
+
+
+def _failure_message(failed: subprocess.CalledProcessError) -> str:
+    """The exit code ffmpeg gave, then its last `FFMPEG_ERROR_LINES` error lines."""
+    text = (failed.stderr or b"").decode("utf-8", errors="replace")
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return f"ffmpeg exit {failed.returncode} decoding the track, no error output"
+    tail = "\n".join(lines[-FFMPEG_ERROR_LINES:])
+    return f"ffmpeg exit {failed.returncode} decoding the track:\n{tail}"
 
 
 def _decode(
@@ -91,25 +177,7 @@ def _decode(
     import numpy
     import torch
 
-    argv = [
-        "ffmpeg",
-        "-nostdin",
-        "-v",
-        "error",
-        "-i",
-        str(audio),
-        "-f",
-        "f32le",
-        "-ac",
-        "2",
-        "-ar",
-        str(MIX_RATE),
-        "-",
-    ]
-    # reliability: ignore[RL005] ffmpeg starts no child to hold the pipes open
-    raw = subprocess.run(
-        argv, capture_output=True, check=True, timeout=DECODE_TIMEOUT_S
-    ).stdout
+    raw = decoded_bytes(audio)
     return (
         torch.from_numpy(numpy.frombuffer(raw, dtype=numpy.float32).copy())
         .view(-1, 2)

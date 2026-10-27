@@ -3,22 +3,27 @@
 An album is refused only when no provider answered it: at least one track met a
 refusal, and no track shows a provider answering. A track whose every provider failed
 ends as the album tool's fetch error; any other end after a lookup means some provider
-answered, even beside another's refusal. Refusals are counted by track and by provider,
-never entry by entry, since one failed call can leave a refusal at each step that
-re-reads it.
+answered, even beside another's refusal, but for a track served its own file (untimed
+lyrics, a transcript, a machine-timed ``.lrc``) after every LRC provider's synced step
+refused. Refusals are counted by track and by provider, never entry by entry, since one
+failed call can leave a refusal at each step that re-reads it.
 """
 
 from __future__ import annotations
 
 import sys
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 
 import sweep  # noqa: E402, F401 - its bootstrap puts src/ and the album tool on the path
+import lyrics_categories as lc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal_tally as lrt  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_tally  # noqa: E402 - import follows the sys.path bootstrap above
 
@@ -44,16 +49,47 @@ class CountsTest(sf.IsolatedCase):
         self.assertEqual(
             tally.counts,
             sweep_tally.Counts(
-                written=2, unchanged=1, not_found=1, kept=1, errors=1, flagged=1
+                written=2,
+                unchanged=1,
+                not_found=1,
+                kept=1,
+                errors=1,
+                flagged=1,
+                # The flagged one records no kind, so what it got is unknown.
+                written_by={
+                    lc.WrittenCategory.NEW_SYNCED: 1,
+                    lc.WrittenCategory.BEFORE_UNKNOWN: 1,
+                },
             ),
         )
 
-    def test_a_removed_track_counts_as_not_found(self) -> None:
-        # A refetch that found nothing and removed implausible old lyrics: nothing
-        # new was found, and the track now holds no lyrics.
+    def test_a_removed_track_counts_apart_from_not_found(self) -> None:
+        # A refetch that found nothing and removed implausible old lyrics: counted
+        # removed, by its reason, never among the not found.
         removed = sf.status_outcome(lr.OutcomeStatus.REMOVED)
         tally = sweep_tally.tally_manifest(sf.manifest_of(removed, sf.not_found()))
-        self.assertEqual(tally.counts, sweep_tally.Counts(not_found=2))
+        self.assertEqual(
+            tally.counts,
+            sweep_tally.Counts(
+                not_found=1, removed=1, removed_by={lc.RemovedReason.OTHER: 1}
+            ),
+        )
+
+    def test_written_tracks_are_counted_by_category(self) -> None:
+        tally = sweep_tally.tally_manifest(
+            sf.manifest_of(sf.written(), sf.written(lm.Source.SIDECAR))
+        )
+        self.assertEqual(
+            tally.counts.written_by,
+            {lc.WrittenCategory.NEW_SYNCED: 1, lc.WrittenCategory.EMBEDDED: 1},
+        )
+
+    def test_the_counts_and_the_tally_cannot_be_changed_once_made(self) -> None:
+        tally = sweep_tally.tally_manifest(sf.manifest_of(sf.written()))
+        with self.assertRaises(FrozenInstanceError):
+            tally.refused = True  # type: ignore[misc]
+        with self.assertRaises(FrozenInstanceError):
+            tally.counts.written = 0  # type: ignore[misc]
 
     def test_no_lyrics_expected_is_counted_apart_from_not_found(self) -> None:
         tally = sweep_tally.tally_manifest(
@@ -70,7 +106,12 @@ class CountsTest(sf.IsolatedCase):
         # untimed step: still one refusing track, and the provider named once.
         twice = (
             sf.refusal(lm.Source.LRCLIB),
-            lr.ProviderRefusal(lm.Source.LRCLIB, lm.LyricsKind.UNSYNCED, "HTTP 429"),
+            lr.ProviderRefusal(
+                lm.Source.LRCLIB,
+                lm.LyricsKind.UNSYNCED,
+                "HTTP 429",
+                lrf.Refusal.RATE_LIMITED,
+            ),
         )
         tally = sweep_tally.tally_manifest(
             sf.manifest_of(
@@ -83,6 +124,33 @@ class CountsTest(sf.IsolatedCase):
         self.assertEqual(
             tally.refusing_providers, (lm.Source.LRCLIB.label, lm.Source.NETEASE.label)
         )
+
+
+class UnsentTallyTest(sf.IsolatedCase):
+    """A lookup an open breaker left unsent counts apart, and changes no verdict."""
+
+    def _unsent(self) -> lr.ProviderRefusal:
+        """Genius's step skipped by its open breaker, recorded under its last reason."""
+        blocked = sf.refusal(lm.Source.GENIUS, "HTTP 403", lrf.Refusal.BLOCKED)
+        return replace(blocked, detail="breaker open until 09:35:00 UTC", unsent=True)
+
+    def test_the_album_s_refusals_line_counts_them_apart(self) -> None:
+        blocked = sf.refusal(lm.Source.GENIUS, "HTTP 403", lrf.Refusal.BLOCKED)
+        unsent = self._unsent()
+        tally = sweep_tally.tally_manifest(
+            sf.manifest_of(sf.fetch_error(blocked), *[sf.fetch_error(unsent)] * 2)
+        )
+        self.assertEqual(
+            lrt.format_refusals(tally.refusals),
+            "refusals: Genius blocked 1, breaker open 2",
+        )
+
+    def test_an_album_only_left_unsent_is_still_refused(self) -> None:
+        unsent = self._unsent()
+        tally = sweep_tally.tally_manifest(
+            sf.manifest_of(sf.fetch_error(unsent), sf.fetch_error(unsent))
+        )
+        self.assertEqual((tally.refused, tally.refusing_tracks), (True, 2))
 
 
 #: The end states no run records: a strip's alone, which the sweep never runs.
@@ -100,10 +168,12 @@ class EveryStatusTest(sf.IsolatedCase):
                 counts = sweep_tally.tally_manifest(
                     sf.manifest_of(sf.status_outcome(status))
                 ).counts
+                # The categories split the written and removed counts by kind and
+                # reason: a breakdown of a count, never an end state of their own.
                 landed = {
                     name: value
                     for name, value in vars(counts).items()
-                    if value and name != "flagged"
+                    if value and name not in {"flagged", "written_by", "removed_by"}
                 }
                 self.assertEqual(list(landed.values()), [1])
 
@@ -211,7 +281,8 @@ class RefusedRuleTest(sf.IsolatedCase):
         )
         manifest = sf.manifest_of(served)
         self.assertFalse(sweep_tally.tally_manifest(manifest).refused)
-        self.assertTrue(sweep_tally.tally_manifest(manifest, netease=False).refused)
+        lrclib = frozenset({lm.Source.LRCLIB})
+        self.assertTrue(sweep_tally.tally_manifest(manifest, synced=lrclib).refused)
 
     def test_a_transcript_after_every_synced_step_refused_is_no_answer(self) -> None:
         # A transcript is an own file, looked up for synced lyrics only, so it

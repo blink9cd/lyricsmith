@@ -21,6 +21,7 @@ import http_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_cooldown as lyc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_fetch as lf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_table as ltable  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_tekstowo as lt  # noqa: E402 - import follows the sys.path bootstrap above
 import tekstowo_fakes as tf  # noqa: E402 - import follows the sys.path bootstrap above
@@ -244,7 +245,15 @@ class ChainTest(fixtures.IsolatedCase):
         errors = [a for a in stopped.attempts if a.outcome is lm.AttemptOutcome.ERROR]
         self.assertEqual(
             errors,
-            [lm.ProviderAttempt(KEY, False, lm.AttemptOutcome.ERROR, "HTTP 403")],
+            [
+                lm.ProviderAttempt(
+                    KEY,
+                    False,
+                    lm.AttemptOutcome.ERROR,
+                    "HTTP 403",
+                    lrf.RefusalFacts(lrf.Refusal.BLOCKED, 403),
+                )
+            ],
         )
         following = self.fetch(OTHER)
         self.assertNotIn(KEY, [a.key for a in following.attempts])

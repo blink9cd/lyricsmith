@@ -75,18 +75,6 @@ class PacerWaitTest(_PacerCase):
             self.pacer.wait(self.clock() - 1.0)
         self.assertIsNone(self.pacer.last)
 
-    def test_a_refusal_can_carry_its_own_message(self) -> None:
-        pacer = lpace.Pacer(
-            INTERVAL_S,
-            "Invented",
-            clock=self.clock,
-            sleeper=self.clock.sleep,
-            late_message="the invented lookup ran out of time",
-        )
-        with self.assertRaises(lp.ProviderTimeout) as raised:
-            pacer.wait(self.clock() - 1.0)
-        self.assertEqual(str(raised.exception), "the invented lookup ran out of time")
-
 
 class PacerMarkTest(_PacerCase):
     """`wait` never marks; `mark` reads the clock; `take_turn` is both."""
@@ -144,6 +132,18 @@ class HeldUntilTest(fixtures.IsolatedCase):
                     with lpace.held_until(self.lock, self.clock, give_up_at, "X"):
                         self.fail("the body ran past the deadline")
                 self.assertFalse(self.lock.locked())
+
+
+class EndsBeforeTest(fixtures.IsolatedCase):
+    """`ends_before`: a deadline-bounded wait is begun only if it ends before the deadline."""
+
+    def test_a_wait_ending_before_the_deadline_may_begin(self) -> None:
+        self.assertTrue(lpace.ends_before(1000.0, INTERVAL_S, 1000.0 + ROOM_S))
+
+    def test_a_wait_ending_at_or_past_the_deadline_may_not(self) -> None:
+        for give_up_at in (1000.0 + INTERVAL_S, 1000.0 + INTERVAL_S - 0.5):
+            with self.subTest(give_up_at=give_up_at):
+                self.assertFalse(lpace.ends_before(1000.0, INTERVAL_S, give_up_at))
 
 
 class SleepWithinTest(fixtures.IsolatedCase):

@@ -25,6 +25,7 @@ import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_album  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_check  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_compare as lc  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_manifest  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_summary  # noqa: E402 - import follows the sys.path bootstrap above
@@ -93,6 +94,24 @@ class CompareCliCase(cli_fakes.CliCase):
         """The table's rows, its header excluded: each opens with its row number."""
         lines = result.stdout.splitlines()[3:]
         return list(itertools.takewhile(lambda line: line[:2].strip().isdigit(), lines))
+
+
+class PassedOverTest(CompareCliCase):
+    """A run whose manifest cannot be read is named on stderr, never silently skipped."""
+
+    def test_the_passed_over_run_is_a_notice(self) -> None:
+        run_id = run_fakes.RUN_ID
+        run_dir = self.album / lr.RUN_FOLDER_NAME / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / lr.MANIFEST_NAME).write_bytes(b"\xff{")
+        self.overrides["read_manifest"] = lyrics_manifest.read_manifest
+        result = self.compare()
+        self.assertEqual(result.code, 0, result.stderr)
+        self.assertIn(
+            f"passed over the run {lr.RUN_FOLDER_NAME}/{run_id}: its manifest "
+            "cannot be read (ManifestSchemaError)\n",
+            result.stderr,
+        )
 
 
 class ReportTest(CompareCliCase):

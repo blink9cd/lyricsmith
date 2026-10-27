@@ -65,6 +65,11 @@ MAX_COMPARED_WORDS = 2_000
 MAX_WORDS_PER_SECOND = 6.0
 
 _MS_PER_SECOND = 1000
+#: How the past-end and ends-short details open, and what the too-many-words detail
+#: holds after its rate: the stable words `lyrics_categories` reads a removal's reason
+#: by, so the details and that reader cannot drift apart.
+LAST_LINE_DETAIL = "last line "
+WORD_RATE_DETAIL = " words per second: "
 #: Decimal places of the similarity, and of the word rate, shown in a FLAG.
 _SHOWN_PLACES = 3
 #: The SKIP's detail when the duration is unreadable, for synced and for untimed lyrics.
@@ -146,7 +151,7 @@ def _past_end(last_s: float, duration_s: float) -> CheckReason | None:
     """The past-end FLAG when the latest line starts beyond the tolerance."""
     if last_s <= duration_s + PAST_END_TOLERANCE_S:
         return None
-    detail = f"last line {last_s:.3f} s, track {duration_s:.3f} s"
+    detail = f"{LAST_LINE_DETAIL}{last_s:.3f} s, track {duration_s:.3f} s"
     return CheckReason(CheckRule.PAST_END, detail)
 
 
@@ -155,7 +160,7 @@ def _ends_short(last_s: float, duration_s: float) -> CheckReason | None:
     early = last_s < duration_s * SHORT_FRACTION
     if not early or duration_s - last_s <= SHORT_MIN_GAP_S:
         return None
-    detail = f"last line {last_s:.3f} s, track {duration_s:.3f} s"
+    detail = f"{LAST_LINE_DETAIL}{last_s:.3f} s, track {duration_s:.3f} s"
     return CheckReason(CheckRule.ENDS_SHORT, detail)
 
 
@@ -174,7 +179,7 @@ def latest_line_s(lyrics: SyncedLyrics) -> float:
     """When the latest line of *lyrics* starts, in seconds: not the last stored.
 
     A disordered frame could otherwise hide a line past the end behind an earlier one.
-    A fetch reads it too, to tell a far-past answer (`lyrics_accept.far_past_end`).
+    A fetch reads it too, to tell a far-past answer (`lyrics_step_answer.far_past_end`).
     """
     return _seconds(max(line.ms for line in lyrics.lines))
 
@@ -220,7 +225,7 @@ def _too_many_words(lyrics: Lyrics, usable: float | None) -> CheckReason | None:
     rate = count / usable
     if rate <= MAX_WORDS_PER_SECOND:
         return None
-    detail = f"{shown(rate)} words per second: {count} words in {usable:.3f} s"
+    detail = f"{shown(rate)}{WORD_RATE_DETAIL}{count} words in {usable:.3f} s"
     return CheckReason(CheckRule.TOO_MANY_WORDS, detail)
 
 

@@ -16,13 +16,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import lyrics_located  # noqa: F401 - puts the shared libraries on sys.path
 from lyrics_album import deferred_interrupt
 from lyrics_exit import report_not_written
 from lyrics_files import RECORD_ERRORS as _RECORD_ERRORS
-from lyrics_outcomes import describe_outcome, printable
+from lyrics_outcomes import describe_outcome
 from lyrics_provider_states import CoolingState
 from lyrics_records import Manifest, RunState, TrackOutcome
+from lyrics_retried import RetriedCounts
 from lyrics_stages import Stages
+from stdio_utf8 import spell_unsafe
 
 
 @dataclass
@@ -31,7 +34,7 @@ class RunRecorder:
 
     *youtube_music*, when given, is read before every write, and its state replaces the
     manifest's, so the write after a track that stopped YouTube Music records the stop;
-    *tekstowo* is read and written alike.
+    *tekstowo* is read and written alike, and so is *retried*, the run's retries so far.
     """
 
     run_dir: Path
@@ -42,6 +45,7 @@ class RunRecorder:
     record_error: str | None = None
     youtube_music: Callable[[], CoolingState] | None = None
     tekstowo: Callable[[], CoolingState] | None = None
+    retried: Callable[[], RetriedCounts] | None = None
 
     def record(self, index: int, outcome: TrackOutcome) -> bool:
         """Record track *index*'s *outcome* and report it; True when the run must stop.
@@ -53,7 +57,7 @@ class RunRecorder:
         track = dataclasses.replace(tracks[index], after=outcome)
         tracks[index] = track
         verdict = describe_outcome(outcome)
-        line = printable(f"[{index + 1}/{len(tracks)}] {track.path}: {verdict}")
+        line = spell_unsafe(f"[{index + 1}/{len(tracks)}] {track.path}: {verdict}")
         return self._write(
             dataclasses.replace(self.manifest, tracks=tuple(tracks)), line
         )
@@ -76,6 +80,8 @@ class RunRecorder:
             manifest = dataclasses.replace(manifest, youtube_music=self.youtube_music())
         if self.tekstowo is not None:
             manifest = dataclasses.replace(manifest, tekstowo=self.tekstowo())
+        if self.retried is not None:
+            manifest = dataclasses.replace(manifest, retried=self.retried())
         try:
             with deferred_interrupt():
                 self.manifest = manifest

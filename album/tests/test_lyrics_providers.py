@@ -55,6 +55,27 @@ class StatusHookTest(fixtures.IsolatedCase):
         )
         self.assertEqual(str(raised.exception), "NetEase answered HTTP 429")
 
+    def test_the_reply_s_server_and_uncapped_wait_are_kept(self) -> None:
+        headers = {"Server": "invented-edge", "Retry-After": "3600"}
+
+        def answer(request: requests.PreparedRequest) -> requests.Response:
+            return http_fakes.response(request, 503, headers=headers)
+
+        with (
+            requests.Session() as session,
+            http_fakes.transport(answer),
+            self.assertRaises(lp.HttpStatusError) as raised,
+        ):
+            hooks = {"response": [lp.status_hook(lm.Source.LRCLIB)]}
+            session.get(URL, timeout=TIMEOUT_S, hooks=hooks)
+        error = raised.exception
+        self.assertEqual((error.retry_after_s, error.server), (3600.0, "invented-edge"))
+
+    def test_a_reply_with_no_server_header_names_none(self) -> None:
+        with self.assertRaises(lp.HttpStatusError) as raised:
+            _get(429, lp.status_hook(lm.Source.NETEASE))
+        self.assertIsNone(raised.exception.server)
+
     def test_an_ok_status_passes(self) -> None:
         self.assertEqual(_get(200, lp.status_hook(lm.Source.LRCLIB)).status_code, 200)
 

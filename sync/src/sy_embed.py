@@ -24,13 +24,14 @@ one MP3 at once, when --path is the library root the sweep walks, or one album.
 from __future__ import annotations
 
 import subprocess
-import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from sweep_child import ChildResult, Spawn, run_child
+import sy_located  # noqa: F401 - puts the other tools and libraries on sys.path
+from lyrics_records import is_mp3_name
+from sweep_child import ChildResult, Spawn, album_argv, run_child
 from sy_types import EmbedResult, EmbedStop
 
 #: One album folder, offline: backed up, embedded and checked. Minutes at most.
@@ -47,6 +48,9 @@ class EmbedUnits:
 
     units: tuple[Path, ...]
     loose: tuple[Path, ...] = ()
+    #: Written tracks that are no MP3: album embeds into MP3s only, so their .lrc
+    #: stays a sidecar and no album run is made for them.
+    sidecars: tuple[Path, ...] = ()
 
 
 def _parts(track: Path, root: Path) -> tuple[str, ...]:
@@ -62,30 +66,24 @@ def _sorted_unique(folders: Iterable[Path]) -> tuple[Path, ...]:
 def embed_units(
     written: Sequence[Path], discovered: Sequence[Path], root: Path
 ) -> EmbedUnits:
-    """The folders that embed *written*, given every track *discovered* under *root*."""
-    if not written:
-        return EmbedUnits(())
+    """The folders that embed *written*, given every track *discovered* under *root*.
+
+    Only the written MP3s are embedded, by album's own test of a name; every track
+    found, of any format, still decides whether *root* is a library.
+    """
+    mp3s: list[Path] = []
+    others: list[Path] = []
+    for track in written:
+        (mp3s if is_mp3_name(track.name) else others).append(track)
+    sidecars = _sorted_unique(others)
+    if not mp3s:
+        return EmbedUnits((), sidecars=sidecars)
     if all(len(_parts(track, root)) <= LIBRARY_DEPTH for track in discovered):
-        return EmbedUnits((root,))
-    deep = {track for track in written if len(_parts(track, root)) > LIBRARY_DEPTH}
+        return EmbedUnits((root,), sidecars=sidecars)
+    deep = {track for track in mp3s if len(_parts(track, root)) > LIBRARY_DEPTH}
     units = (root.joinpath(*_parts(track, root)[:LIBRARY_DEPTH]) for track in deep)
-    loose = (track for track in written if track not in deep)
-    return EmbedUnits(_sorted_unique(units), _sorted_unique(loose))
-
-
-def album_argv(
-    entry: Path, folder: Path, interpreter: str = sys.executable
-) -> list[str]:
-    """The album tool's command line for *folder*: a run, offline."""
-    return [
-        interpreter,
-        str(entry),
-        "--album",
-        str(folder),
-        "--mode",
-        "run",
-        "--offline",
-    ]
+    loose = (track for track in mp3s if track not in deep)
+    return EmbedUnits(_sorted_unique(units), _sorted_unique(loose), sidecars)
 
 
 def run_album(
@@ -130,13 +128,16 @@ def embed_folders(
     results: list[EmbedResult] = []
     try:
         for folder in folders.units:
-            child = run(album_argv(entry, folder), ALBUM_TIMEOUT_S)
+            # The sweep's own command line for an offline run of *folder*, in this
+            # interpreter, so the two tools run album the same way.
+            argv = album_argv(entry, folder, lang=None, offline=True)
+            child = run(argv, ALBUM_TIMEOUT_S)
             results.append(embed_result(folder, child))
             if child.interrupted:
                 break
     except KeyboardInterrupt:
         # Not swallowed: the interrupt stops the loop, and every unit it left is
-        # reported not run below, so the person sees what still needs embedding.
+        # reported not run below, so the operator sees what still needs embedding.
         pass
     rest = folders.units[len(results) :]
     results += [EmbedResult(folder, EmbedStop.NOT_RUN) for folder in rest]

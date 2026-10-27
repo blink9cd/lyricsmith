@@ -4,10 +4,11 @@ The entry point of the tool folder. The end summary goes to stdout alone, progre
 notices to stderr: `_notice` here writes every notice, handed to each mode, and each
 mode, here or in the module that holds it, prints its own summary. Importing it puts
 the folder's private modules, under ``src/``, on ``sys.path``, resolved from this
-file's own location, then the shared libraries this file uses, found by searching
-upward, so everything imports by bare name wherever the folder is moved. It is not
-the only such search: a private module that needs another shared library adds it
-itself (`lyrics_silence` adds bounded_run), so each module imports alone.
+file's own location, then the shared libraries the project's ``pyproject.toml`` names,
+through the manifest reader at the project root (``lyricsmith_project/``), so
+everything imports by bare name wherever the project is moved. A private module that
+needs a shared library first imports `lyrics_located`, which makes the same call, so
+each module imports alone.
 
 `main` parses the options, then hands the chosen mode to the orchestrator with the
 real stages bound (`real_wiring`); a test passes its own `Wiring` instead. No logging
@@ -25,26 +26,32 @@ from pathlib import Path
 #: The private modules' folder, beside this file.
 SRC_DIR = Path(__file__).resolve().parent / "src"
 sys.path.insert(0, str(SRC_DIR))
-# The shared libraries sit directly under the project root, this file's grandparent.
-# See stdio_utf8/stdio_utf8.md, "How this project's tools import it", for why
-# each is ONE fixed candidate rather than a search up the ancestors, and why a
-# missing copy fails its import below by name.
-sys.path += [
-    str(Path(__file__).resolve().parents[1] / name)
-    for name in ("stdio_utf8", "help_formatter", "run_lock")
-]
+# The project's manifest reader, in its own folder under the project root: it puts the
+# shared libraries the project's pyproject.toml names on sys.path, or fails naming the
+# one that is missing (lyricsmith_project/lyricsmith_project.md).
+_PROJECT_DIR = Path(__file__).resolve().parents[1]
+_READER_DIR = str(_PROJECT_DIR / "lyricsmith_project")
+# Moved first on sys.path, so no same-named module can stand in for the reader.
+sys.path[:] = [_READER_DIR, *(entry for entry in sys.path if entry != _READER_DIR)]
+import lyricsmith_project  # noqa: E402 - import follows the sys.path bootstrap above
 
+# Run as a script, a failure exits 2 naming it; imported, it raises.
+lyricsmith_project.add_shared_libraries(exit_on_failure=__name__ == "__main__")
+
+import lyrics_accept_mode  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_album  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_changed  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_exit  # noqa: E402 - import follows the sys.path bootstrap above
+import help_formatter  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_fetch  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_help  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_modes  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_only  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_options  # noqa: E402 - import follows the sys.path bootstrap above
-import lyrics_outcomes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_provider_modes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_prune_mode  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_run  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_strip_step  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_summary  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_undo_mode  # noqa: E402 - import follows the sys.path bootstrap above
 import stdio_utf8  # noqa: E402 - import follows the sys.path bootstrap above
@@ -62,6 +69,7 @@ from lyrics_wiring import real_wiring as real_wiring  # noqa: E402 - import foll
 # each is named here too, as callers and tests reach them through the entry point.
 from lyrics_options import (  # noqa: E402 - follows the bootstrap
     DEFAULT_LANG,
+    MODE_ACCEPT,
     MODE_CHECK,
     MODE_COMPARE,
     MODE_PRUNE,
@@ -72,8 +80,8 @@ from lyrics_options import (  # noqa: E402 - follows the bootstrap
 from lyrics_options import iso_639_2 as iso_639_2  # noqa: E402 - re-exported
 
 #: The per-call deadline every provider call runs under, and the Genius step's own.
-#: Kept as the public re-export of `lyrics_fetch.PROVIDER_DEADLINE_S`, which the
-#: modes moved out of this file use directly.
+#: The public re-export of `lyrics_fetch.PROVIDER_DEADLINE_S`, which the mode
+#: modules use directly.
 DEADLINE_S = lyrics_fetch.PROVIDER_DEADLINE_S
 
 # --- The options ---------------------------------------------------------------------
@@ -89,7 +97,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         prog=prog,
         description="Find an album's lyrics, embed them, check them; strip them; "
         "undo a run.",
-        formatter_class=lyrics_help.HelpFormatter,
+        formatter_class=help_formatter.RawNoneHidingFormatter,
         epilog=lyrics_help.EPILOG,
     )
     _add_album_options(parser)
@@ -107,13 +115,30 @@ def _add_album_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--mode",
-        choices=(MODE_RUN, MODE_CHECK, MODE_UNDO, MODE_STRIP, MODE_COMPARE, MODE_PRUNE),
+        choices=(
+            MODE_RUN,
+            MODE_CHECK,
+            MODE_UNDO,
+            MODE_STRIP,
+            MODE_COMPARE,
+            MODE_PRUNE,
+            MODE_ACCEPT,
+        ),
         default=MODE_RUN,
         help="run: back up, fetch, embed and check. check: re-check a run's tracks. "
         "undo: put a run's backup back. strip: back up, then remove every track's "
         "lyrics frames and sidecars. compare: ask each provider for every "
         "untimed-only track and report whether any agrees with its lyrics; writes "
-        "nothing. prune: remove the run folders nothing needs.",
+        "nothing. prune: remove the run folders nothing needs. accept: keep the "
+        "album as it is and report what removing every run's backup would lose; "
+        "with --apply, remove them.",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="accept only: record each run's manifest outside the album, then "
+        "remove the album's .lyricsmith folder, every backup and undo with it; "
+        "a report only when omitted.",
     )
     parser.add_argument(
         "--track",
@@ -199,6 +224,19 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
         + lyrics_help.terms_note("--no-tekstowo"),
     )
     parser.add_argument(
+        # A literal, as every option here is, so the companion doc's consistency check
+        # reads it; `lyrics_options.ONLY_FLAG`, which the messages use, must match it.
+        "--only-providers",
+        type=lyrics_only.parse_only_providers,
+        default=None,
+        metavar="NAME[,NAME...]",
+        help="run and compare only: ask only the providers named, one comma-separated "
+        f"value of {', '.join(lyrics_only.PROVIDER_NAMES)}; a provider left out is "
+        "not asked and records nothing, and one also turned off by its --no-* "
+        "option stays off. MusicBrainz is asked only by the Bandcamp step. Refused "
+        "with --offline; every provider when omitted.",
+    )
+    parser.add_argument(
         "--fresh",
         action="store_true",
         help="run only: ask the providers even where a sidecar would serve a track; "
@@ -231,7 +269,7 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
 
 def _notice(text: str) -> None:
     """One line of progress or notice, on stderr, its control characters made visible."""
-    print(lyrics_outcomes.printable(text), file=sys.stderr)
+    print(stdio_utf8.spell_unsafe(text), file=sys.stderr)
 
 
 def _run_mode(args: argparse.Namespace, wiring: Wiring, prog: str) -> int:
@@ -264,7 +302,7 @@ def _strip_mode(args: argparse.Namespace, wiring: Wiring, prog: str) -> int:
         acquire_lock=wiring.acquire_lock,
         started=wiring.now(),
         progress=_notice,
-        step=lyrics_run.strip_step,
+        step=lyrics_strip_step.strip_step,
     )
     with lyrics_exit.report_writes():
         written = lyrics_changed.write_changed_list(
@@ -318,6 +356,7 @@ _MODES: dict[str, Callable[[argparse.Namespace, Wiring, str], int]] = {
     MODE_STRIP: _strip_mode,
     MODE_COMPARE: _compare_mode,
     MODE_PRUNE: lyrics_prune_mode.prune_mode,
+    MODE_ACCEPT: lyrics_accept_mode.accept_mode,
 }
 
 

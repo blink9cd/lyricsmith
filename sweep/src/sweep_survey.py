@@ -9,7 +9,7 @@ would take those writes out of the library. The album tool does not refuse a lin
 it resolves the album folder it is given, so a linked album runs wherever the link
 leads. These checks are the only guard, for a linked album folder and a linked artist
 folder alike, so they must stay. Each album dropped is named. A run makes the same check
-again just before each visit (`is_linked`), since a folder can be swapped for a link
+again just before each visit (`linked_now`), since a folder can be swapped for a link
 during a long sweep. Each track is classified by the album tool's classifier
 (`lyrics_inventory.classify_track`): synced, untimed only, or none. For a sweep with
 ``--refetch-implausible``, each track is also judged by the album tool's own rule for
@@ -17,7 +17,9 @@ lyrics serving it that are implausible (`lyrics_refetch.serving_implausible`), a
 track they are, named with the check's FLAG, makes its album one to visit, however
 synced: that option exists to ask such a track again. The survey writes
 nothing and contacts nothing. `plan_visits` splits the albums that need a visit into
-those a run visits and those it passes over as done, for the survey and the run alike.
+those a run visits and those it passes over as done, for the survey and the run alike,
+and puts those it is told to visit last (a challenged owed album,
+`sweep_challenged`) after the others.
 
 A track whose classification raises, a sidecar that is not UTF-8 for one, is counted as
 unreadable, named with its error's type, rather than ending the survey, and its album is
@@ -29,10 +31,11 @@ prints.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 from library_walk import album_dirs, ignore_skipped
 from lyrics_album import AlbumUnusableError, discover_tracks
 from lyrics_inventory import TrackLyricsKind, classify_track
@@ -140,9 +143,31 @@ def _linked(album: Path, root: Path) -> bool:
 def is_linked(album: Path, library: Path) -> bool:
     """True when *album* is reached through a link, as `contained_albums` drops it.
 
-    For the check a run makes again just before it visits *album*.
+    For the check a run, or an accept, makes again just before it visits *album*.
     """
     return _linked(album, library.resolve())
+
+
+def relinked_notice(album: Path, library: Path) -> str:
+    """The notice for *album*, found by the walk but reached through a link by now."""
+    return (
+        f"skipped album {album.relative_to(library).as_posix()}: since the survey, "
+        "its artist or album folder became a link, or it moved outside the library; "
+        "not run"
+    )
+
+
+def linked_now(library: Path, album: Path, progress: Callable[[str], None]) -> bool:
+    """True, said through *progress*, when *album* is now reached through a link.
+
+    The survey dropped every album reached through one, but a folder can be swapped
+    for a link while a long sweep runs, and the album tool would follow it: it resolves
+    the album folder it is given. So a run makes the check again just before each visit.
+    """
+    if not is_linked(album, library):
+        return False
+    progress(relinked_notice(album, library))
+    return True
 
 
 def contained_albums(
@@ -207,6 +232,7 @@ def plan_visits(
     done: Collection[str],
     *,
     restart: bool,
+    last: Collection[str] = (),
 ) -> VisitPlan:
     """Of the albums of *surveys* that need a visit, those a run visits and passes over.
 
@@ -216,13 +242,28 @@ def plan_visits(
     with this, so the list a survey prints is the list a run visits. An album whose
     every track is synced needs no visit, done or not, so it is in neither list, unless
     a ``--refetch-implausible`` survey found a track serving implausible lyrics.
+    The albums *last* names come after the others to visit, each group in walk order.
     """
-    to_visit: list[Path] = []
+    first: list[Path] = []
+    after: list[Path] = []
     passed: list[Path] = []
+    for survey, name in _named_needing_visit(library, surveys):
+        if not restart and name in done:
+            passed.append(survey.album)
+        else:
+            (after if name in last else first).append(survey.album)
+    return VisitPlan(tuple(first + after), tuple(passed))
+
+
+def _named_needing_visit(
+    library: Path, surveys: Sequence[AlbumSurvey]
+) -> Iterator[tuple[AlbumSurvey, str]]:
+    """Each of *surveys* that needs a visit, with its album's name in the ledger."""
     for survey in surveys:
-        if not survey.needs_visit:
-            continue
-        name = survey.album.relative_to(library).as_posix()
-        skip = not restart and name in done
-        (passed if skip else to_visit).append(survey.album)
-    return VisitPlan(tuple(to_visit), tuple(passed))
+        if survey.needs_visit:
+            yield survey, survey.album.relative_to(library).as_posix()
+
+
+def needing_visit(library: Path, surveys: Sequence[AlbumSurvey]) -> tuple[str, ...]:
+    """The albums of *surveys* that need a visit, named as the ledger names them."""
+    return tuple(name for _, name in _named_needing_visit(library, surveys))

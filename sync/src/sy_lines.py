@@ -59,16 +59,15 @@ def _letters(
     return letters
 
 
-def _fill(firsts: Sequence[int | None]) -> list[int]:
-    """*firsts* with each gap given the next line's frame, or the last one's at the end."""
+def _fill(firsts: Sequence[int | None], tail: int) -> list[int]:
+    """*firsts* with each gap given the next line's frame, or *tail* at the end."""
     following: int | None = None
     nexts: list[int | None] = []
     for first in reversed(firsts):
         following = first if first is not None else following
         nexts.append(following)
     nexts.reverse()
-    last = next((first for first in reversed(firsts) if first is not None), 0)
-    return [last if frame is None else frame for frame in nexts]
+    return [tail if frame is None else frame for frame in nexts]
 
 
 # fuzz-target
@@ -77,12 +76,16 @@ def line_starts(
 ) -> tuple[float, ...]:
     """Each line's start in seconds: its own first letter's first frame.
 
-    A line with no letter takes the next aligned line's start, or the last one's when
-    no line after it has a letter; with no letter at all, every line starts at 0.
+    A line with no letter takes the next aligned line's start, or, when no line after
+    it has a letter, the frame the last aligned line's last letter ends on; with no
+    letter at all, every line starts at 0. A trailing section header given the last
+    sung line's own start would tie with it, and a player showing the later of two
+    tied lines would hide the sung one for the rest of the track.
     """
     letters = _letters(line_of, spans, line_count)
     firsts = [line[0].start if line else None for line in letters]
-    return tuple(frame * frame_seconds for frame in _fill(firsts))
+    tail = next((line[-1].end for line in reversed(letters) if line), 0)
+    return tuple(frame * frame_seconds for frame in _fill(firsts, tail))
 
 
 def measure(

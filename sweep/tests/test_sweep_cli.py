@@ -121,11 +121,20 @@ class SurveyTest(CliCase):
         self.assertEqual(self.fake.calls, [])
 
     def test_run_only_options_are_refused_by_the_survey(self) -> None:
-        for option in (["--offline"], ["--limit", "1"], ["--restart"]):
+        options = (
+            ["--offline"],
+            ["--limit", "1"],
+            ["--restart"],
+            ["--pause-seconds", "99"],
+            ["--stop-after", "1"],
+        )
+        for option in options:
             with self.subTest(option=option):
                 result = self.main("--mode", "survey", *option)
                 self.assertEqual(result.code, 2)
-                self.assertIn("cannot be used with --mode survey", result.stderr)
+                self.assertIn(
+                    f"{option[0]} cannot be used with --mode survey", result.stderr
+                )
 
 
 class LibraryTest(CliCase):

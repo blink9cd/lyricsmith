@@ -5,9 +5,9 @@ the command goes untouched to that tool's main(), whose own parser and companion
 the authority on its options. Each tool still runs alone as <command>/<command>.py. Only
 the chosen tool is imported, so `lyricsmith album` never loads transcribe's code.
 
-Importing it puts the shared libraries it uses on ``sys.path``, found by searching upward
-from this file's own location, so it imports them by bare name wherever the project is
-moved.
+Importing it puts the shared libraries the project's ``pyproject.toml`` names on
+``sys.path``, through the manifest reader in ``lyricsmith_project/``, so it
+imports them by bare name wherever the project is moved.
 """
 
 from __future__ import annotations
@@ -15,18 +15,22 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
-import tomllib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Protocol
 
 _HERE = Path(__file__).resolve().parent
-# The shared libraries sit directly under the project root, this file's own folder.
-# See stdio_utf8/stdio_utf8.md, "How this project's tools import it", for why
-# each is ONE fixed candidate rather than a search up the ancestors, and why a
-# missing copy fails its import below by name.
-sys.path += [str(_HERE / name) for name in ("stdio_utf8", "help_formatter")]
+# The project's manifest reader, in its own folder beside this file: it puts the shared
+# libraries the project's pyproject.toml names on sys.path, or fails naming the
+# one that is missing (lyricsmith_project/lyricsmith_project.md).
+_READER_DIR = str(_HERE / "lyricsmith_project")
+# Moved first on sys.path, so no same-named module can stand in for the reader.
+sys.path[:] = [_READER_DIR, *(entry for entry in sys.path if entry != _READER_DIR)]
+import lyricsmith_project  # noqa: E402 - import follows the sys.path bootstrap above
+
+# Run as a script, a failure exits 2 naming it; imported, it raises.
+lyricsmith_project.add_shared_libraries(exit_on_failure=__name__ == "__main__")
 
 import help_formatter  # noqa: E402 - import follows the sys.path bootstrap above
 import stdio_utf8  # noqa: E402 - import follows the sys.path bootstrap above
@@ -46,8 +50,6 @@ _SUMMARIES: Final[Mapping[str, str]] = MappingProxyType(
         "sync": "time a track's untimed lyrics against its audio, offline, into a .lrc",
     }
 )
-#: What --version shows when the project's version cannot be read.
-_UNKNOWN_VERSION: Final = "unknown"
 #: The program name the dispatcher hands a tool is this word, then the command's: the
 #: project's command name, the documented contract, and not the entry file's name.
 _PROG: Final = "lyricsmith"
@@ -60,19 +62,6 @@ class ToolMain(Protocol):
         self, argv: Sequence[str] | None = ..., *, prog: str | None = ...
     ) -> int:
         """Run the tool with *argv*, naming itself *prog*; return the exit code."""
-
-
-def project_version(config: Path = _HERE / "pyproject.toml") -> str:
-    """[project].version from the project's pyproject.toml, else 'unknown'."""
-    try:
-        with config.open("rb") as stream:
-            project = tomllib.load(stream).get("project")
-    # tomllib decodes the bytes itself, so a file that is not UTF-8 raises
-    # UnicodeDecodeError rather than TOMLDecodeError.
-    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
-        return _UNKNOWN_VERSION
-    version = project.get("version") if isinstance(project, dict) else None
-    return version if isinstance(version, str) else _UNKNOWN_VERSION
 
 
 def _load_main(command: str) -> ToolMain:
@@ -94,11 +83,18 @@ def _parser() -> argparse.ArgumentParser:
     """
     parser = stdio_utf8.EscapingArgumentParser(
         description="Find, check, transcribe and time an album's lyrics.",
-        epilog="Run `%(prog)s COMMAND --help` for a command's own options.",
+        epilog=(
+            "Run `%(prog)s COMMAND --help` for a command's own options. "
+            "Prerequisites: the Python release that requires-python names, and the "
+            "pinned [project].dependencies, both in the pyproject.toml beside this "
+            "file; a command's own --help names anything more it needs."
+        ),
         formatter_class=help_formatter.ReqAwareDefaultsFormatter,
     )
     parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {project_version()}"
+        "--version",
+        action="version",
+        version=f"%(prog)s {lyricsmith_project.project_version()}",
     )
     # A subcommand rather than a positional argument: the command names a tool, the way
     # `git log` does, and no value is typed into it. Each sub-parser has no options of
@@ -117,7 +113,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Only the first argument is the dispatcher's: a tool's own options, --help among
     # them, are never read here, so `lyricsmith album --help` is album's help.
     namespace = _parser().parse_args(args[:1])
-    tool = _load_main(namespace.command)
+    try:
+        tool = _load_main(namespace.command)
+    except lyricsmith_project.SharedLibraryError as error:
+        # Imported, not run, the tool raises rather than exits: exit 2 as it would.
+        lyricsmith_project.exit_with(error)
     return tool(args[1:], prog=f"{_PROG} {namespace.command}")
 
 

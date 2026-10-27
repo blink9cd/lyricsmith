@@ -64,11 +64,13 @@ class RunChoiceTest(cli_fakes.CliCase):
         self.assertEqual(
             self.provider_settings,
             [
-                ltable.ProviderSettings(
-                    bandcamp=True,
-                    netease=False,
-                    youtube_music=self.youtube_setup(),
-                    tekstowo=self.tekstowo_setup(),
+                self.chosen_settings(
+                    ltable.ProviderSettings(
+                        bandcamp=True,
+                        netease=False,
+                        youtube_music=self.youtube_setup(),
+                        tekstowo=self.tekstowo_setup(),
+                    )
                 )
             ],
         )
@@ -79,7 +81,7 @@ class RunChoiceTest(cli_fakes.CliCase):
         self.assertEqual(self.provider_settings, [])
 
     def test_the_modes_that_ask_no_provider_refuse_it(self) -> None:
-        for mode in ("check", "undo", "strip", "prune"):
+        for mode in ("check", "undo", "strip", "prune", "accept"):
             with self.subTest(mode=mode):
                 result = self.main(
                     "--album", str(self.album), "--mode", mode, "--no-netease"

@@ -2,12 +2,12 @@
 
 Three answers pass every earlier stage and still cannot be embedded: a `SYLT` stamp past
 the frame's four-byte range, a lone surrogate no Unicode encoding writes, and a NUL,
-which ends an ID3 text field early. A fresh run used to strip the track's old lyrics
-before the embed found that out, leaving the track bare until an undo; and a NUL wrote a
-truncated frame that only the read-back caught. The pre-flight builds the frames the
-writer would, with no I/O, and refuses all three first, so the track keeps its lyrics
-and sidecars exactly as they were. The fetch stage is faked to hand each answer over
-directly; every other stage is real. Every lyric is invented.
+which ends an ID3 text field early. Unchecked, a fresh run would strip the track's old
+lyrics before the embed found that out, leaving the track bare until an undo, and a NUL
+would write a truncated frame that only the read-back caught. The pre-flight builds the
+frames the writer would, with no I/O, and refuses all three first, so the track keeps
+its lyrics and sidecars exactly as they were. The fetch stage is faked to hand each
+answer over directly; every other stage is real. Every lyric is invented.
 """
 
 from __future__ import annotations

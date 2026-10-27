@@ -195,9 +195,15 @@ class PlanVisitsTest(sf.IsolatedCase):
         sf.synced_album(self.library, "Artist", "A3")
         self.surveys = sweep_survey.survey_library(self.library, lang="eng")
 
-    def _plan(self, done: frozenset[str], *, restart: bool = False) -> list[list[str]]:
+    def _plan(
+        self,
+        done: frozenset[str],
+        *,
+        restart: bool = False,
+        last: frozenset[str] = frozenset(),
+    ) -> list[list[str]]:
         plan = sweep_survey.plan_visits(
-            self.library, self.surveys, done, restart=restart
+            self.library, self.surveys, done, restart=restart, last=last
         )
         return [
             [album.relative_to(self.library).as_posix() for album in albums]
@@ -219,3 +225,14 @@ class PlanVisitsTest(sf.IsolatedCase):
     def test_a_restart_visits_done_albums_too(self) -> None:
         plan = self._plan(frozenset({"Artist/A1"}), restart=True)
         self.assertEqual(plan, [["Artist/A1", "Artist/A2"], []])
+
+    def test_albums_named_last_come_after_the_others_in_walk_order(self) -> None:
+        sf.needy_album(self.library, "Artist", "A4")
+        self.surveys = sweep_survey.survey_library(self.library, lang="eng")
+        plan = self._plan(frozenset(), last=frozenset({"Artist/A1", "Artist/A2"}))
+        self.assertEqual(plan, [["Artist/A4", "Artist/A1", "Artist/A2"], []])
+
+    def test_an_album_named_last_but_done_is_passed_over(self) -> None:
+        last = frozenset({"Artist/A1"})
+        plan = self._plan(frozenset({"Artist/A1"}), last=last)
+        self.assertEqual(plan, [["Artist/A2"], ["Artist/A1"]])

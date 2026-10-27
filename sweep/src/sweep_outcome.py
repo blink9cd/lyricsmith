@@ -3,15 +3,20 @@
 The sweep (`sweep_run`) records each visit's outcome in the ledger; the rule deciding it
 is kept here, apart, so it reads on its own. An album the sweep could not run the album
 tool on at all is `could not run` without a result, which `sweep_run` decides itself.
-Nothing here prints.
+The stop rule's run of refused albums is counted from each outcome here too
+(`next_streak`). Nothing here prints.
 """
 
 from __future__ import annotations
 
+import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 import lyrics_exit
 import sweep_child
 from sweep_ledger import Outcome
 from sweep_tally import AlbumTally
+
+#: The outcomes of an album some provider answered, which end a run of refused ones.
+_ANSWERED = frozenset({Outcome.DONE, Outcome.OWED})
 
 
 def _finished_codes() -> frozenset[int]:
@@ -28,7 +33,9 @@ def outcome_of(
 ) -> Outcome:
     """How a visit ended, from the child's result and its run's tally, if read.
 
-    A run made *offline* asked no provider, so it is never done.
+    A run made *offline* asked no provider, so it is never done. Of a finished run,
+    one whose providers only refused is refused, one still owing a provider answers
+    is owed, and only one owing none is done.
     """
     if result.exit_code is None:
         return Outcome.ABANDONED
@@ -49,4 +56,17 @@ def outcome_of(
         return Outcome.NO_RECORD
     if offline:
         return Outcome.OFFLINE
-    return Outcome.REFUSED if tally.refused else Outcome.DONE
+    if tally.refused:
+        return Outcome.REFUSED
+    return Outcome.OWED if tally.owed else Outcome.DONE
+
+
+def next_streak(streak: int, outcome: Outcome) -> int:
+    """The run of consecutive refused albums after one that ended as *outcome*.
+
+    A refused album adds one; a done or owed one, where a provider answered, ends the
+    run; any other outcome says nothing about the providers, so leaves it as it was.
+    """
+    if outcome is Outcome.REFUSED:
+        return streak + 1
+    return 0 if outcome in _ANSWERED else streak

@@ -264,10 +264,12 @@ class InterruptTest(sf.SweepCase):
 
 
 class FinalTableTest(sf.IsolatedCase):
-    """The final table's columns: no lyrics expected beside not found."""
+    """The final table's columns: removed, then no lyrics expected, beside not found."""
 
     def test_no_lyrics_expected_follows_not_found(self) -> None:
-        counts = Counts(written=1, not_found=2, no_lyrics_expected=3, silent=5, kept=4)
+        counts = Counts(
+            written=1, not_found=2, no_lyrics_expected=3, silent=5, kept=4, removed=6
+        )
         entry = sl.LedgerEntry("A/B", None, 0, sl.Outcome.DONE, "t", counts=counts)
         report = sr.SweepReport(
             (sr.Visit(self.library, entry),), 0, 0, sr.StopReason.FINISHED
@@ -276,11 +278,13 @@ class FinalTableTest(sf.IsolatedCase):
             report, library=self.library, options=sf.OPTIONS, undo_prog=("al",)
         )
         header, row = text.splitlines()[1:3]
-        self.assertIn("  not found  no lyrics expected  silent  kept  ", header)
-        # written, unchanged, not found, no lyrics expected, silent, kept, errors,
-        # flagged, refusing: the count lands under its own column.
+        self.assertIn(
+            "  not found  removed  no lyrics expected  silent  kept  ", header
+        )
+        # written, unchanged, not found, removed, no lyrics expected, silent, kept,
+        # errors, flagged, refusing: the count lands under its own column.
         self.assertEqual(
-            row.split()[-9:], ["1", "0", "2", "3", "5", "4", "0", "0", "0"]
+            row.split()[-10:], ["1", "0", "2", "6", "3", "5", "4", "0", "0", "0"]
         )
 
 
@@ -439,7 +443,7 @@ class LedgerFailureTest(sf.SweepCase):
 
     def test_a_ledger_that_cannot_be_read_visits_nothing(self) -> None:
         with mock.patch.object(
-            sr, "read_ledger", side_effect=PermissionError("denied")
+            sl, "read_ledger", side_effect=PermissionError("denied")
         ):
             report = self._sweep()
         self.assertEqual(self.fake.calls, [])

@@ -151,11 +151,13 @@ class ContactRunTest(cli_fakes.CliCase):
     def test_the_run_turns_bandcamp_on_with_the_contact(self) -> None:
         result = self.run_album("--config", self._config())
         self.assertEqual(result.code, album.EXIT_OK)
-        expected = ltable.ProviderSettings(
-            bandcamp=True,
-            musicbrainz_contact=CONTACT,
-            youtube_music=self.youtube_setup(),
-            tekstowo=self.tekstowo_setup(),
+        expected = self.chosen_settings(
+            ltable.ProviderSettings(
+                bandcamp=True,
+                musicbrainz_contact=CONTACT,
+                youtube_music=self.youtube_setup(),
+                tekstowo=self.tekstowo_setup(),
+            )
         )
         self.assertEqual(self.provider_settings, [expected])
 
@@ -164,10 +166,12 @@ class ContactRunTest(cli_fakes.CliCase):
         self.assertEqual(
             self.provider_settings,
             [
-                ltable.ProviderSettings(
-                    bandcamp=True,
-                    youtube_music=self.youtube_setup(),
-                    tekstowo=self.tekstowo_setup(),
+                self.chosen_settings(
+                    ltable.ProviderSettings(
+                        bandcamp=True,
+                        youtube_music=self.youtube_setup(),
+                        tekstowo=self.tekstowo_setup(),
+                    )
                 )
             ],
         )
@@ -183,10 +187,12 @@ class ContactRunTest(cli_fakes.CliCase):
         self.assertEqual(
             self.provider_settings,
             [
-                ltable.ProviderSettings(
-                    bandcamp=True,
-                    youtube_music=self.youtube_setup(),
-                    tekstowo=self.tekstowo_setup(),
+                self.chosen_settings(
+                    ltable.ProviderSettings(
+                        bandcamp=True,
+                        youtube_music=self.youtube_setup(),
+                        tekstowo=self.tekstowo_setup(),
+                    )
                 )
             ],
         )
@@ -195,11 +201,13 @@ class ContactRunTest(cli_fakes.CliCase):
         self.main(
             "--mode", "compare", "--album", str(self.album), "--config", self._config()
         )
-        expected = ltable.ProviderSettings(
-            bandcamp=True,
-            musicbrainz_contact=CONTACT,
-            youtube_music=self.youtube_setup(),
-            tekstowo=self.tekstowo_setup(),
+        expected = self.chosen_settings(
+            ltable.ProviderSettings(
+                bandcamp=True,
+                musicbrainz_contact=CONTACT,
+                youtube_music=self.youtube_setup(),
+                tekstowo=self.tekstowo_setup(),
+            )
         )
         self.assertEqual(self.provider_settings, [expected])
 

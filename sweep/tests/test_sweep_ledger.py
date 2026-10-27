@@ -19,14 +19,20 @@ _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 
 import sweep  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_categories as lc  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal_tally as lrt  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_ledger as sl  # noqa: E402 - import follows the sys.path bootstrap above
+from lyrics_tally import PROVIDERS  # noqa: E402 - follows the sys.path bootstrap
 from sweep_tally import Counts  # noqa: E402 - import follows the sys.path bootstrap above
 
 # A registered profile, never an @settings decorator: a fuzzing campaign that re-applies
-# its own settings to each property is refused by Hypothesis on a decorated one. Its own
-# name, so another suite's profile loaded in the same process cannot replace it.
-# deadline=None: a per-example deadline measures machine load, not correctness.
+# its own settings to each property is refused by Hypothesis on a decorated one. Another
+# suite's profile loaded later in the same process cannot replace it, as `@given` copies
+# the settings loaded when it decorates a test. deadline=None: a per-example deadline
+# measures machine load, not correctness.
 settings.register_profile(
     "sweep_ledger_properties",
     deadline=None,
@@ -78,6 +84,15 @@ class LedgerPathTest(sf.IsolatedCase):
         path = sl.ledger_path(self.library, {})
         self.assertEqual(
             path.parent, self.home / ".local" / "state" / "lyricsmith" / "sweep"
+        )
+
+    def test_without_xdg_state_home_it_lives_under_the_named_home(self) -> None:
+        # A home folder that is not the process's, so only HOME in the mapping leads here.
+        other = self.tmp / "other"
+        path = sl.ledger_path(self.library, {"HOME": str(other)})
+        self.assertNotEqual(other, Path.home())
+        self.assertEqual(
+            path.parent, other / ".local" / "state" / "lyricsmith" / "sweep"
         )
 
     def test_a_relative_xdg_state_home_is_ignored(self) -> None:
@@ -231,6 +246,27 @@ class ParseRecordTest(sf.IsolatedCase):
         assert isinstance(record, sl.LedgerEntry)
         self.assertEqual(record.lang, _DEFAULT_LANG)
 
+    def test_lookups_a_breaker_left_unsent_round_trip_apart(self) -> None:
+        refusals: lrt.RefusalCounts = {
+            lm.Source.GENIUS: {lrf.Refusal.BLOCKED: 1, lrt.Unsent.BREAKER_OPEN: 20}
+        }
+        entry = replace(_DONE, refusals=refusals)
+        line = sl.encode_record(entry)
+        self.assertIn('"breaker open": 20', line)
+        self.assertEqual(sl.parse_record(line), entry)
+
+    def test_a_line_written_before_breaker_open_reads_as_it_was(self) -> None:
+        document = self._done(refusals={"Lrclib": {"overloaded": 2}})
+        record = sl.parse_record(json.dumps(document))
+        assert isinstance(record, sl.LedgerEntry)
+        self.assertEqual(
+            record.refusals, {lm.Source.LRCLIB: {lrf.Refusal.OVERLOADED: 2}}
+        )
+
+    def test_a_retry_is_never_breaker_open(self) -> None:
+        # A step the breaker skipped sent no request, so nothing was retried.
+        self._refuses(self._done(retried={"Genius": {"breaker open": 1}}))
+
     def test_a_child_never_reaped_has_no_exit_code(self) -> None:
         entry = sl.LedgerEntry("A/B", None, None, sl.Outcome.ABANDONED, _TIME)
         self.assertEqual(sl.parse_record(sl.encode_record(entry)), entry)
@@ -286,6 +322,27 @@ class DoneAlbumsTest(sf.IsolatedCase):
 
 
 _OUTCOMES = st.sampled_from(list(sl.Outcome))
+_TALLY = st.integers(0, 999)
+#: Counts, every field drawn: the nine whole counts, then the two breakdowns.
+_COUNTS_DRAWN = st.builds(
+    Counts,
+    *[_TALLY] * 9,
+    written_by=st.dictionaries(st.sampled_from(list(lc.WrittenCategory)), _TALLY),
+    removed_by=st.dictionaries(st.sampled_from(list(lc.RemovedReason)), _TALLY),
+)
+#: A count per provider and reason, as the retries are kept.
+_BY_REASON = st.dictionaries(
+    st.sampled_from(list(lm.Source)),
+    st.dictionaries(st.sampled_from(list(lrf.Refusal)), _TALLY, min_size=1),
+    max_size=3,
+)
+#: The refusals' counts: a reason, or a lookup an open breaker left unsent.
+_REFUSAL_KEYS = st.sampled_from([*lrf.Refusal, *lrt.Unsent])
+_BY_KEY = st.dictionaries(
+    st.sampled_from(list(lm.Source)),
+    st.dictionaries(_REFUSAL_KEYS, _TALLY, min_size=1),
+    max_size=3,
+)
 _NAMES = st.text(
     alphabet=st.characters(blacklist_characters="/\\"),
     min_size=1,
@@ -298,11 +355,15 @@ _ENTRIES = st.builds(
     exit_code=st.none() | st.integers(min_value=-64, max_value=255),
     outcome=_OUTCOMES,
     time=st.text(max_size=32),
-    counts=st.none() | st.builds(Counts, *[st.integers(0, 999)] * 7),
+    counts=st.none() | _COUNTS_DRAWN,
     refusing_tracks=st.integers(0, 999),
     refusing_providers=st.lists(st.text(max_size=12), max_size=3).map(tuple),
     lang=st.text(max_size=8),
     pass_=st.sampled_from(list(sl.SweepPass)),
+    owed_providers=st.lists(st.sampled_from(PROVIDERS), unique=True).map(tuple),
+    challenged_providers=st.lists(st.sampled_from(PROVIDERS), unique=True).map(tuple),
+    refusals=_BY_KEY,
+    retried=_BY_REASON,
 )
 #: Any JSON value, plausible or not, for a field the parser validates.
 _JSON_VALUES = st.recursive(
@@ -332,6 +393,10 @@ _FIELDS = st.sampled_from(
         "refusing_providers",
         "lang",
         "pass",
+        "owed_providers",
+        "challenged_providers",
+        "refusals",
+        "retried",
         "elsewhere",
     ]
 )

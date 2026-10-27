@@ -2,16 +2,17 @@
 
 The model is torchaudio's WAV2VEC2_ASR_BASE_960H. Its labels are the CTC blank, a word
 separator, the 26 capital letters and the apostrophe. A line keeps only those letters,
-case-folded, with a typographic apostrophe read as the apostrophe. One separator joins
+upper-cased, with a typographic apostrophe read as the apostrophe. One separator joins
 each two words, across lines too, and belongs to no line. So a line's start is its own
 first letter: CTC may place the separator before a line anywhere in the pause ahead of it,
-and counting that separator as the line's start stamped a line after a pause where the
-pause began. A bracketed section header such as ``[Chorus]`` has nothing to align. Pure.
+and counting that separator as the line's start would stamp a line after a pause where
+the pause began. A bracketed section header such as ``[Chorus]`` has nothing to align. Pure.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -53,9 +54,20 @@ def line_words(line: str) -> list[str]:
     """*line*'s words as the capital letters the model aligns; none for a section header."""
     if _SECTION_HEADER.fullmatch(line.strip()):
         return []
-    folded = line.translate(_APOSTROPHES).upper()
+    folded = _fold_accents(line.translate(_APOSTROPHES)).upper()
     words = ("".join(c for c in word if c in _INDEX) for word in folded.split())
     return [word for word in words if word]
+
+
+def _fold_accents(text: str) -> str:
+    """*text* with each accented letter as its base letter: café is cafe.
+
+    Decomposed, an accented letter is its base letter and combining marks, and the
+    marks are dropped; a letter with no decomposition into the model's letters, as ø,
+    is left for the letter filter to drop.
+    """
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(char for char in decomposed if not unicodedata.combining(char))
 
 
 # fuzz-target

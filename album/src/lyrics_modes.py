@@ -2,13 +2,14 @@
 
 `plan_album` says what a run would do with each track, changing nothing: no lock, no
 backup, no run folder. `check_run` re-judges the tracks whose lyrics a run accepted,
-reading only. `undo_album` chooses the run, then undoes it holding the album lock. Each
-track's failure is recorded against it, as in a run. Nothing here prints.
+reading only, and `check_tracks` does so for chosen tracks of a run already read.
+`undo_album` chooses the run, then undoes it holding the album lock. Each track's
+failure is recorded against it, as in a run. Nothing here prints.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,11 +19,13 @@ from lyrics_inventory import EmbeddedLyrics, TrackLyricsKind, embedded_lyrics
 from lyrics_judge import recheck_written
 from lyrics_model import (
     Lyrics,
+    ManifestSchemaError,
     NoRunError,
     QueryMarker,
     Source,
     SyncedLyrics,
     TrackTags,
+    UnreadableRunError,
     lyrics_from_frames,
 )
 from lyrics_outcomes import ACCEPTED
@@ -304,14 +307,29 @@ def _read_chosen(stages: Stages, album: Path, run_dir: Path) -> Manifest:
     """The manifest of the run chosen in *run_dir*; `NoRunError` once its folder is gone.
 
     The run is chosen before its manifest is read (for undo, before the lock), so
-    another process can remove the folder in between: that run no longer exists.
+    another process can remove the folder in between: that run no longer exists. A
+    manifest that is there but cannot be read (a dangling link, one leading out of the
+    run folder, a malformed one) raises `UnreadableRunError` naming the run, the reason
+    and the way forward, so a plain undo or check that chose it says which run stopped
+    it rather than a bare OS error.
     """
     try:
         return stages.read_manifest(run_dir)
-    except FileNotFoundError:
+    except FileNotFoundError as error:
         if run_dir.is_dir():
-            raise
+            raise _unreadable(run_dir, error) from error
         raise NoRunError(f"no run {run_dir.name!r} under {album}") from None
+    except (ManifestSchemaError, OSError) as error:
+        raise _unreadable(run_dir, error) from error
+
+
+def _unreadable(run_dir: Path, error: Exception) -> UnreadableRunError:
+    """The refusal of the run in *run_dir*, whose manifest read raised *error*."""
+    return UnreadableRunError(
+        f"run {run_dir.name!r}: its manifest could not be read ({error}); choose "
+        f"another run with --run-id <older id>, or mend or remove its run folder "
+        f"{run_dir}"
+    )
 
 
 @dataclass(frozen=True)
@@ -376,14 +394,28 @@ def check_run(
     """Re-run the check on the tracks a run accepted lyrics for, newest or *run_id*.
 
     *track* is an album-relative path. Read only, so no lock is taken. Raise
-    `NoRunError` when there is no such run and `TrackNotInRunError` for a track it
-    does not list.
+    `NoRunError` when there is no such run, `UnreadableRunError` when its manifest
+    cannot be read, and `TrackNotInRunError` for a track it does not list.
     """
     run_dir = stages.select_run(album, run_id)
     manifest = _read_chosen(stages, album, run_dir)
-    chosen = manifest.selected(track)
-    checked = (_check_one(stages, album, run_dir, t, manifest.lang) for t in chosen)
-    return CheckReport(manifest.run_id, tuple(checked))
+    checked = check_tracks(album, run_dir, manifest, manifest.selected(track), stages)
+    return CheckReport(manifest.run_id, checked)
+
+
+def check_tracks(
+    album: Path,
+    run_dir: Path,
+    manifest: Manifest,
+    tracks: Iterable[ManifestTrack],
+    stages: Stages,
+) -> tuple[CheckedTrack, ...]:
+    """Check each of *tracks*, entries of *manifest* read from *run_dir*, as check does.
+
+    For a caller that has already read the run: no run is chosen and nothing is
+    refused. Each track is checked, or not, exactly as `check_run` would, reading only.
+    """
+    return tuple(_check_one(stages, album, run_dir, t, manifest.lang) for t in tracks)
 
 
 # --- Undo ----------------------------------------------------------------------------
@@ -403,9 +435,9 @@ def undo_album(
     `Stages.select_run`, before the lock is taken, so an album with no run is refused
     without one. Its manifest is read, and whether it is the newest run decided, with
     the lock held, so neither can change before undo acts on them. Raise `NoRunError`
-    when there is no such run, `ManifestSchemaError` on a manifest this code cannot
-    read (before any track changes), and `TrackNotInRunError` for a track the run does
-    not list.
+    when there is no such run, `UnreadableRunError` on a manifest that cannot be read
+    or this code cannot parse (before any track changes), and `TrackNotInRunError` for
+    a track the run does not list.
     """
     run_dir = stages.select_run(album, run_id)
     with album_lock(album, acquire=acquire_lock):

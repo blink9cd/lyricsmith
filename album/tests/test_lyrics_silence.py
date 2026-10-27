@@ -10,24 +10,16 @@ import sys
 from pathlib import Path
 from unittest import mock
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_config as lc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_silence as ls  # noqa: E402 - import follows the sys.path bootstrap above
-
-# A registered profile, never an @settings decorator: test_lyrics_genre's reasoning, and
-# its name and settings, so whichever suite loads first the properties run the same.
-settings.register_profile(
-    "album_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_properties")
 
 #: The real lookup, captured before any IsolatedCase patches the module attribute.
 _REAL_FIND = ls.find_ffmpeg

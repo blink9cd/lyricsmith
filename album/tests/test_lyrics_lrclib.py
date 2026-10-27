@@ -17,6 +17,7 @@ from hypothesis import given
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import genius_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import http_fakes  # noqa: E402 - import follows the sys.path bootstrap above
@@ -250,10 +251,10 @@ class StatusTest(fixtures.IsolatedCase):
         self.assertEqual(str(last), "LRCLIB answered HTTP 429")
         self.assertEqual(raised.exception.detail, "HTTP 429 after 3 retries")
 
-    def test_a_500_from_the_search_is_a_status_error(self) -> None:
-        with self.assertRaises(lp.HttpStatusError) as raised:
+    def test_a_500_from_the_search_is_a_status_error_once_retried(self) -> None:
+        with self.assertRaises(lp.RetriedError) as raised:
             _ask(FakeLrclib(hits=500), S, NO_ALBUM)
-        self.assertEqual(raised.exception.status, 500)
+        self.assertEqual(lp.http_status(raised.exception.last), 500)
 
     def test_a_503_from_the_search_after_a_503_lookup_is_a_status_error(self) -> None:
         with self.assertRaises(lp.RetriedError) as raised:

@@ -14,6 +14,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
+from fifo_fakes import make_pipe, within_deadline  # noqa: E402 - follows the bootstrap
 import lyrics_backup as lb  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_compare as lc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_manifest as lmf  # noqa: E402 - import follows the sys.path bootstrap above
@@ -189,6 +190,48 @@ class RunsNewestFirstTests(fixtures.IsolatedCase):
                 lb.run_folder(album, _OLD),
             ),
         )
+
+
+class PassedOverTest(fixtures.IsolatedCase):
+    """`recorded_sources` names each run whose manifest it passed over, and why."""
+
+    def setUp(self) -> None:
+        """An album with a good older run and a newer one, both naming one track."""
+        super().setUp()
+        self.album = self.tmp
+        write_run(self.album, _OLD, entry(_TRACK, _ST.WRITTEN, _SRC.LRCLIB))
+        write_run(self.album, _NEW, entry(_TRACK, _ST.WRITTEN, _SRC.NETEASE))
+        self.newer = self.album / lr.RUN_FOLDER_NAME / _NEW
+
+    def records(self) -> lp.SourceRecords:
+        """What the walk with the real manifest reader found."""
+        return lp.recorded_sources(self.album, lmf.read_manifest)
+
+    def test_readable_runs_pass_nothing_over(self) -> None:
+        self.assertEqual(self.records().passed_over, ())
+
+    def test_a_malformed_newer_run_is_passed_over_by_name(self) -> None:
+        (self.newer / lr.MANIFEST_NAME).write_bytes(b"\xff{")
+        records = self.records()
+        self.assertEqual(records.passed_over, ((self.newer, "ManifestSchemaError"),))
+        self.assertEqual(records.source_of(_TRACK), _SRC.LRCLIB)
+
+    def test_a_fifo_manifest_is_passed_over_at_once(self) -> None:
+        manifest = self.newer / lr.MANIFEST_NAME
+        manifest.unlink()
+        make_pipe(manifest)
+        records = within_deadline(self, manifest, self.records)
+        self.assertEqual(records.passed_over, ((self.newer, "ManifestSchemaError"),))
+        self.assertEqual(records.source_of(_TRACK), _SRC.LRCLIB)
+
+    def test_an_os_error_is_named_by_its_type(self) -> None:
+        def read(run_dir: Path) -> lr.Manifest:
+            if run_dir.name == _NEW:
+                raise PermissionError("refused")
+            return lmf.read_manifest(run_dir)
+
+        records = lp.recorded_sources(self.album, read)
+        self.assertEqual(records.passed_over, ((self.newer, "PermissionError"),))
 
 
 if __name__ == "__main__":

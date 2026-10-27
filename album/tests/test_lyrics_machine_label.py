@@ -5,31 +5,18 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_fetch as lf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_inventory as li  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_sidecar as lsc  # noqa: E402 - import follows the sys.path bootstrap above
-
-# A registered profile, never an @settings decorator: a fuzzing campaign that re-applies
-# its own settings to each property is refused by Hypothesis on a decorated one. The
-# name and settings are test_lyrics_model's, so whichever suite loads first, the other's
-# properties run under the same profile. deadline=None: a per-example wall-clock
-# deadline measures machine load, not correctness. too_slow is suppressed because a
-# cold cache's first text draw builds Hypothesis's unicode tables inside that health
-# check's window.
-settings.register_profile(
-    "album_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_properties")
 
 MT = lm.Source.MACHINE_TRANSCRIPT
 LABEL = "[by:machine transcript]"

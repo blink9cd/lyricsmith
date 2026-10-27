@@ -55,7 +55,7 @@ LATE = {
     "YouTube Music": "the YouTube Music pace outlasts the deadline",
     "Tekstowo": "the Tekstowo pace outlasts the deadline",
     "Genius": "the Genius pace outlasts the deadline",
-    "MusicBrainz": "the MusicBrainz lookup ran out of time",
+    "MusicBrainz": "the MusicBrainz pace outlasts the deadline",
 }
 
 
@@ -120,7 +120,7 @@ def genius_lane(stack: ExitStack, tmp: Path, clock: FakeClock, refusing: bool) -
         "Genius",
         lg.GENIUS_MIN_INTERVAL_S,
         # The step's own deadline is fixed from its clock; its paced search takes one.
-        lambda give_up_at: genius._paced_search(QUERY, give_up_at),
+        lambda give_up_at: genius._paced_search(QUERY, give_up_at, lambda: None),
         lambda: [when for _, _, when in client.calls if when is not None],
     )
 
@@ -198,7 +198,7 @@ class PaceConformanceTest(_ConformanceCase):
             with self.assertRaises(lp.ProviderTimeout) as late:
                 lane.request(clock() + lane.interval_s / 2)
             self.assertEqual((len(lane.times()), clock.sleeps), (1, []))
-            # Each provider's own wording, recorded as the attempt's detail, is kept.
+            # The message names the provider, so the attempt's detail says whose pace.
             self.assertEqual(str(late.exception), LATE[lane.name])
 
         self.each_lane(PACED, check)

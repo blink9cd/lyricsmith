@@ -21,7 +21,7 @@ import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 
 #: The companion doc beside the entry point.
 COMPANION = _HERE.parent / "album.md"
-#: The reader the changed list was once said to be for, which the folder does not carry.
+#: A tag reader the folder does not carry, which no help or doc may name.
 UNSHIPPED_READER = "tag_refresh"
 
 

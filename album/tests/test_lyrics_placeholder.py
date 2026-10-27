@@ -14,27 +14,19 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_fetch as lf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_inventory as li  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_placeholder as ph  # noqa: E402 - import follows the sys.path bootstrap above
 import tag_builders  # noqa: E402 - import follows the sys.path bootstrap above
-
-# A registered profile, never an @settings decorator, under its own name, so another
-# suite's profile loaded in the same process cannot replace it (see test_lyrics_check).
-settings.register_profile(
-    "album_placeholder_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_placeholder_properties")
 
 S, U = lm.LyricsKind.SYNCED, lm.LyricsKind.UNSYNCED
 LRCLIB_SYNCED = lm.ProviderKey(lm.Source.LRCLIB, S)

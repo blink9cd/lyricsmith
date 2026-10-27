@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+import lyrics_located  # noqa: F401 - puts the shared libraries on sys.path
 import lyrics_album
 import lyrics_backup
 import lyrics_check

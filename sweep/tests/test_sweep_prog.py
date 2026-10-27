@@ -18,6 +18,7 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 
 import sweep  # noqa: E402 - import follows the sys.path bootstrap above
 import album  # noqa: E402 - import follows the sys.path bootstrap above
+import help_formatter  # noqa: E402 - reachable through the entry point's bootstrap
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_ledger as sl  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_lock  # noqa: E402 - import follows the sys.path bootstrap above
@@ -26,6 +27,15 @@ import sweep_report  # noqa: E402 - import follows the sys.path bootstrap above
 #: The program name the lyricsmith dispatcher hands the sweep.
 _DISPATCHED = "lyricsmith sweep"
 _REFUSED = sf.Script(outcomes=sf.REFUSED, exit_code=album.EXIT_TRACK_ERRORS)
+
+
+class SharedFormatterTest(sf.IsolatedCase):
+    """The sweep's --help is laid out by the shared formatter, as the album tool's is."""
+
+    def test_the_parser_uses_the_shared_formatter(self) -> None:
+        self.assertIs(
+            sweep.build_parser().formatter_class, help_formatter.RawNoneHidingFormatter
+        )
 
 
 class CommandWordsTest(sf.IsolatedCase):

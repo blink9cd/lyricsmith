@@ -308,7 +308,7 @@ class NewestTest(PruneCase):
         kept = self.made_run()
         middle = self.made_run(1)
         self.undo(middle)
-        # Newer than every run, with a manifest select_run skips: a dangling link.
+        # Newer than every run, with a manifest no reader can read: a dangling link.
         unreadable = self.album / lr.RUN_FOLDER_NAME / f"{middle}-2"
         unreadable.mkdir()
         (unreadable / lr.MANIFEST_NAME).symlink_to(self.tmp / "missing.json")
@@ -321,10 +321,9 @@ class NewestTest(PruneCase):
                 unreadable.name: lp.Outcome.KEEP_UNREADABLE,
             },
         )
-        self.assertEqual(
-            lyrics_backup.select_run(self.album, None),
-            lr.run_folder(self.album, middle),
-        )
+        # The dangling link is a run to select_run too, so a plain undo lands on it
+        # and refuses, never on the kept run behind it.
+        self.assertEqual(lyrics_backup.select_run(self.album, None), unreadable)
 
 
 class SafetyTest(PruneCase):

@@ -20,7 +20,7 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_silence as ls  # noqa: E402 - import follows the sys.path bootstrap above
 
-# On sys.path once lyrics_silence's own upward-search bootstrap has run.
+# On sys.path once lyrics_silence's own bootstrap has run.
 import bounded_run  # noqa: E402 - import follows the sys.path bootstrap above
 
 #: ffmpeg on PATH at import, or None; read here, not through ls.find_ffmpeg.

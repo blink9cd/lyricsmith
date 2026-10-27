@@ -30,6 +30,7 @@ import lyrics_fetch as lf  # noqa: E402 - import follows the sys.path bootstrap 
 import lyrics_http as lh  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_musicbrainz as lmb  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_provider_kinds as lpk  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_providers as lp  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_table as ltable  # noqa: E402 - import follows the sys.path bootstrap above
 
@@ -390,3 +391,32 @@ class ChainAndTableTest(fixtures.IsolatedCase):
         result = lf.fetch_lyrics(QUERY, held, {KEY: recording}, deadline_s=30.0)
         self.assertEqual(recording.calls, [])
         self.assertIs(result.source, lm.Source.SIDECAR)
+
+
+class KeptTest(_Case):
+    """`kept` says whether a call reads what an earlier track's lookup kept."""
+
+    def test_the_real_step_says_what_it_kept(self) -> None:
+        # The chain reads `kept` only through the protocol, so the step must match it.
+        self.assertIsInstance(self.provider, lpk.KeepsAnswers)
+
+    def test_nothing_is_kept_before_the_album_is_looked_up(self) -> None:
+        self.assertFalse(self.provider.kept(QUERY))
+
+    def test_an_answer_and_a_failure_are_kept_for_the_album(self) -> None:
+        self.ask(self.server(routes(SEARCH, LINKED)), QUERY)
+        self.assertTrue(self.provider.kept(query("Lantern Light")))
+        self.assertFalse(self.provider.kept(query("Lantern Light", album="Other")))
+        failing = self.build()
+        self.provider = failing
+        self.raised(self.server(routes(SEARCH, LINKED, page=503)), QUERY)
+        self.assertTrue(failing.kept(query("Lantern Light")))
+
+    def test_a_lookup_under_way_is_not_kept(self) -> None:
+        self.ask(self.server(routes(SEARCH, LINKED)), QUERY)
+        with self.provider.lock:
+            self.assertFalse(self.provider.kept(QUERY))
+
+    def test_a_track_it_would_not_ask_is_not_kept(self) -> None:
+        self.ask(self.server(routes(SEARCH, LINKED)), QUERY)
+        self.assertFalse(self.provider.kept(query("The Ford", album=None)))

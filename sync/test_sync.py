@@ -23,21 +23,24 @@ import sy_cases  # noqa: E402 - import follows the sys.path bootstrap above
 #: Per-file floors. Raise one when you add tests; lower one only when its tests move to
 #: another file or lose their subject.
 _MIN_GROUPED_TESTS_BY_FILE = {
-    "test_sy_types.py": 3,
-    "test_sy_text.py": 7,
-    "test_sy_lines.py": 9,
-    "test_sy_lrc.py": 4,
-    "test_sy_plan.py": 13,
-    "test_sy_summary.py": 13,
+    "test_sy_types.py": 5,
+    "test_sy_text.py": 8,
+    "test_sy_lines.py": 12,
+    "test_sy_lrc.py": 5,
+    "test_sy_plan.py": 15,
+    "test_sy_summary.py": 17,
     "test_sy_models.py": 4,
-    "test_sy_request.py": 7,
-    "test_sy_child.py": 6,
-    "test_sy_engine.py": 8,
-    "test_sy_embed.py": 20,
-    "test_sy_track.py": 9,
-    "test_sy_cli.py": 18,
+    "test_sy_request.py": 8,
+    "test_sy_child.py": 19,
+    "test_sy_engine.py": 10,
+    "test_sy_embed.py": 22,
+    "test_sy_track.py": 11,
+    "test_sy_cli.py": 34,
     "test_sy_live.py": 1,
     "test_sy_album.py": 3,
+    "test_sy_reads.py": 3,
+    "test_sy_located.py": 3,
+    "test_sy_entries.py": 10,
 }
 
 

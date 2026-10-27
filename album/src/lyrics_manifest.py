@@ -50,6 +50,7 @@ from lyrics_records import (
     ErrorStage,
     FrameExport,
     GeniusState,
+    HeldBefore,
     Manifest,
     ManifestTrack,
     OutcomeStatus,
@@ -73,6 +74,9 @@ from lyrics_manifest_fields import (
     text_value,
 )
 from lyrics_provider_states import BandcampState, CoolingState, SilenceCheck
+from lyrics_refusal import Refusal
+from lyrics_refusal_detail import reason_from_detail
+from lyrics_retried import read_retried
 from lyrics_stages import ReadManifest, WriteManifest
 
 #: The largest manifest read: a real one runs to kilobytes, so anything past this is
@@ -86,11 +90,16 @@ _ALBUM = "."
 _PAIR = 2
 #: The ``after`` fields older manifests lack: the sidecar links ignored, the provider
 #: calls that refused, what a refetch of untimed or implausible lyrics records, and a
-#: silence check's.
+#: silence check's, and what the track held before the run.
 _LINKS_IGNORED, _IMPLAUSIBLE = "sidecar_links_ignored", "implausible"
 _REFUSALS, _REFETCH, _UNREADABLE = "refusals", "refetch_untimed", "sidecar_unreadable"
 _PEAK, _SILENCE_FAILED = "peak_dbfs", "silence_failed"
 _REFETCH_IMPLAUSIBLE = "refetch_implausible"
+_HELD = "held"
+#: The refusal fields older manifests lack, beside ``status``, ``retry_after_s`` and
+#: ``server``, which read as absent when missing: the class, the retries made, and
+#: whether an open breaker left the step unsent (sent when missing).
+_REASON, _RETRIES, _UNSENT = "reason", "retries", "unsent"
 #: A SHA-256 digest as lowercase hex.
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -208,12 +217,49 @@ def _sidecar_hash(value: object, where: str) -> SidecarHash:
     return SidecarHash(file_name(fields.value("name"), fields.at("name")), digest)
 
 
+def _count(value: object, where: str) -> int:
+    """*value* as a count or a status: an integer, none below zero, or refused."""
+    count = number_value(value, where)
+    if count < 0:
+        raise malformed(where, "a count of zero or more")
+    return count
+
+
+def _wait(value: object, where: str) -> float:
+    """*value* as a wait in seconds: a finite number, none below zero, or refused."""
+    wait = real_value(value, where)
+    if wait < 0:
+        raise malformed(where, "a wait of zero or more")
+    return wait
+
+
 def _refusal(value: object, where: str) -> ProviderRefusal:
-    """One provider refusal; its detail reads capped, as the record caps it."""
+    """One provider refusal; its detail and server read capped, as the record caps them.
+
+    Its facts came later than the rest, so an entry without them reads its class from
+    its provider and detail (`reason_from_detail`), no retries, every other fact absent.
+    An entry from before ``unsent`` was kept reads as sent: no breaker marked it.
+    """
     fields = Fields(value, where)
     provider = member(Source)(fields.value("provider"), fields.at("provider"))
     step = member(LyricsKind)(fields.value("step"), fields.at("step"))
-    return ProviderRefusal(provider, step, fields.text("detail"))
+    detail = fields.text("detail")
+    reason, retries = reason_from_detail(provider, detail), 0
+    if fields.has(_REASON):
+        reason = member(Refusal)(fields.value(_REASON), fields.at(_REASON))
+    if fields.has(_RETRIES):
+        retries = _count(fields.value(_RETRIES), fields.at(_RETRIES))
+    return ProviderRefusal(
+        provider,
+        step,
+        detail,
+        reason,
+        status=fields.later("status", _count),
+        retries=retries,
+        retry_after_s=fields.later("retry_after_s", _wait),
+        server=fields.later("server", text_value),
+        unsent=fields.has(_UNSENT) and fields.flag(_UNSENT),
+    )
 
 
 def _after(value: object, where: str) -> TrackOutcome:
@@ -245,6 +291,7 @@ def _after(value: object, where: str) -> TrackOutcome:
         and fields.flag(_REFETCH_IMPLAUSIBLE),
         peak_dbfs=fields.later(_PEAK, real_value),
         silence_failed=fields.later(_SILENCE_FAILED, text_value),
+        held=fields.later(_HELD, member(HeldBefore)),
     )
 
 
@@ -315,6 +362,8 @@ def _manifest(document: object) -> Manifest:
         tekstowo=fields.later("tekstowo", member(CoolingState)) or CoolingState.OFF,
         silence_check=fields.later("silence_check", member(SilenceCheck))
         or SilenceCheck.OFF,
+        # Optional too: a manifest written before the map made no retries it kept.
+        retried=read_retried(fields, "retried"),
     )
 
 
@@ -383,19 +432,24 @@ def write_manifest(run_dir: Path, manifest: Manifest) -> None:
     lyrics_files.write_confirmed(run_dir / MANIFEST_NAME, manifest_bytes(manifest))
 
 
+#: What `read_manifest` refuses as malformed: a link out, or no regular file.
+_REFUSED_READS = (lyrics_files.OutsideRunFolderError, lyrics_files.NotRegularFileError)
+
+
 def read_manifest(run_dir: Path) -> Manifest:
     """Read *run_dir*'s manifest; raise `ManifestSchemaError` unless it is well formed.
 
-    A manifest reached through a link out of the run folder, or larger than
-    `MAX_MANIFEST_BYTES`, is refused as malformed too, the oversized one unread past
-    the cap. A missing or unreadable file is the `OSError` reading it raised.
+    A manifest reached through a link out of the run folder, one that is no regular
+    file (a folder, a FIFO pipe: `lyrics_files.read_regular` opens it without waiting
+    on a writer), or one larger than `MAX_MANIFEST_BYTES` is refused as malformed too,
+    the oversized one unread past the cap. A missing or unreadable file is the
+    `OSError` reading it raised.
     """
     try:
         path = lyrics_files.inside_run_folder(run_dir, MANIFEST_NAME)
-    except lyrics_files.OutsideRunFolderError as error:
+        data = lyrics_files.read_regular(path, MAX_MANIFEST_BYTES + 1)
+    except _REFUSED_READS as error:
         raise ManifestSchemaError(f"malformed manifest: {error}") from error
-    with path.open("rb") as handle:
-        data = handle.read(MAX_MANIFEST_BYTES + 1)
     if len(data) > MAX_MANIFEST_BYTES:
         raise ManifestSchemaError(
             f"malformed manifest: too large, over {MAX_MANIFEST_BYTES} bytes"

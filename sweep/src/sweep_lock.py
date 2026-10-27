@@ -22,6 +22,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
+from lyrics_state import make_state_folder
+
 #: The lock file's suffix, in place of the ledger's own.
 _LOCK_SUFFIX = ".lock"
 #: The lock file's mode when it is made: the sweep's own state, read by no one else.
@@ -38,9 +41,13 @@ def lock_path(ledger: Path) -> Path:
 
 
 def _open(path: Path) -> int:
-    """A descriptor on the lock file at *path*, made with its folder when missing."""
+    """A descriptor on the lock file at *path*, made with its folder when missing.
+
+    The folder is the ledger's, so each one made is 0o700, as the ledger's write
+    makes it (`lyrics_state.make_state_folder`).
+    """
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        make_state_folder(path.parent)
         return os.open(path, os.O_RDWR | os.O_CREAT, _LOCK_MODE)
     except OSError as error:
         raise SweepLockError(f"the lock cannot be made: {path}: {error}") from error

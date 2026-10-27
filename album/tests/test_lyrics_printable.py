@@ -5,8 +5,10 @@ did not write: a name holding an escape sequence (a clipboard write, a
 hyperlink, a cursor move) would otherwise drive the operator's terminal when a progress
 line, a report or a notice prints it. Every such character, C0 (tab included), DEL and
 C1, prints as a visible ``\\xNN`` escape instead; every other character, accented, CJK
-or emoji, prints as it is. The manifest keeps the true names. The album is built from
-silent MP3s under the test's own directory, and the providers answer nothing.
+or emoji, prints as it is. The escape is `stdio_utf8.spell_unsafe`, whose own suite
+holds its cases code point by code point; these hold that the album tool uses it. The
+manifest keeps the true names. The album is built from silent MP3s under the test's own
+directory, and the providers answer nothing.
 """
 
 from __future__ import annotations
@@ -22,8 +24,11 @@ import cli_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_manifest  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_outcomes  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_recorder  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_summary  # noqa: E402 - import follows the sys.path bootstrap above
 import run_fakes  # noqa: E402 - import follows the sys.path bootstrap above
+import stdio_utf8  # noqa: E402 - reachable through the album fixtures' bootstrap
 from lyrics_summary import table as summary_table  # noqa: E402 - import follows the sys.path bootstrap above
 from fixtures import TrackSpec  # noqa: E402 - import follows the sys.path bootstrap above
 
@@ -43,38 +48,11 @@ _RAW = ("\x1b", "\x07")
 class PrintableTest(fixtures.IsolatedCase):
     """The one helper every printed name, path and message passes through."""
 
-    def test_each_control_character_prints_as_an_escape(self) -> None:
-        cases = {
-            "\x00": "\\x00",
-            "\t": "\\x09",
-            "\n": "\\x0a",
-            "\x1b": "\\x1b",
-            "\x1f": "\\x1f",
-            "\x7f": "\\x7f",
-            "\x80": "\\x80",
-            "\x9b": "\\x9b",
-            "\x9f": "\\x9f",
-        }
-        for raw, shown in cases.items():
-            with self.subTest(code=ord(raw)):
-                self.assertEqual(lyrics_outcomes.printable(f"a{raw}b"), f"a{shown}b")
-
-    def test_every_other_character_prints_as_it_is(self) -> None:
-        text = " ~\xa0é灯台🌊\\x1b"
-        self.assertEqual(lyrics_outcomes.printable(text), text)
-
-    def test_escaping_twice_changes_nothing_more(self) -> None:
-        once = lyrics_outcomes.printable(_HOSTILE)
-        self.assertEqual(lyrics_outcomes.printable(once), once)
-
-    def test_each_direction_or_separator_control_prints_as_an_escape(self) -> None:
-        # Each would make a printed name read differently from the one on disk.
-        codes = (0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A))
-        for code in (*codes, 0x2028, 0x2029):
-            with self.subTest(code=hex(code)):
-                shown = lyrics_outcomes.printable(f"a{chr(code)}b")
-                self.assertEqual(shown, f"a\\u{code:04x}b")
-                self.assertEqual(lyrics_outcomes.printable(shown), shown)
+    def test_each_printing_module_uses_stdio_utf8s_escape(self) -> None:
+        for module in (lyrics_recorder, lyrics_summary):
+            with self.subTest(module=module.__name__):
+                self.assertIs(module.spell_unsafe, stdio_utf8.spell_unsafe)
+        self.assertFalse(hasattr(lyrics_outcomes, "printable"))
 
     def test_a_right_to_left_override_in_a_name_prints_escaped(self) -> None:
         # "01 ‮gpj.mp3" displays as "01 3pm.jpg": the escape shows the truth.

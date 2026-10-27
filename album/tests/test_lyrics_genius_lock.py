@@ -114,9 +114,10 @@ class GeniusLockWaitTest(fixtures.IsolatedCase):
         lock = RecordingLock(free=True)
         clock = FakeClock()
         genius = self._genius(client, lock, clock)
-        # The first retry's wait alone runs past the whole step deadline.
+        # The first retry's wait alone runs past the whole step deadline, so the
+        # retry's turn is refused and the step ends on the challenge it was for.
         genius.sleeper = lambda seconds: clock.sleep(seconds + 1000.0)
-        with self.assertRaises(lp.ProviderTimeout):
+        with self.assertRaises(lp.HttpStatusError):
             genius(QUERY)
         self.assertEqual(len(client.calls), 1)
         self.assertEqual(len(lock.timeouts), 1)

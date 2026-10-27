@@ -16,6 +16,7 @@ from hypothesis import strategies as st
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_match as lmatch  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
@@ -334,8 +335,9 @@ _LENGTHS = st.floats(min_value=1, max_value=1e4)
 class RefusalPropertyTest(fixtures.IsolatedCase):
     """Each refusal rule holds whatever the names around it."""
 
+    # fuzz-explore: match_score
     @given(_PLAIN_TITLES, _MARKERS, st.booleans())
-    def test_fuzz_a_version_only_the_hit_names_is_refused(
+    def test_a_version_only_the_hit_names_is_refused(
         self, title: str, marker: str, bracketed: bool
     ) -> None:
         query = lm.TrackQuery("Invented Artist", title)
@@ -349,8 +351,9 @@ class RefusalPropertyTest(fixtures.IsolatedCase):
             lmatch.match_score(versioned, _hit(named, duration_s=None))
         )
 
+    # fuzz-explore: match_score
     @given(_PLAIN_TITLES, st.integers(0, 10**6), st.integers(0, 10**6))
-    def test_fuzz_unequal_unbracketed_numbers_are_refused(
+    def test_unequal_unbracketed_numbers_are_refused(
         self, title: str, mine: int, theirs: int
     ) -> None:
         assume(mine != theirs)
@@ -358,8 +361,9 @@ class RefusalPropertyTest(fixtures.IsolatedCase):
         hit = _hit(f"{title} {theirs}", duration_s=None)
         self.assertIsNone(lmatch.match_score(query, hit))
 
+    # fuzz-explore: match_score
     @given(_PLAIN_TITLES, _LENGTHS, st.floats(min_value=0.001, max_value=1e4))
-    def test_fuzz_a_length_gap_past_the_tolerance_is_refused(
+    def test_a_length_gap_past_the_tolerance_is_refused(
         self, title: str, length: float, extra: float
     ) -> None:
         query = lm.TrackQuery("Invented Artist", title, duration_s=length)

@@ -6,8 +6,8 @@ check. Whatever stops the track, an error or an interrupt, its outcome is built 
 that state, so the manifest says what was done to the track, which is what undo needs,
 and which providers refused or failed on the way (`fetch_refusals`).
 `not_found` turns a fetch that found nothing into its outcome, and `describe_outcome`
-is the verdict a progress line shows. `printable` is what every name, path and message
-passes through on its way into printed text, so none of it can drive a terminal.
+is the verdict a progress line shows, and `changed_lyrics` whether a run's outcome
+replaced what the track's lyrics are.
 
 Pure apart from `TrackState.held`, which defers an interrupt for the length of a write;
 nothing here prints.
@@ -39,6 +39,7 @@ from lyrics_records import (
     CheckResult,
     CheckRule,
     ErrorStage,
+    HeldBefore,
     OutcomeStatus,
     ProviderRefusal,
     SidecarHash,
@@ -47,35 +48,6 @@ from lyrics_records import (
     TrackOutcome,
 )
 from lyrics_silence import Level, MeasureFailed, is_silent
-
-
-#: Every control character a terminal can act on: C0 (tab and newline among them),
-#: DEL and C1. Each prints as a visible ``\xNN`` escape.
-_CONTROL_ESCAPES = {
-    code: f"\\x{code:02x}" for code in (*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0))
-}
-#: The direction marks, embeddings, overrides and isolates, and the line and
-#: paragraph separators: each can make a printed name read differently from the one
-#: on disk. Each prints as a visible ``\uXXXX`` escape; nothing else is touched.
-_LAYOUT_ESCAPES = {
-    code: f"\\u{code:04x}"
-    for code in (0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A))
-    + (0x2028, 0x2029)
-}
-_ESCAPES = _CONTROL_ESCAPES | _LAYOUT_ESCAPES
-
-
-def printable(text: str) -> str:
-    r"""*text* with every control and layout character shown as a visible escape.
-
-    A name or a message is text this tool did not write, and one holding an escape
-    sequence (a clipboard write, a hyperlink, a cursor move) would drive the terminal
-    it is printed to: C0, DEL and C1 print as ``\xNN``. A direction override or a
-    separator would make a name read as another (``01 ‮gpj.mp3`` shows as an
-    image's name): each prints as ``\uXXXX``. Accents, CJK and emoji print as they
-    are. A backslash is not escaped, so escaping twice changes nothing more.
-    """
-    return text.translate(_ESCAPES)
 
 
 #: The message a track's interrupted stage records.
@@ -115,21 +87,55 @@ def fetch_refusals(
 
     In the order asked. A timeout's detail is `TIMEOUT_DETAIL`, an error's the short
     form the fetch recorded (`lyrics_providers.error_detail`). An answer that was empty,
-    or not accepted, is no refusal.
+    or not accepted, is no refusal. Each keeps its attempt's facts, which the fetch
+    sets on every refused attempt (`lyrics_fetch.attempt`); a refused attempt without
+    them is refused with `ValueError`, so no live refusal is classed by its words.
     """
-    return tuple(
-        ProviderRefusal(
-            a.key.source,
-            a.key.kind,
-            TIMEOUT_DETAIL if a.outcome is AttemptOutcome.TIMEOUT else a.detail,
-        )
-        for a in attempts
-        if a.outcome in REFUSED_OUTCOMES
+    return tuple(_refusal(a) for a in attempts if a.outcome in REFUSED_OUTCOMES)
+
+
+def _refusal(attempt: ProviderAttempt) -> ProviderRefusal:
+    """The refusal a refused or timed-out *attempt* records, with its facts."""
+    timed_out = attempt.outcome is AttemptOutcome.TIMEOUT
+    detail = TIMEOUT_DETAIL if timed_out else attempt.detail
+    if attempt.facts is None:
+        raise ValueError(f"a {attempt.outcome} attempt with no refusal facts")
+    return ProviderRefusal.of(
+        attempt.key.source, attempt.key.kind, detail, attempt.facts
     )
 
 
 #: The statuses of a track whose lyrics the run accepted, whose check judges them.
 ACCEPTED = frozenset({OutcomeStatus.WRITTEN, OutcomeStatus.UNCHANGED})
+#: The statuses whose run always changed the track's lyrics, frames or sidecars.
+_CHANGES_LYRICS = frozenset(
+    {OutcomeStatus.WRITTEN, OutcomeStatus.REMOVED, OutcomeStatus.STRIPPED}
+)
+
+
+def changed_lyrics(outcome: TrackOutcome) -> bool:
+    """True when the run that recorded *outcome* changed what the track's lyrics are.
+
+    A run that wrote, removed or stripped lyrics replaced whatever an earlier run
+    left, so an earlier run's lyrics are no longer the track's. Every other status
+    left them as they were, except an error, which changed them only when it recorded
+    a write before it stopped: frames saved, or a sidecar written, removed or renamed.
+    Accept's check walks a track's runs newest first and stops after the first run
+    this holds for (`lyrics_accept_check`); an ERROR that recorded nothing is passed
+    over, since checking a run too many is never a loss and one too few can be.
+    """
+    if outcome.status in _CHANGES_LYRICS:
+        return True
+    if outcome.status is not OutcomeStatus.ERROR:
+        return False
+    return bool(
+        outcome.frames_written
+        or outcome.sidecar_written
+        or outcome.sidecars_removed
+        or outcome.sidecars_renamed
+    )
+
+
 #: The ends at which a track holds lyrics, so a marked one is flagged.
 HOLDS_LYRICS = frozenset(
     {OutcomeStatus.WRITTEN, OutcomeStatus.UNCHANGED, OutcomeStatus.KEPT_EXISTING}
@@ -176,6 +182,8 @@ class TrackState:
     #: A miss's silence check: the silent track's peak, or why the check failed.
     peak_dbfs: float | None = None
     silence_failed: str | None = None
+    #: What the track held before anything changed (`lyrics_held`), once read.
+    held_kind: HeldBefore | None = None
 
     @contextmanager
     def held(self) -> Iterator[None]:
@@ -279,6 +287,7 @@ class TrackState:
             refetch_implausible=self.refetch_implausible,
             peak_dbfs=self.peak_dbfs,
             silence_failed=self.silence_failed,
+            held=self.held_kind,
         )
 
     def _check_at(self, status: OutcomeStatus) -> CheckResult | None:

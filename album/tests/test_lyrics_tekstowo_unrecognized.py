@@ -21,6 +21,7 @@ import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import http_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_fetch as lf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_providers as lp  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_tekstowo as lt  # noqa: E402 - import follows the sys.path bootstrap above
 import tekstowo_fakes as tf  # noqa: E402 - import follows the sys.path bootstrap above
@@ -160,7 +161,11 @@ class ChainTest(_Case):
             self._tekstowo(first),
             [
                 lm.ProviderAttempt(
-                    KEY, False, lm.AttemptOutcome.ERROR, "song page not recognized"
+                    KEY,
+                    False,
+                    lm.AttemptOutcome.ERROR,
+                    "song page not recognized",
+                    lrf.RefusalFacts(lrf.Refusal.UNRECOGNIZED),
                 )
             ],
         )

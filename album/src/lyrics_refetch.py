@@ -5,11 +5,11 @@ A ``--refetch-untimed`` run asks the providers again for each untimed-only track
 entry that is no placeholder, in any language or time unit, and no sidecar the sidecar
 stage would serve as timed, with words in a USLT frame or a sidecar, or a ``.txt`` that
 cannot be read (not UTF-8, or over the lyrics cap). Such a track is asked as though it
-held nothing, and any answer the fetch accepts replaces its old lyrics. A synced track, and one with no
-lyrics, runs as in any run. `worded_sylt` is the one rule for a worded SYLT, which a
-fresh run's guard against untimed lyrics over synced ones asks too. `strip_if_changing`
-is the strip a run replacing a track's old lyrics, a fresh run or a refetch, makes
-before its embed.
+held nothing, and any answer the fetch accepts replaces its old lyrics. A synced
+track, and one with no lyrics, runs as in any run. `worded_sylt` is the one rule for
+a worded SYLT, which a fresh run's guard against untimed lyrics over synced ones asks
+too. `strip_if_changing` is the strip a run replacing a track's old lyrics, a fresh
+run or a refetch, makes before its embed.
 
 A track no provider answers keeps its old lyrics unless they are implausible. Its
 sidecars and its frames are judged apart, each by the lyrics on that side that would
@@ -67,14 +67,22 @@ from lyrics_placeholder import (
     unless_placeholder,
     without_placeholder_frames,
 )
-from lyrics_records import CheckReason, ErrorStage, OutcomeStatus, TrackOutcome
+from lyrics_records import (
+    CheckReason,
+    CheckRule,
+    ErrorStage,
+    OutcomeStatus,
+    TrackOutcome,
+)
 from lyrics_sidecar import UNREADABLE, SidecarTooLargeError, unreadable_txt
 from lyrics_slots import check_slot
 from lyrics_stages import Stages
 
 #: Why a stored placeholder goes when nothing replaces it, and a refetch's old lyrics
 #: that are one: they stand in for lyrics rather than hold any.
-PLACEHOLDER = "placeholder lyrics"
+PLACEHOLDER = CheckRule.PLACEHOLDER.value
+#: Between the reasons of a track whose sidecars and frames are implausible apart.
+REASON_JOINER = "; "
 
 
 @dataclass(frozen=True)
@@ -100,7 +108,7 @@ class RefetchTarget:
         """Why the old lyrics removed are implausible, each reason once; else None."""
         reasons = (self.sidecar_implausible, self.frames_implausible)
         named = dict.fromkeys(reason for reason in reasons if reason is not None)
-        return "; ".join(named) or None
+        return REASON_JOINER.join(named) or None
 
     def record(self, state: TrackState) -> None:
         """Record on *state* that the track is asked again, and what goes unanswered."""

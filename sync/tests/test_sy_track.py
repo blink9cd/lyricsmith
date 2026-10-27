@@ -15,8 +15,10 @@ from lyrics_sidecar import machine_label  # noqa: E402 - follows the bootstrap
 import sy_request as rq  # noqa: E402 - import follows the sys.path bootstrap above
 from at_engine import Runner  # noqa: E402 - import follows the sys.path bootstrap above
 from sy_cases import FRAME_SECONDS, fake_child, reply_for  # noqa: E402 - follows the bootstrap
+import sy_track  # noqa: E402 - import follows the sys.path bootstrap above
 from sy_track import time_or_skip  # noqa: E402 - import follows the sys.path bootstrap above
 from sy_types import (  # noqa: E402 - import follows the sys.path bootstrap above
+    MAX_TRACK_S,
     Action,
     Label,
     Outcome,
@@ -69,6 +71,24 @@ class TrackTest(sy_cases.IsolatedCase):
         reply = rq.dump_reply(rq.Reply(rq.STATUS_TOO_LONG, 3, FRAME_SECONDS, ()))
         self.assertIs(self.time(fake_child(reply)).outcome, Outcome.TOO_LONG)
         self.assertFalse(self.lrc.exists())
+
+    def test_a_track_over_the_longest_length_runs_no_child(self) -> None:
+        over = float(MAX_TRACK_S + 1)
+        with mock.patch.object(sy_track.sy_engine, "track_seconds", return_value=over):
+            result = self.time(fake_child(None, raises=AssertionError("a child ran")))
+        self.assertEqual(
+            (result.outcome, result.detail),
+            (Outcome.SKIP_LONG_TRACK, (f"{over:.0f} s, over the {MAX_TRACK_S} s cap",)),
+        )
+        self.assertFalse(self.lrc.exists())
+
+    def test_a_track_at_the_longest_length_is_timed(self) -> None:
+        at_cap = float(MAX_TRACK_S)
+        with mock.patch.object(
+            sy_track.sy_engine, "track_seconds", return_value=at_cap
+        ):
+            result = self.time(fake_child(reply_for(LINES)))
+        self.assertIs(result.outcome, Outcome.TIMED)
 
     def test_a_crash_is_an_align_error_with_its_exit(self) -> None:
         result = self.time(fake_child(None, code=1))

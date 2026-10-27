@@ -14,15 +14,22 @@ step (`lyrics_tekstowo`), there when its settings name a cool-down file, is the 
 last, on its own paced client. The defaults leave all three out, so a caller that names no
 settings gets none of them; the run's wiring turns them on. NetEase's two steps are the
 other way round: there by default, and left out only when the settings say so.
+
+Each provider the settings give a breaker setup for (`ProviderSettings.breakers`), of
+LRCLIB, NetEase, Genius and Bandcamp, gets one `lyrics_breakers.BreakerGuard`, shared by
+its steps; MusicBrainz's requests are Bandcamp's step's, so its guard covers them. The
+retrying clients, and the Genius step's challenge retries, tell the settings'
+`lyrics_retried.RetryTally`, when given, of each retry they make.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 
 from lyrics_bandcamp import BandcampProvider
+from lyrics_breakers import BreakerGuard, BreakerSetup
 from lyrics_cooldown import CoolingSetup
 from lyrics_fetch import CHAIN, LRC_PROVIDERS
 from lyrics_genius import GeniusClient, GeniusProvider, build_genius_client
@@ -32,6 +39,7 @@ from lyrics_model import Provider, ProviderKey, ProviderTable, Source
 from lyrics_musicbrainz import MusicBrainzClient
 from lyrics_netease import NeteaseProvider
 from lyrics_records import Secret
+from lyrics_retried import RetryTally
 from lyrics_tekstowo import TekstowoClient, TekstowoProvider
 from lyrics_youtube_music import YouTubeMusicClient
 from lyrics_youtube_provider import YouTubeMusicProvider
@@ -50,16 +58,29 @@ class ProviderSettings:
     musicbrainz_contact: str | None = None
     youtube_music: CoolingSetup | None = None
     tekstowo: CoolingSetup | None = None
+    #: Each guarded provider's breaker as the run starts; one left out is unguarded.
+    breakers: Mapping[Source, BreakerSetup] = field(default_factory=dict)
+    #: Where the retrying clients count their retries; None counts none.
+    retried: RetryTally | None = None
 
 
-def _lrc_step(key: ProviderKey, retry: RetryPolicy, deadline_s: float) -> Provider:
+def _lrc_step(
+    key: ProviderKey,
+    retry: RetryPolicy,
+    deadline_s: float,
+    guards: Mapping[Source, BreakerGuard],
+) -> Provider:
     """The adapter for one LRC step: LRCLIB's of the step's kind, else NetEase's.
 
-    Each retries a transient refusal by *retry*, within *deadline_s* of a call's start.
+    Each retries a transient refusal by *retry*, within *deadline_s* of a call's start,
+    and carries its source's guard in *guards*, if any.
     """
+    guard = guards.get(key.source)
     if key.source is Source.LRCLIB:
-        return LrclibProvider(key.kind, retry=retry, deadline_s=deadline_s)
-    return NeteaseProvider(retry=retry, deadline_s=deadline_s)
+        return LrclibProvider(
+            key.kind, retry=retry, deadline_s=deadline_s, breaker=guard
+        )
+    return NeteaseProvider(retry=retry, deadline_s=deadline_s, breaker=guard)
 
 
 def build_provider_table(
@@ -79,13 +100,19 @@ def build_provider_table(
     Music client and the Tekstowo client do. Building it sends nothing and reads or
     writes no file.
     """
-    retry = RetryPolicy(clock, sleeper)
+    tally = settings.retried
+    retry = RetryPolicy(clock, sleeper, on_retry=None if tally is None else tally.count)
+    guards = {
+        source: BreakerGuard(setup) for source, setup in settings.breakers.items()
+    }
     optional: dict[Source, Provider] = {}
     if settings.bandcamp:
         client = MusicBrainzClient(
             settings.musicbrainz_contact, clock=clock, sleeper=sleeper, retry=retry
         )
-        optional[Source.BANDCAMP] = BandcampProvider(client, clock=clock)
+        optional[Source.BANDCAMP] = BandcampProvider(
+            client, clock=clock, breaker=guards.get(Source.BANDCAMP)
+        )
     if settings.youtube_music is not None:
         setup = settings.youtube_music
         optional[Source.YOUTUBE_MUSIC] = YouTubeMusicProvider(
@@ -103,7 +130,12 @@ def build_provider_table(
     if genius_key is not None:
         genius = genius_factory(genius_key)
         optional[Source.GENIUS] = GeniusProvider(
-            genius, clock, sleeper, deadline_s=deadline_s
+            genius,
+            clock,
+            sleeper,
+            deadline_s=deadline_s,
+            breaker=guards.get(Source.GENIUS),
+            on_retry=retry.on_retry,
         )
     lrc = tuple(
         source
@@ -111,7 +143,7 @@ def build_provider_table(
         if settings.netease or source is not Source.NETEASE
     )
     return {
-        key: optional.get(key.source) or _lrc_step(key, retry, deadline_s)
+        key: optional.get(key.source) or _lrc_step(key, retry, deadline_s, guards)
         for key in CHAIN
         if key.source in lrc or key.source in optional
     }

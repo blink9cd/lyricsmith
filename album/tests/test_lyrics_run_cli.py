@@ -137,8 +137,14 @@ class ParserTest(fixtures.IsolatedCase):
             "130 interrupted (Ctrl-C); once the backup is done, the manifest "
             "records the tracks that finished",
             "or, in a prune, a run folder whose rename or removal failed",
-            "a prune on a Python whose shutil.rmtree does not protect against links",
-            "or, once a run, a strip, an undo or a prune began, its report",
+            "a prune or an accept on a Python whose shutil.rmtree does not protect "
+            "against links",
+            "or, in an accept, the removal of .lyricsmith",
+            "an accept refused (an unfinished run, an unreadable manifest or run "
+            "folder, an entry "
+            "lyricsmith did not write, a link), nothing removed, or whose records "
+            "could not be written, nothing removed but an earlier accept's leftover",
+            "or, once a run, a strip, an undo, a prune or an accept began, its report",
         ):
             self.assertIn(part, text)
 
@@ -160,13 +166,14 @@ class ParserTest(fixtures.IsolatedCase):
             text,
         )
 
-    def test_the_parser_builds_its_formatter_on_the_shared_one(self) -> None:
+    def test_the_parser_uses_the_shared_formatter(self) -> None:
         # A binding, not a rendering: argparse on Python 3.13+ already drops the bogus
-        # required-option default note, so only the base class shows the shim.
-        self.assertIsInstance(
-            album.build_parser().formatter_class(prog="x"),
-            help_formatter.ReqAwareDefaultsFormatter,
+        # required-option default note, so only the class shows the shim. The help
+        # module keeps no formatter of its own.
+        self.assertIs(
+            album.build_parser().formatter_class, help_formatter.RawNoneHidingFormatter
         )
+        self.assertFalse(hasattr(lyrics_help, "HelpFormatter"))
 
 
 class RefusalTest(cli_fakes.CliCase):

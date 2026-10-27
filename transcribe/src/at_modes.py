@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
+import at_located  # noqa: F401 - puts the shared libraries on sys.path
 import at_discover
 import at_engine
 import at_label
@@ -36,8 +37,8 @@ from at_types import (
     Outcome,
     Planned,
     SetupError,
-    spell_unsafe,
 )
+from stdio_utf8 import spell_unsafe
 
 WHISPER_CLI = "whisper-cli"
 #: One file's planned action, or the failed row of a file or folder planning could

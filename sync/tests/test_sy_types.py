@@ -24,3 +24,14 @@ class TypesTest(sy_cases.IsolatedCase):
         self.assertEqual(st.WRITTEN & st.FAILED, frozenset())
         self.assertIn(st.Outcome.ERROR_TEXT, st.FAILED)
         self.assertNotIn(st.Outcome.LOW_CONFIDENCE, st.FAILED)
+
+    def test_every_default_extension_has_a_demuxer(self) -> None:
+        defaults = set(st.DEFAULT_EXTENSIONS.split(","))
+        self.assertLessEqual(defaults, set(st.DEMUXERS))
+
+    def test_each_variant_extension_opens_with_its_familys_demuxer(self) -> None:
+        # An audiobook in an MP4 box, MPEG layer II audio, and compressed AIFF: each is
+        # opened by a demuxer already on the list, so none widens what ffmpeg may open.
+        for extension, demuxer in (("m4b", "mov"), ("mp2", "mp3"), ("aifc", "aiff")):
+            with self.subTest(extension=extension):
+                self.assertEqual(st.DEMUXERS.get(extension), demuxer)

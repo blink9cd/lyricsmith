@@ -18,7 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 from mutagen import MutagenError
-from mutagen.id3 import ID3
+from mutagen.id3 import ID3, TRCK
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
@@ -136,6 +136,17 @@ class ReadTagsTest(TagsCase):
     def test_audio_whose_length_cannot_be_read_has_no_duration(self) -> None:
         path = fixtures.build_silent_mp3(self.tmp / "empty.mp3", 0.0)
         self.assertIsNone(lt.read_tags(path).duration_s)
+
+    def test_the_track_number_reads_as_written(self) -> None:
+        path = self.track(_V24)
+        tags = ID3(path)
+        tags.add(TRCK(encoding=3, text=["3/12"]))
+        tags.save(path)
+        self.assertEqual(lt.read_track_number(path), "3/12")
+
+    def test_no_track_number_or_no_tag_reads_as_none(self) -> None:
+        self.assertIsNone(lt.read_track_number(self.track(_V24)))
+        self.assertIsNone(lt.read_track_number(self.track(None)))
 
     def test_every_lyrics_frame_reads_verbatim_encoding_included(self) -> None:
         path = self.track(_V24)

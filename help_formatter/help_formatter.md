@@ -59,6 +59,16 @@ Importers reach it through the established sibling `sys.path` bootstrap, the sam
 | Name | Meaning |
 | --- | --- |
 | `ReqAwareDefaultsFormatter` | `argparse.ArgumentDefaultsHelpFormatter` subclass; suppresses the default note on required actions and delegates otherwise (preserving `SUPPRESS` handling and `%(default)s` interpolation). |
+| `RawNoneHidingFormatter` | `ReqAwareDefaultsFormatter` composed with `argparse.RawDescriptionHelpFormatter`; shows real defaults, hides them for required options and for a `None` default, and keeps the description's and epilog's line breaks. |
+
+`RawNoneHidingFormatter` is for a CLI whose epilog is laid out by hand (a prerequisites
+list, an exit-code table) and whose `None` defaults mean "not given". `None` is no value a
+person could type, so `(default: None)` would say nothing true; such an option's help
+should say instead what leaving it out means. The two bases override different methods,
+so they compose, and a non-`None` default still passes through the required-option
+override. Its tests pin the `None` and required-option logic against the same legacy
+stand-in as the base class, and check the kept line breaks through `format_help()` on the
+running interpreter.
 
 ## Notes
 

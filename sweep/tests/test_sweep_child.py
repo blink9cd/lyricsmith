@@ -21,6 +21,7 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 
 import sweep  # noqa: E402 - its bootstrap puts src/ and the album tool on the path
 import album  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_child  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
@@ -142,6 +143,7 @@ class ArgvTest(sf.IsolatedCase):
             offline=True,
             refetch_untimed=True,
             changed_list=listed,
+            only=(lm.Source.LRCLIB, lm.Source.GENIUS),
             skip=tuple(flag for _, flag in sweep_child.SKIP_OPTIONS),
         )
         self.assertEqual(argv[:2], [sys.executable, str(self.tmp / "album.py")])
@@ -157,6 +159,7 @@ class ArgvTest(sf.IsolatedCase):
             "offline": True,
             "refetch_untimed": True,
             "changed_list": listed,
+            "only_providers": frozenset({lm.Source.LRCLIB, lm.Source.GENIUS}),
             **{attr: True for attr, _ in sweep_child.SKIP_OPTIONS},
         }
         self.assertEqual(vars(parser.parse_args(argv[2:])), expected)

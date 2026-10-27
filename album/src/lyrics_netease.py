@@ -30,11 +30,12 @@ Nothing here prints.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 
 from lyrics_answer import LrcAnswer
+from lyrics_breakers import BreakerGuard
 from lyrics_http import PROVIDER_DEADLINE_S, RetryPolicy, cookie_free_session
 from lyrics_http import get_reply
 from lyrics_match import Hit, has_artist, rank_hits
@@ -175,12 +176,18 @@ class NeteaseProvider:
     session_factory: Callable[[], requests.Session] = cookie_free_session
     retry: RetryPolicy | None = None
     deadline_s: float = PROVIDER_DEADLINE_S
+    #: The run's breaker for this provider, shared by its steps; the fetch layer asks
+    #: it before each call (`lyrics_breakers`). None leaves the steps unguarded.
+    breaker: BreakerGuard | None = field(
+        default=None, kw_only=True, compare=False, repr=False
+    )
 
     def asks(self, query: TrackQuery) -> bool:
         """False for a query with no artist, which the matcher cannot confirm a hit for.
 
         Such a query is a file stem standing in for a missing artist or title tag; the
-        chain reads this to skip the step unrecorded (`lyrics_fetch.AsksSelectively`).
+        chain reads this to skip the step unrecorded
+        (`lyrics_provider_kinds.AsksSelectively`).
         """
         return has_artist(query)
 

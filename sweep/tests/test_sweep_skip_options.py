@@ -170,7 +170,9 @@ class StopRuleTest(_CliCase):
         self,
     ) -> None:
         code, _, stderr = self.main("--mode", "run", "--stop-after", "1")
-        self.assertEqual(code, 0, stderr)
+        # Answered, but each album still owes LRCLIB, which refused its track: owed,
+        # not done, so the sweep goes on and exits 1.
+        self.assertEqual(code, sweep_run.EXIT_ALBUM_ERRORS, stderr)
         self.assertEqual(len(self.fake.calls), 2)
 
 

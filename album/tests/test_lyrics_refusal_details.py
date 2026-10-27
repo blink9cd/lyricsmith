@@ -13,6 +13,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import requests
+
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
@@ -24,6 +26,7 @@ import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap 
 import lyrics_outcomes as lo  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_providers as lp  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
 from genius_fakes import (  # noqa: E402 - import follows the sys.path bootstrap above
     FakeClock,
     FakeGeniusClient,
@@ -42,6 +45,7 @@ QUERY = lm.TrackQuery("Invented Artist", TITLE, album="Lamp Room", duration_s=20
 #: Text a reply body carries, which no detail may hold either.
 BODY_TEXT = "a refusal body naming Quillwort Zephyrine Lanterns"
 NO_SIDECAR = lm.SidecarState(None)
+R = lrf.Refusal
 
 
 def _fetch_with(
@@ -77,7 +81,7 @@ class NeteaseDetailTest(fixtures.IsolatedCase):
         self.assertEqual(_details(result), ["code -462"])
         self.assertEqual(
             lo.fetch_refusals(result.attempts),
-            (lr.ProviderRefusal(NETEASE, S, "code -462"),),
+            (lr.ProviderRefusal(NETEASE, S, "code -462", R.UNRECOGNIZED),),
         )
 
     def test_a_reply_in_another_shape_says_so_in_fixed_words(self) -> None:
@@ -141,7 +145,20 @@ class GeniusDetailTest(fixtures.IsolatedCase):
         result = self._fetch(*(challenge(429) for _ in range(4)))
         self.assertEqual(
             lo.fetch_refusals(result.attempts),
-            (lr.ProviderRefusal(GENIUS, U, "HTTP 429 after 3 retries"),),
+            (
+                lr.ProviderRefusal(
+                    GENIUS, U, "HTTP 429 after 3 retries", R.BLOCKED, 429, 3
+                ),
+            ),
+        )
+
+    def test_a_challenge_keeps_the_last_reply_s_wait_and_server(self) -> None:
+        last = lp.HttpStatusError(GENIUS, 403, 60.0, server="invented-front")
+        result = self._fetch(*(challenge(403) for _ in range(3)), last)
+        (refusal,) = lo.fetch_refusals(result.attempts)
+        self.assertEqual(
+            (refusal.reason, refusal.retries, refusal.retry_after_s, refusal.server),
+            (R.BLOCKED, 3, 60.0, "invented-front"),
         )
 
     def test_a_challenge_a_retry_got_past_is_no_refusal(self) -> None:
@@ -164,7 +181,7 @@ class FetchRefusalsTest(fixtures.IsolatedCase):
         result = lf.fetch_lyrics(QUERY, NO_SIDECAR, table, deadline_s=1.0)
         self.assertEqual(
             lo.fetch_refusals(result.attempts),
-            (lr.ProviderRefusal(LRCLIB, S, "timeout"),),
+            (lr.ProviderRefusal(LRCLIB, S, "timeout", R.UNREACHABLE),),
         )
 
     def test_an_error_of_no_known_kind_is_its_type_alone(self) -> None:
@@ -189,7 +206,87 @@ class FetchRefusalsTest(fixtures.IsolatedCase):
         self.assertEqual(
             lo.fetch_refusals(result.attempts),
             (
-                lr.ProviderRefusal(LRCLIB, S, "HTTP 503"),
-                lr.ProviderRefusal(GENIUS, U, "HTTP 403"),
+                lr.ProviderRefusal(LRCLIB, S, "HTTP 503", R.OVERLOADED, 503),
+                lr.ProviderRefusal(GENIUS, U, "HTTP 403", R.BLOCKED, 403),
             ),
         )
+
+
+def _overloaded(request: requests.PreparedRequest) -> requests.Response:
+    """A 503 naming its server and asking for a wait far past the retry cap."""
+    headers = {"Server": "invented-edge", "Retry-After": "3600"}
+    return http_fakes.response(request, 503, headers=headers)
+
+
+class RefusalFactsTest(fixtures.IsolatedCase):
+    """A refusal keeps its class, status, retries, asked wait and server, end to end."""
+
+    def _lrclib(self, *kinds: lm.LyricsKind) -> lm.FetchResult:
+        """The fetch of `QUERY` over LRCLIB's real steps of *kinds*, every reply a 503."""
+        steps = genius_fakes.instant_table()
+        table = {key: steps[key] for key in (lm.ProviderKey(LRCLIB, k) for k in kinds)}
+        with http_fakes.transport(_overloaded):
+            return lf.fetch_lyrics(
+                QUERY, NO_SIDECAR, table, deadline_s=lf.PROVIDER_DEADLINE_S
+            )
+
+    def test_an_lrclib_refusal_keeps_every_fact(self) -> None:
+        (refusal,) = lo.fetch_refusals(self._lrclib(S).attempts)
+        retries = refusal.retries
+        self.assertGreater(retries, 0)
+        self.assertEqual(
+            refusal,
+            lr.ProviderRefusal(
+                LRCLIB,
+                S,
+                f"HTTP 503 after {lp.retries_phrase(retries)}",
+                R.OVERLOADED,
+                503,
+                retries,
+                3600.0,
+                "invented-edge",
+            ),
+        )
+
+    def test_the_attempt_carries_the_facts(self) -> None:
+        (attempt,) = self._lrclib(S).attempts
+        assert attempt.facts is not None
+        self.assertEqual(
+            (attempt.facts.reason, attempt.facts.status, attempt.facts.server),
+            (R.OVERLOADED, 503, "invented-edge"),
+        )
+
+    def test_a_failure_heard_once_keeps_its_facts_for_the_other_step(self) -> None:
+        result = self._lrclib(S, U)
+        synced, plain = lo.fetch_refusals(result.attempts)
+        self.assertEqual((synced.step, plain.step), (S, U))
+        self.assertEqual(
+            [synced.reason, synced.status, synced.retries, synced.server],
+            [plain.reason, plain.status, plain.retries, plain.server],
+        )
+        self.assertGreater(plain.retries, 0)
+
+    def test_a_timeout_attempt_is_unreachable(self) -> None:
+        timeout = lp.ProviderTimeout("the step's deadline passed")
+        table = {lm.ProviderKey(LRCLIB, S): fixtures.raising(timeout)}
+        result = lf.fetch_lyrics(QUERY, NO_SIDECAR, table, deadline_s=1.0)
+        (attempt,) = result.attempts
+        self.assertEqual(attempt.facts, lrf.RefusalFacts(R.UNREACHABLE))
+
+    def test_an_answered_attempt_has_no_facts(self) -> None:
+        table = {lm.ProviderKey(LRCLIB, S): fixtures.empty()}
+        result = lf.fetch_lyrics(QUERY, NO_SIDECAR, table, deadline_s=1.0)
+        self.assertEqual([a.facts for a in result.attempts], [None])
+
+    def test_a_refused_attempt_without_facts_is_refused(self) -> None:
+        key = lm.ProviderKey(LRCLIB, S)
+        for outcome in (lm.AttemptOutcome.ERROR, lm.AttemptOutcome.TIMEOUT):
+            with self.subTest(outcome=outcome):
+                attempt = lm.ProviderAttempt(key, False, outcome, "HTTP 429")
+                with self.assertRaisesRegex(ValueError, "no refusal facts"):
+                    lo.fetch_refusals((attempt,))
+
+    def test_an_answered_attempt_needs_no_facts(self) -> None:
+        key = lm.ProviderKey(LRCLIB, S)
+        attempt = lm.ProviderAttempt(key, False, lm.AttemptOutcome.EMPTY, "nothing")
+        self.assertEqual(lo.fetch_refusals((attempt,)), ())

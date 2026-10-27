@@ -20,8 +20,8 @@ import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_check  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
-import lyrics_table as ltable  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_tally  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_table as ltable  # noqa: E402 - import follows the sys.path bootstrap above
 import run_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 from fixtures import TrackSpec  # noqa: E402 - import follows the sys.path bootstrap above
 
@@ -64,10 +64,12 @@ class RunChoiceTest(cli_fakes.CliCase):
         self.assertEqual(
             self.provider_settings,
             [
-                ltable.ProviderSettings(
-                    bandcamp=True,
-                    youtube_music=self.youtube_setup(),
-                    tekstowo=self.tekstowo_setup(),
+                self.chosen_settings(
+                    ltable.ProviderSettings(
+                        bandcamp=True,
+                        youtube_music=self.youtube_setup(),
+                        tekstowo=self.tekstowo_setup(),
+                    )
                 )
             ],
         )
@@ -79,8 +81,11 @@ class RunChoiceTest(cli_fakes.CliCase):
         self.assertEqual(
             self.provider_settings,
             [
-                ltable.ProviderSettings(
-                    youtube_music=self.youtube_setup(), tekstowo=self.tekstowo_setup()
+                self.chosen_settings(
+                    ltable.ProviderSettings(
+                        youtube_music=self.youtube_setup(),
+                        tekstowo=self.tekstowo_setup(),
+                    )
                 )
             ],
         )
@@ -130,10 +135,12 @@ class CompareChoiceTest(cli_fakes.CliCase):
         self.assertEqual(
             self.provider_settings,
             [
-                ltable.ProviderSettings(
-                    bandcamp=True,
-                    youtube_music=self.youtube_setup(),
-                    tekstowo=self.tekstowo_setup(),
+                self.chosen_settings(
+                    ltable.ProviderSettings(
+                        bandcamp=True,
+                        youtube_music=self.youtube_setup(),
+                        tekstowo=self.tekstowo_setup(),
+                    )
                 )
             ],
         )
@@ -145,8 +152,11 @@ class CompareChoiceTest(cli_fakes.CliCase):
         self.assertEqual(
             self.provider_settings,
             [
-                ltable.ProviderSettings(
-                    youtube_music=self.youtube_setup(), tekstowo=self.tekstowo_setup()
+                self.chosen_settings(
+                    ltable.ProviderSettings(
+                        youtube_music=self.youtube_setup(),
+                        tekstowo=self.tekstowo_setup(),
+                    )
                 )
             ],
         )

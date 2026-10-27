@@ -14,6 +14,7 @@ from typing import cast
 import lyrics_manifest as lmf
 import lyrics_model as lm
 import lyrics_records as lr
+import lyrics_refusal as lrf
 
 CHECK = lr.CheckResult(
     flags=(lr.CheckReason(lr.CheckRule.PAST_END, "last line 4:10, track 3:55"),),
@@ -33,11 +34,28 @@ FULL_AFTER = lr.TrackOutcome(
     check=CHECK,
     error=lr.StageError(lr.ErrorStage.CHECK, "OSError", "could not read it"),
     refusals=(
-        lr.ProviderRefusal(lm.Source.NETEASE, lm.LyricsKind.SYNCED, "code -460"),
-        lr.ProviderRefusal(lm.Source.LRCLIB, lm.LyricsKind.UNSYNCED, "HTTP 503"),
-        lr.ProviderRefusal(lm.Source.GENIUS, lm.LyricsKind.UNSYNCED, "timeout"),
+        lr.ProviderRefusal(
+            lm.Source.LRCLIB,
+            lm.LyricsKind.UNSYNCED,
+            "HTTP 503 after 3 retries",
+            lrf.Refusal.OVERLOADED,
+            status=503,
+            retries=3,
+            retry_after_s=120.0,
+            server="edge-cache",
+        ),
+        lr.ProviderRefusal(
+            lm.Source.NETEASE,
+            lm.LyricsKind.SYNCED,
+            "code -460",
+            lrf.Refusal.UNRECOGNIZED,
+        ),
+        lr.ProviderRefusal(
+            lm.Source.GENIUS, lm.LyricsKind.UNSYNCED, "timeout", lrf.Refusal.UNREACHABLE
+        ),
     ),
     refetch_implausible=True,
+    held=lr.HeldBefore.UNTIMED,
 )
 BEFORE = lr.TrackBefore(
     frames=(

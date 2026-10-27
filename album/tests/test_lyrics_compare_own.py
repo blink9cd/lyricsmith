@@ -105,6 +105,7 @@ class OwnCase(fixtures.IsolatedCase):
             stages,
             lang=run_fakes.LANG,
             deadline_s=run_fakes.DEADLINE_S,
+            notice=self.fail,
         )
 
     def one(
@@ -290,6 +291,7 @@ class ErrorRowOwnTest(OwnCase):
             self.failing_stages(),
             lang=run_fakes.LANG,
             deadline_s=run_fakes.DEADLINE_S,
+            notice=self.fail,
         )
         [row] = report.tracks
         self.assertIsNotNone(row.error)
@@ -297,3 +299,47 @@ class ErrorRowOwnTest(OwnCase):
         self.assertTrue(row.recorded)
         [count] = [c for c in report.providers if c.source is LRCLIB]
         self.assertEqual(count.own, 0)
+
+
+class PassedOverNoticeTest(fixtures.IsolatedCase):
+    """Each run compare passes over is one notice, given before any provider is asked."""
+
+    def setUp(self) -> None:
+        """An album of one track, a good run and two newer ones that cannot be read."""
+        super().setUp()
+        self.album = self.tmp / "album"
+        self.paths = fixtures.build_album(self.album, (KEEPER,))
+        write_run(self.album, _RUN, entry(KEEPER.relpath, GENIUS))
+        self.broken = (f"{_RUN}-2", f"{_RUN}-3")
+        for run_id in self.broken:
+            write_run(self.album, run_id, entry(KEEPER.relpath, NETEASE))
+            manifest = self.album / lr.RUN_FOLDER_NAME / run_id / lr.MANIFEST_NAME
+            manifest.write_bytes(b"\xff{")
+        self.events: list[str] = []
+
+    def asking(self, query: lm.TrackQuery) -> str | None:
+        """A provider that records being asked and answers nothing."""
+        self.events.append("asked")
+        return None
+
+    def test_one_notice_per_run_newest_first_before_any_provider(self) -> None:
+        stages = dataclasses.replace(
+            run_fakes.make_stages(run_fakes.FakeRunFolder()),
+            read_manifest=lmf.read_manifest,
+        )
+        lc.compare_album(
+            self.album,
+            self.paths,
+            table(self.asking, None, None, only=True),
+            stages,
+            lang=run_fakes.LANG,
+            deadline_s=run_fakes.DEADLINE_S,
+            notice=self.events.append,
+        )
+        expected = [
+            f"passed over the run {lr.RUN_FOLDER_NAME}/{run_id}: its manifest cannot "
+            "be read (ManifestSchemaError)"
+            for run_id in reversed(self.broken)
+        ]
+        self.assertEqual(self.events[:2], expected)
+        self.assertIn("asked", self.events[2:])

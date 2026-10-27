@@ -17,14 +17,19 @@ import sys
 from pathlib import Path
 
 _TOOL = Path(__file__).resolve().parent.parent
-# The tool's private modules and its test fixture builders, beside this folder, then
-# the shared stdio and --help formatter libraries, directly under the project root,
-# the tool folder's parent.
+# The tool's private modules and its test fixture builders, beside this folder.
 sys.path[:0] = [str(_TOOL / "src"), str(_TOOL / "tests")]
-# See stdio_utf8/stdio_utf8.md, "How this project's tools import it", for why
-# each is ONE fixed candidate rather than a search up the ancestors, and why a
-# missing copy fails its import below by name.
-sys.path += [str(_TOOL.parent / name) for name in ("stdio_utf8", "help_formatter")]
+# The project's manifest reader, in its own folder under the project root: it puts the
+# shared libraries the project's pyproject.toml names on sys.path, or fails naming the
+# one that is missing (lyricsmith_project/lyricsmith_project.md).
+_PROJECT_DIR = Path(__file__).resolve().parents[2]
+_READER_DIR = str(_PROJECT_DIR / "lyricsmith_project")
+# Moved first on sys.path, so no same-named module can stand in for the reader.
+sys.path[:] = [_READER_DIR, *(entry for entry in sys.path if entry != _READER_DIR)]
+import lyricsmith_project  # noqa: E402 - import follows the sys.path bootstrap above
+
+# Run as a script, a failure exits 2 naming it; imported, it raises.
+lyricsmith_project.add_shared_libraries(exit_on_failure=__name__ == "__main__")
 
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import help_formatter  # noqa: E402 - import follows the sys.path bootstrap above

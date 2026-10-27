@@ -14,12 +14,13 @@ from unittest import mock
 from urllib.parse import urlsplit
 
 import requests
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import http_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_cooldown as lyc  # noqa: E402 - import follows the sys.path bootstrap above
@@ -31,16 +32,6 @@ import lyrics_tekstowo as lt  # noqa: E402 - import follows the sys.path bootstr
 import tekstowo_fakes as tf  # noqa: E402 - import follows the sys.path bootstrap above
 from bandcamp_fakes import Redirect  # noqa: E402 - import follows the sys.path bootstrap above
 from genius_fakes import FakeClock  # noqa: E402 - import follows the sys.path bootstrap above
-
-# A registered profile, never an @settings decorator: the name and settings are
-# test_lyrics_genre's, so whichever suite loads first, the other's properties run under
-# the same profile (its comment gives the reasons).
-settings.register_profile(
-    "album_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_properties")
 
 HOST = lt.TEKSTOWO_HOST
 SEARCH = tf.search_path(tf.ARTIST, tf.TITLE)

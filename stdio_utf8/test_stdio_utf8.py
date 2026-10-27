@@ -36,6 +36,7 @@ sys.path.insert(0, str(_HERE))
 _MIN_TESTS_BY_FILE: dict[str, int] = {
     "test_bootstrap.py": 6,
     "test_escaping.py": 17,
+    "test_spell_unsafe.py": 10,
     "test_streams.py": 15,
 }
 

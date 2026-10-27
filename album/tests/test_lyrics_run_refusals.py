@@ -23,6 +23,7 @@ import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_providers as lp  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
 import run_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import tag_builders  # noqa: E402 - import follows the sys.path bootstrap above
 from fixtures import TrackSpec  # noqa: E402 - import follows the sys.path bootstrap above
@@ -34,7 +35,7 @@ _SYNCED = lm.ProviderKey(LRCLIB, S)
 _PLAIN = lm.ProviderKey(LRCLIB, U)
 _NETEASE = lm.ProviderKey(NETEASE, S)
 #: LRCLIB's synced step refusing with a 503, as every test's first step does.
-_REFUSED = lr.ProviderRefusal(LRCLIB, S, "HTTP 503")
+_REFUSED = lr.ProviderRefusal(LRCLIB, S, "HTTP 503", lrf.Refusal.OVERLOADED, 503)
 _UNTIMED_TEXT = "A kettle sings on the hob\nand the window fogs\n"
 TRACK = TrackSpec("01 Keeper.mp3", title="The Keeper")
 
@@ -86,7 +87,11 @@ class RefusalOutcomeTest(RefusalRunCase):
         assert after.error is not None
         self.assertEqual(after.error.stage, lr.ErrorStage.FETCH)
         self.assertEqual(
-            after.refusals, (_REFUSED, lr.ProviderRefusal(LRCLIB, U, "timeout"))
+            after.refusals,
+            (
+                _REFUSED,
+                lr.ProviderRefusal(LRCLIB, U, "timeout", lrf.Refusal.UNREACHABLE),
+            ),
         )
 
     def test_a_written_track_keeps_the_refusal_met_before_its_answer(self) -> None:
@@ -146,15 +151,30 @@ class RefusalOutcomeTest(RefusalRunCase):
         stored = json.loads(manifest.read_text(encoding="utf-8"))
         self.assertEqual(
             stored["tracks"][0]["after"]["refusals"],
-            [{"provider": LRCLIB.value, "step": S.value, "detail": "HTTP 503"}],
+            [
+                {
+                    "provider": LRCLIB.value,
+                    "step": S.value,
+                    "detail": "HTTP 503",
+                    "reason": "overloaded",
+                    "status": 503,
+                    "retries": 0,
+                    "retry_after_s": None,
+                    "server": None,
+                    "unsent": False,
+                }
+            ],
         )
 
     def test_the_summary_tallies_the_refusal(self) -> None:
         fixtures.build_album(self.album, (TRACK,))
         result = self.run_album()
         self.assertEqual(
-            result.stdout.splitlines()[-2],
-            "providers: LRCLIB 0/1 (1 refused) · NetEase - · YouTube Music - · Bandcamp - · Genius - · Tekstowo -",
+            result.stdout.splitlines()[-3:-1],
+            [
+                "providers: LRCLIB 0/1 (1 refused) · NetEase - · YouTube Music - · Bandcamp - · Genius - · Tekstowo -",
+                "refusals: LRCLIB overloaded 1",
+            ],
         )
 
 

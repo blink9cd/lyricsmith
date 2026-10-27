@@ -15,10 +15,12 @@ Run through the dispatcher, a tool names itself by its command: its help reads
 notices `lyricsmith album: ...`. The commands it prints for pasting back name it the same
 way, as separate shell words: an album run's or strip's undo line and a compare's strip
 lines start `lyricsmith album`, a sweep's undo lines `lyricsmith album` and its resume
-line `lyricsmith sweep`. lyricsmith installs no `lyricsmith` command yet (see "Installing"),
-so the `lyricsmith album` and `lyricsmith sweep` in those notices and hints stand for the
-`python lyricsmith.py album` and `python lyricsmith.py sweep` invocations. Run alone,
-each tool names its entry file, as one shell word whatever its name holds.
+line `lyricsmith sweep`, a sync run's embed lines `lyricsmith album` and its model fetch
+line `lyricsmith sync`. lyricsmith installs no `lyricsmith` command yet (see
+"Installing"), so the `lyricsmith album`, `lyricsmith sweep` and `lyricsmith sync` in
+those notices and hints stand for the `python lyricsmith.py album`, `python lyricsmith.py
+sweep` and `python lyricsmith.py sync` invocations. Run alone, each tool names its entry
+file, as one shell word whatever its name holds.
 
 ## Commands
 
@@ -56,22 +58,28 @@ installed into.
   `whisper-cli` program and its two models, fetched once with
   `python transcribe/transcribe.py --mode fetch-models`, as `transcribe/transcribe.md`
   ("Prerequisites") describes.
-- **`sync`** needs its PyTorch stack, pinned in `sync/requirements-sync.txt` and kept out of
-  the extras so that installing the other tools never pulls PyTorch in:
-  `pip install -r sync/requirements-sync.txt`. It needs ffmpeg on `PATH` too, and its three
+- **`sync`** needs its PyTorch stack, its whole resolved set pinned in
+  `sync/requirements-sync.txt`, so that installing the other tools never pulls PyTorch in:
+  `pip install -r sync/requirements-sync.txt`. The `sync` extra in `pyproject.toml` names
+  only sync's five direct imports, at that file's versions, and is not the install route.
+  It needs ffmpeg on `PATH` too, and its three
   models, fetched once with `python sync/sync.py --mode fetch-models`, as `sync/sync.md`
   ("Prerequisites") describes.
 
-The tools import six shared libraries, each a folder at the top of this repository:
-`stdio_utf8`, `help_formatter`, `run_lock`, `bounded_run`, `library_walk`, and
-`live_pid_guard`, which `bounded_run`'s tests use. Each tool puts each library on
-`sys.path` from one fixed place: the folder of that name directly under the repository
-root, derived from the tool's own file. Nothing searches the folders above the clone, so a
-same-named folder there, in a shared temporary folder or the home folder, is never
-imported, and a tree missing its copy of a library fails at once with Python's
-`No module named '<name>'`. So a copy of this project made to run elsewhere must carry
-those folders beside the tools, as this repository does. The `stdio_utf8` library's own
-doc says why, under "How this project's tools import it".
+The tools import seven shared libraries, each a folder at the top of this repository:
+`stdio_utf8`, `help_formatter`, `run_lock`, `bounded_run`, `library_walk`, `html_page`
+(the frame of the HTML pages the tools write), and `live_pid_guard`, which `bounded_run`'s
+tests use. `pyproject.toml` names each under
+`[tool.lyricsmith] shared_libraries`, relative to its own folder, and every tool puts
+those folders on `sys.path` through the manifest reader in `lyricsmith_project/`
+(`lyricsmith_project/lyricsmith_project.md`). Nothing searches the folders above the
+clone for them, in a shared temporary folder or the home folder, and a named folder that
+is missing fails at once with a `SharedLibraryError` naming it and the key. The folders
+are appended to `sys.path`, and each library's module must then load from its named
+folder: a same-named module earlier on it (`PYTHONPATH`, site-packages) fails the run
+with a `SharedLibraryError` naming both, rather than being run in its place, and so does
+one shadowing a sibling tool's entry module. So a copy of this project made to run
+elsewhere must carry those folders where its `pyproject.toml` names them.
 
 Prefer a Python patch release that includes the fix for CVE-2025-6069 (gh-135462): without
 it, `html.parser` takes quadratic time on some malformed pages, and the Bandcamp and
@@ -97,6 +105,7 @@ command itself takes, is refused rather than handed on.
 | --- | --- |
 | `0` | `--help` or `--version`. |
 | `2` | No command, an unknown one (the message lists the commands), or an option before the command. |
+| `2` | From any entry file, the dispatcher's or a tool's, run as a script, and from a tool the dispatcher runs: a shared library or a sibling tool's module it cannot locate, or one a same-named module earlier on `sys.path` would shadow. The `SharedLibraryError` is printed on stderr after the entry file's name, with no traceback. |
 | any other | The tool's own exit code, passed back unchanged: see each tool's `Exit codes` section. |
 
 ## Lyrics sources and their terms
@@ -145,11 +154,14 @@ that each command's `--help` is its tool's own: it runs each entry file with `--
 alone and through the dispatcher, and compares the two with the program name replaced
 and whitespace collapsed, since argparse wraps the usage line by the name's length. Each
 tool's own suites check that the name it is given reaches its help, its notices and the
-commands it prints. The library-path cases copy the project, its shared libraries left
-out, into a scratch tree with a decoy of every library planted above it, then run each entry
-file's `--help`: once loose, and once inside a repository whose own `utilities/` folder
-holds real copies. Each run must fail naming a missing library and never load a decoy or
-the copy elsewhere, then succeed once the libraries are back at the project root.
+commands it prints. The located-libraries cases copy the project, its libraries left
+out, into a scratch tree with a decoy of every shared library planted above it and beside
+it, and point the copy's `pyproject.toml` at folders beside the tools; then they run each
+entry file's `--help`. With one library missing, each run must fail naming it and never
+load a decoy, an entry file exiting `2`; with all of them in place, each must succeed;
+and a library or sibling tool planted earlier on `sys.path`, where `PYTHONPATH` would put
+it, must be refused and never run. The locator's own cases are in
+`lyricsmith_project/test_lyricsmith_project.py`.
 
 ## License
 

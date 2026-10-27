@@ -1,36 +1,14 @@
-"""The album tool's --help: its formatter and its epilog, the prerequisites and exit codes.
+"""The album tool's --help epilog, its prerequisites and exit codes, and the terms notes.
 
 Kept apart from the entry point, which declares every option itself (its companion
 doc's consistency check reads them there), so the entry point stays inside the file
-length bar. The epilog's exit codes are `lyrics_exit`'s ``EXIT_*`` constants, and its
+length bar; the entry point lays the help out with the shared
+`help_formatter.RawNoneHidingFormatter`, which keeps the epilog's line breaks as
+written. The epilog's exit codes are `lyrics_exit`'s ``EXIT_*`` constants, and its
 companion doc's "Exit codes" table says the same. Nothing here reads a file or prints.
 """
 
 from __future__ import annotations
-
-import argparse
-
-import help_formatter
-
-
-class HelpFormatter(
-    help_formatter.ReqAwareDefaultsFormatter, argparse.RawDescriptionHelpFormatter
-):
-    """Every real default shown, the epilog's breaks kept.
-
-    The two bases override different methods, so they compose. The project's floor is
-    below the Python release that stopped argparse stamping a default on a required
-    option, which is what the shared base is for. A default of None is no value a
-    person could type, so it is not shown: each such option's help says instead what
-    leaving it out means.
-    """
-
-    def _get_help_string(self, action: argparse.Action) -> str | None:
-        """*action*'s help, with its default appended unless that default is None."""
-        if action.default is None:
-            return action.help
-        return super()._get_help_string(action)
-
 
 #: The project doc's section that sets out each source's terms, and the words each
 #: `--no-*` option's help, and the epilog, point to it with.
@@ -55,10 +33,9 @@ def terms_note(flag: str) -> str:
 
 EPILOG = f"""\
 Prerequisites:
-  The project's dependencies installed (mutagen, requests, urllib3, lyricsgenius,
-  pinned under [project].dependencies in its pyproject.toml). A Genius key is
-  optional; without one the Genius step is skipped. It is read from --config when
-  given, else GENIUS_ACCESS_TOKEN, else
+  The dependencies [project].dependencies in its pyproject.toml pins, installed.
+  A Genius key is optional; without one the Genius step is skipped. It is read
+  from --config when given, else GENIUS_ACCESS_TOKEN, else
   $XDG_CONFIG_HOME/lyricsmith/config.toml or ~/.config/lyricsmith/config.toml,
   whose [genius] table holds it as access_token. The same file's [no_lyrics]
   genres array replaces the built-in no-lyrics genre list. Its [musicbrainz]
@@ -76,7 +53,8 @@ Providers:
   Music, Genius and last Tekstowo.pl for untimed lyrics. --no-netease,
   --no-bandcamp, --no-youtube-music and --no-tekstowo leave those steps out, as
   --no-genius does Genius's. The tool is meant for home use: each of those five
-  sources is used under its own terms, which you must keep ({TERMS_POINTER}).
+  sources is used under its own terms, which you must keep
+  ({TERMS_POINTER}).
   A YouTube Music or Tekstowo refusal stops that source for the run and
   for 24 hours after, recorded in its own cool-down file under
   $XDG_STATE_HOME/lyricsmith/, else ~/.local/state/lyricsmith/:
@@ -93,26 +71,39 @@ Output:
   --mode prune removes the run folders nothing needs: a run whose every track is
   undone, with nothing set aside, and a backup that never finished; --dry-run first
   shows which.
+  --mode accept keeps the album as it is and drops every run's backup: by default
+  it only reports, the tracks whose only copy would go first; --apply copies each
+  run's manifest under $XDG_STATE_HOME/lyricsmith/accepted/, else
+  ~/.local/state/lyricsmith/accepted/, then removes <album>/.lyricsmith/, and
+  undo with it. Run the report first, on any library.
 
 Exit codes:
   0    every track processed without an error (not found and FLAG, a compare's
        included, are not errors)
   1    at least one track errored: its backup, sidecar, fetch, strip, embed,
        check or undo; or, in a dry run, a track that could not be planned; or,
-       in a prune, a run folder whose rename or removal failed
+       in a prune, a run folder whose rename or removal failed; or, in an
+       accept, the removal of .lyricsmith or of an earlier accept's leftover;
+       or a compare with an ERROR row (a tag or sidecar it cannot read, or every
+       provider asked failing)
   2    could not run: bad options, no album or no MP3, the album lock held by
-       another run, no run to check or undo, a --track outside the album, not one
-       of its tracks or not in the run, an unusable --config, or a prune on a
-       Python whose shutil.rmtree does not protect against links; or an
+       another run, no run to check or undo, a chosen run whose manifest could
+       not be read, a --track outside the album, not one of its tracks or not in
+       the run, an unusable --config, or a prune or an accept on a Python whose
+       shutil.rmtree does not protect against links (any on Windows); an accept
+       refused (an unfinished run, an unreadable manifest or run folder, an entry
+       lyricsmith did not write, a link), nothing removed, or whose records could
+       not be written, nothing removed but an earlier accept's leftover; or an
        album-level step failed with an OS error before any MP3 changed (the lock,
        the backup, a manifest read)
   3    the work finished, or stopped part-way, but the run's record (its
        manifest) or the --changed-list file could not be written, said after the
        report: an OS error, or a manifest write that did not read back as written
        (recording a finished track, which ends a run or an undo after its
-       report); or, once a run, a strip, an undo or a prune began, its report,
-       as a check's, a compare's or a dry run's: a progress line or the summary
-       that a closed stdout or stderr refused, which ends it with no summary; it
-       outranks 1 and 130, since undo needs the record
+       report); or, once a run, a strip, an undo, a prune or an accept began,
+       its report, as a check's, a compare's or a dry run's: a progress line or
+       the summary that a closed stdout or stderr refused, which ends it with no
+       summary; it outranks 1 and 130, since undo needs the record
   130  interrupted (Ctrl-C); once the backup is done, the manifest records the
-       tracks that finished"""
+       tracks that finished; an accept stopped after its rename leaves
+       .lyricsmith.accepting, which the next accept finishes"""

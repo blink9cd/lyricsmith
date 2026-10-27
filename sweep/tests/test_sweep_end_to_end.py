@@ -3,11 +3,10 @@
 The library is the album tool's own sample album, built by its sample builder: six silent
 MP3s with an invented artist and titles, one beside an invented timed sidecar, one beside
 a ``.txt`` holding only a placeholder and, of the two tagged stand-up, one beside an
-invented untimed sidecar. The sweep
-runs the real album tool as a child process with ``--offline``, so no provider is
-asked, then the undo command its report prints is run and must put the album back
-byte for byte. An offline visit is recorded but never done, so a second sweep visits
-the album again.
+invented untimed sidecar. The sweep runs the real album tool as a child process with
+``--offline``, so no provider is asked, then the undo command its report prints is run
+and must put the album back byte for byte. An offline visit is recorded but never done,
+so a second sweep visits the album again.
 """
 
 from __future__ import annotations
@@ -27,6 +26,10 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 import sweep  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_ledger as sl  # noqa: E402 - import follows the sys.path bootstrap above
+from lyrics_categories import (  # noqa: E402 - follows the sys.path bootstrap
+    RemovedReason,
+    WrittenCategory,
+)
 from sweep_tally import Counts  # noqa: E402 - import follows the sys.path bootstrap above
 
 #: How long building the album, or one undo, may take.
@@ -47,7 +50,7 @@ class EndToEndTest(sf.IsolatedCase):
     """A survey, a run and its undo, with nothing faked."""
 
     def setUp(self) -> None:
-        """Build the sample album as Artist/Album under this test's library."""
+        """Build the sample album under its artist's folder in this test's library."""
         super().setUp()
         self.album = self.library / "The Invented Quartet" / "Sample Album"
         subprocess.run(  # reliability: ignore[RL005] DEVNULL sinks, no pipe to hold
@@ -93,11 +96,20 @@ class EndToEndTest(sf.IsolatedCase):
         self.assertIs(entry.outcome, sl.Outcome.OFFLINE)
         assert entry.counts is not None
         # The stand-up track holding nothing is no lyrics expected, apart from the two
-        # not found and the placeholder removed, which counts as not found too, and
-        # the one served from its sidecar is flagged.
+        # not found and the placeholder removed, which is counted apart, by its
+        # reason; the two written embedded their own sidecars, and the one served
+        # from its sidecar is flagged.
         self.assertEqual(
             entry.counts,
-            Counts(written=2, not_found=3, no_lyrics_expected=1, flagged=1),
+            Counts(
+                written=2,
+                not_found=2,
+                no_lyrics_expected=1,
+                flagged=1,
+                removed=1,
+                written_by={WrittenCategory.EMBEDDED: 2},
+                removed_by={RemovedReason.PLACEHOLDER: 1},
+            ),
         )
         self.assertNotEqual(_snapshot(self.album), before)
 

@@ -15,31 +15,23 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import requests
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import http_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_cooldown as lyc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_fetch as lf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_http as lh  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_providers as lp  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_youtube_music as lym  # noqa: E402 - import follows the sys.path bootstrap above
 import youtube_fakes as yf  # noqa: E402 - import follows the sys.path bootstrap above
 from genius_fakes import FakeClock  # noqa: E402 - import follows the sys.path bootstrap above
-
-# A registered profile, never an @settings decorator: the name and settings are
-# test_lyrics_genre's, so whichever suite loads first, the other's properties run under
-# the same profile (its comment gives the reasons).
-settings.register_profile(
-    "album_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_properties")
 
 #: The day the dated client version is built from, and a search body for it.
 TODAY = date(2026, 10, 21)
@@ -156,6 +148,32 @@ class StopTest(_ClientCase):
                     self.post(client)
                 self.assertEqual(again.exception.detail, what)
                 self.assertEqual(len(server.requests), 1)
+
+    def test_each_stop_records_its_class(self) -> None:
+        # A client error stops the run like any other status, so it is a block and
+        # never that one request's own error: the album stays owed.
+        blocked, rate_limited = lrf.Refusal.BLOCKED, lrf.Refusal.RATE_LIMITED
+        cases: tuple[tuple[yf.Answer, lrf.Refusal], ...] = (
+            ((400, b"", {}), blocked),
+            ((404, b"", {}), blocked),
+            ((422, b"", {}), blocked),
+            ((401, b"", {}), blocked),
+            ((403, b"", {}), blocked),
+            ((407, b"", {}), blocked),
+            ((451, b"", {}), blocked),
+            ((429, b"", {}), rate_limited),
+            ((500, b"", {}), lrf.Refusal.OVERLOADED),
+            ((503, b"", {}), lrf.Refusal.OVERLOADED),
+            ((302, b"", {"Location": "https://consent.youtube.com/m"}), blocked),
+            ((301, b"", {"Location": "https://music.youtube.com/else"}), blocked),
+        )
+        for index, (answer, reason) in enumerate(cases):
+            with self.subTest(status=answer[0], reason=reason):
+                _, client = self.serve([answer], self.tmp / str(index))
+                with self.assertRaises(lym.YouTubeMusicStopped) as raised:
+                    self.post(client)
+                facts = raised.exception.facts
+                self.assertEqual((facts.reason, facts.status), (reason, answer[0]))
 
     def test_a_refusal_is_never_retried(self) -> None:
         for status in (429, 503):

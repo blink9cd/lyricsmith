@@ -1,6 +1,7 @@
 """The album-level steps of a run: discovery, the album lock, the deferred interrupt.
 
-`discover_tracks` finds every MP3 under an album, and the links it skipped; `album_lock`
+`discover_tracks` finds every MP3 under an album, and the links it skipped, through
+`walk_album`, which a caller can also ask to raise on a folder it cannot list; `album_lock`
 lets one run, or one undo, change an album at a time; and `deferred_interrupt` holds a
 Ctrl-C while a file is saved in place, then raises it. The orchestrator in `lyrics_run`
 builds on these. Nothing here prints.
@@ -88,26 +89,36 @@ def _album_order(album: Path, paths: Sequence[Path]) -> tuple[Path, ...]:
     return tuple(sorted(paths, key=lambda path: path.relative_to(album).as_posix()))
 
 
-def discover_tracks(album: Path) -> Discovery:
-    """Every MP3 under *album*, recursively, and every link skipped; raise for no MP3.
+def walk_album(
+    album: Path, *, onerror: Callable[[OSError], None] | None = None
+) -> Discovery:
+    """Every MP3 under *album*, recursively, and every link skipped; none is no error.
 
     Hidden folders are pruned. A linked MP3 or folder is skipped and reported, never
     followed, so neither the run folder nor another album reached through a link
-    joins the run.
+    joins the run. A folder that cannot be listed is passed over unless *onerror*
+    (`os.walk`'s own) raises.
     """
     tracks: list[Path] = []
     links: list[Path] = []
-    for folder, dirs, files in os.walk(album, followlinks=False):
+    for folder, dirs, files in os.walk(album, onerror=onerror, followlinks=False):
         dirs[:] = [name for name in dirs if not _is_hidden(name)]
         for path in _visible(Path(folder), [*dirs, *files]):
             if path.is_symlink() and (path.name in dirs or _is_mp3(path)):
                 links.append(path)
             elif path.name in files and _is_mp3(path) and path.is_file():
                 tracks.append(path)
-    if not tracks:
+    return Discovery(_album_order(album, tracks), _album_order(album, links))
+
+
+def discover_tracks(album: Path) -> Discovery:
+    """`walk_album` of *album*; raise `AlbumUnusableError` when it holds no MP3."""
+    found = walk_album(album)
+    if not found.tracks:
+        links = found.links
         skipped = f" ({len(links)} link{'' if len(links) == 1 else 's'} skipped)"
         raise AlbumUnusableError(f"no MP3 under {album}{skipped if links else ''}")
-    return Discovery(_album_order(album, tracks), _album_order(album, links))
+    return found
 
 
 def album_relative(album: Path, path: Path) -> str:

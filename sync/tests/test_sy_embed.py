@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import sy_cases  # noqa: E402 - puts the tool, src/ and album's fixtures on the path
 import sy_embed  # noqa: E402 - import follows the sys.path bootstrap above
+import sweep_child  # noqa: E402 - import follows the sys.path bootstrap above
 from sweep_child import ChildResult  # noqa: E402 - follows the bootstrap above
 from sy_types import EmbedResult, EmbedStop  # noqa: E402 - follows the bootstrap
 
@@ -205,8 +206,19 @@ class EmbedTest(sy_cases.IsolatedCase):
         ]
         self.assertEqual((results, len(calls)), (expected, 2))
 
-    def test_the_argv_uses_this_interpreter(self) -> None:
-        self.assertEqual(sy_embed.album_argv(self.entry, self.tmp)[0], sys.executable)
+    def test_the_argv_is_the_sweeps_offline_run_in_this_interpreter(self) -> None:
+        calls: list[Sequence[str]] = []
+
+        def run(argv: Sequence[str], timeout: float) -> ChildResult:
+            calls.append(argv)
+            return ChildResult(0)
+
+        sy_embed.embed_folders(sy_embed.EmbedUnits((self.tmp,)), self.entry, run)
+        expected = sweep_child.album_argv(self.entry, self.tmp, lang=None, offline=True)
+        self.assertEqual(calls, [expected])
+        # Spelled out too, so a change to the sweep's builder cannot pass here unseen.
+        literal = ["--album", str(self.tmp), "--mode", "run", "--offline"]
+        self.assertEqual(list(calls[0]), [sys.executable, str(self.entry), *literal])
 
 
 class EmbedUnitsTest(sy_cases.IsolatedCase):
@@ -252,3 +264,17 @@ class EmbedUnitsTest(sy_cases.IsolatedCase):
         self.assertEqual(
             sy_embed.embed_units((), (OTHER, DISC_ONE), LIB), sy_embed.EmbedUnits(())
         )
+
+    def test_a_track_of_another_format_stays_a_sidecar(self) -> None:
+        flac = LIB / "Artist" / "Other" / "02 F.FLAC"
+        album = flac.parent
+        self.assertEqual(
+            sy_embed.embed_units((flac,), (flac, OTHER), album),
+            sy_embed.EmbedUnits((), sidecars=(flac,)),
+        )
+
+    def test_in_a_library_only_the_mp3s_make_album_runs(self) -> None:
+        flac = LIB / "Artist" / "Other" / "02 F.flac"
+        units = sy_embed.embed_units((flac, DISC_ONE), (flac, DISC_ONE, OTHER), LIB)
+        expected = (LIB / "Artist" / "Album",)
+        self.assertEqual(units, sy_embed.EmbedUnits(expected, sidecars=(flac,)))

@@ -28,6 +28,10 @@ import lyrics_silence  # noqa: E402 - import follows the sys.path bootstrap abov
 import sweep_child  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_ledger as sl  # noqa: E402 - import follows the sys.path bootstrap above
+from lyrics_categories import (  # noqa: E402 - follows the sys.path bootstrap
+    RemovedReason,
+    WrittenCategory,
+)
 import sweep_report  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_run as sr  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_tally  # noqa: E402 - import follows the sys.path bootstrap above
@@ -71,8 +75,10 @@ class ReportTest(sf.IsolatedCase):
         )
         header, row = text.splitlines()[1:3]
         self.assertIn("  no lyrics expected  silent  kept  ", header)
+        # written, unchanged, not found, removed, no lyrics expected, silent, kept,
+        # errors, flagged, refusing.
         self.assertEqual(
-            row.split()[-9:], ["1", "0", "2", "3", "4", "5", "0", "0", "0"]
+            row.split()[-10:], ["1", "0", "2", "0", "3", "4", "5", "0", "0", "0"]
         )
 
 
@@ -139,7 +145,15 @@ class FakeFfmpegEndToEndTest(sf.IsolatedCase):
         assert isinstance(entry, sl.LedgerEntry)
         # The two tracks not found and the one expecting no lyrics are measured silent
         # and so are neither; the placeholder's removal is not a silent end, so it
-        # stays the one not found.
+        # stays the one removed.
         self.assertEqual(
-            entry.counts, Counts(written=2, not_found=1, silent=3, flagged=1)
+            entry.counts,
+            Counts(
+                written=2,
+                silent=3,
+                flagged=1,
+                removed=1,
+                written_by={WrittenCategory.EMBEDDED: 2},
+                removed_by={RemovedReason.PLACEHOLDER: 1},
+            ),
         )

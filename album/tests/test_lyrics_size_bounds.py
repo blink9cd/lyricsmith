@@ -179,7 +179,7 @@ class OverCapFramePlanTest(fixtures.IsolatedCase):
         self.assert_planned_as_its_error()
 
     def test_the_frames_own_read_is_inside_the_track_boundary(self) -> None:
-        # The placeholder check reads the frames first today; without it, the read of
-        # the frames themselves must still end that track alone, not the dry run.
+        # The placeholder check reads the frames first; with it patched out, the read
+        # of the frames themselves must still end that track alone, not the dry run.
         with mock.patch.object(lyrics_modes, "afresh_target", return_value=None):
             self.assert_planned_as_its_error()

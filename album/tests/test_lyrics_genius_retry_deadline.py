@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import sys
 import unittest
-from collections.abc import Callable
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -26,22 +25,11 @@ from genius_fakes import (  # noqa: E402 - import follows the sys.path bootstrap
     FakeSong,
     challenge,
     paced_genius,
+    ticker,
 )
 
 #: The time, short of the next retry's wait, left once a slow answer has come.
 _SHORT_S = 10.0
-
-
-def _ticker(clock: FakeClock, spends: list[float]) -> Callable[[], float]:
-    """A call-time reader moving *clock* on by each of *spends* in turn, then reading it."""
-    pending = list(spends)
-
-    def tick() -> float:
-        """Spend the next answer's time, then read the clock."""
-        clock.now += pending.pop(0) if pending else 0.0
-        return clock.now
-
-    return tick
 
 
 class RetryWaitDeadlineTest(fixtures.IsolatedCase):
@@ -59,7 +47,7 @@ class RetryWaitDeadlineTest(fixtures.IsolatedCase):
         self,
     ) -> None:
         bound = self.genius.step_deadline_s()
-        self.client.clock = _ticker(self.clock, [bound - _SHORT_S])
+        self.client.clock = ticker(self.clock, [bound - _SHORT_S])
         with self.assertRaises(lp.HttpStatusError) as raised:
             self.genius(QUERY)
         self.assertEqual(lp.error_detail(raised.exception), "HTTP 429")
@@ -70,7 +58,7 @@ class RetryWaitDeadlineTest(fixtures.IsolatedCase):
         # The next attempt could not start once the wait ends, so the wait is useless.
         first_wait = lg.GENIUS_RETRY_WAITS_S[0]
         bound = self.genius.step_deadline_s()
-        self.client.clock = _ticker(self.clock, [bound - first_wait])
+        self.client.clock = ticker(self.clock, [bound - first_wait])
         with self.assertRaises(lp.HttpStatusError):
             self.genius(QUERY)
         self.assertEqual(self.clock.sleeps, [])
@@ -78,7 +66,7 @@ class RetryWaitDeadlineTest(fixtures.IsolatedCase):
     def test_a_later_retry_past_the_deadline_counts_the_retries_made(self) -> None:
         first_wait = lg.GENIUS_RETRY_WAITS_S[0]
         late = self.genius.step_deadline_s() - first_wait - _SHORT_S
-        self.client.clock = _ticker(self.clock, [0.0, late])
+        self.client.clock = ticker(self.clock, [0.0, late])
         with self.assertRaises(lg.GeniusChallengeError) as raised:
             self.genius(QUERY)
         self.assertEqual(raised.exception.detail, "HTTP 429 after 1 retry")

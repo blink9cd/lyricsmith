@@ -26,6 +26,7 @@ import lyrics_cooldown as lyc  # noqa: E402 - import follows the sys.path bootst
 import lyrics_manifest as lmf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_refusal as lrf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_table as ltable  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_tally  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_tekstowo as lt  # noqa: E402 - import follows the sys.path bootstrap above
@@ -91,7 +92,9 @@ class StoppingStep:
         """Stop for the run, as a ``429`` would, and raise the stop."""
         self.calls.append(query)
         self.stop = lyc.Stop("HTTP 429", UNTIL, self.write_error)
-        raise lt.TekstowoStopped("HTTP 429")
+        raise lt.TekstowoStopped(
+            "HTTP 429", lrf.RefusalFacts(lrf.Refusal.RATE_LIMITED, 429)
+        )
 
     def provider_stop(self) -> lyc.Stop | None:
         """What stopped the step, or None."""

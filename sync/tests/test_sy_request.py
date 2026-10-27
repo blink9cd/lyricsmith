@@ -60,6 +60,10 @@ class RequestTest(sy_cases.IsolatedCase):
         reply = rq.Reply(rq.STATUS_TOO_LONG, 3, 0.02, ())
         self.assertEqual(rq.load_reply(rq.dump_reply(reply), 9), reply)
 
+    def test_a_reply_of_no_frames_is_not_negative(self) -> None:
+        reply = rq.Reply(rq.STATUS_TOO_LONG, 0, 0.02, ())
+        self.assertEqual(rq.load_reply(rq.dump_reply(reply), 9), reply)
+
     def test_each_malformed_reply_is_refused(self) -> None:
         good = json.loads(rq.dump_reply(GOOD))
         for change in MALFORMED:

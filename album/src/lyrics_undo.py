@@ -218,7 +218,8 @@ def _restore_file(target: Path, data: bytes, aside: _SetAside) -> None:
     never read here.
     """
     if slot_entry(target) is Slot.FILE:
-        if target.stat().st_size == len(data) and target.read_bytes() == data:
+        same_size = target.stat().st_size == len(data)
+        if same_size and lyrics_files.read_regular(target, follow=False) == data:
             return
         aside.clear(target)
     lyrics_files.write_confirmed(target, data)

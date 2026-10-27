@@ -12,28 +12,18 @@ import math
 import sys
 from pathlib import Path
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import bandcamp_pages as pages  # noqa: E402 - import follows the sys.path bootstrap above
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import http_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_bandcamp_page as lbp  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_match import Hit  # noqa: E402 - import follows the sys.path bootstrap above
-
-# A registered profile, never an @settings decorator: a fuzzing campaign that re-applies
-# its own settings to each property is refused by Hypothesis on a decorated one. The
-# name and settings are test_lyrics_model's, so whichever suite loads first, the other's
-# properties run under the same profile (see test_lyrics_genre for the reasons).
-settings.register_profile(
-    "album_properties",
-    deadline=None,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("album_properties")
 
 LYRICS = "the lantern hangs\nabove the ford"
 BAND = "Invented Band"

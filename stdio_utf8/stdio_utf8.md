@@ -43,13 +43,14 @@ neither.
 ```python
 from stdio_utf8 import (
     CAPTURE_ERRORS, ENCODING, ESCAPE_ERRORS, EscapingArgumentParser,
-    force_utf8_streams, print_escaped, printable,
+    force_utf8_streams, print_escaped, printable, spell_unsafe,
 )
 
 force_utf8_streams(sys.stdout, sys.stderr)   # -> the stream names actually changed
 print_escaped(f"tool: {line}", sys.stderr)    # one message line; never raises on a surrogate
 EscapingArgumentParser(prog=...)             # argparse, every message escaped
 printable(text)                               # the escape alone, for a message printed elsewhere
+spell_unsafe(text)                            # controls and bidi marks as escapes, for a terminal
 ENCODING                                      # "utf-8" -- both directions
 CAPTURE_ERRORS                                # "replace" -- child captures only
 ESCAPE_ERRORS                                 # "backslashreplace" -- stderr and messages
@@ -132,28 +133,62 @@ stderr's half, redirect that stream INTO `sys.stderr` before forcing, as
 `tests/test_streams.py` does: the role is read by identity, so a stream handed over on its own
 is forced strict.
 
+### A name that would drive the terminal: `spell_unsafe`
+
+`printable` answers *can UTF-8 encode this?*; `spell_unsafe(text)` answers *would a terminal
+act on this?* — a different set of characters, for a different hazard. A name or message the
+tool did not write can carry an escape sequence (a clipboard write, a hyperlink, a cursor
+move) that drives the terminal it is printed to, or a direction override that makes
+`01 <U+202E>gpj.mp3` display as an image's name. `spell_unsafe` spells each such character
+as a visible escape:
+
+| Characters | Printed as |
+| --- | --- |
+| C0 controls U+0000–U+001F (tab and newline among them), DEL U+007F, C1 U+0080–U+009F | `\xNN`, lowercase hex — a tab is `\x09`, never `\t` |
+| U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069, U+2028, U+2029 | `\uXXXX`, lowercase hex |
+
+Every other character — accents, CJK, emoji, and a lone surrogate — comes back unchanged,
+and a backslash is not escaped, so the result is a fixed point. The two functions therefore
+compose rather than overlap: a message quoting a name from disk on a strict stream can need
+both, `printable(spell_unsafe(text))`. The set is kept private; nothing outside the module
+needs it. `tests/test_spell_unsafe.py` pins it code point by code point and holds a
+property test of it.
+
 ## How this project's tools import it
 
-Every tool in this project, and the dispatcher's own test, puts each shared library on
-`sys.path` from **one fixed place**: the folder of that name directly under the project
-root, derived from the tool's own `__file__` at the depth the tool sits. A tool one folder
-below the root, such as `album/album.py`, appends `parents[1]`:
+Every entry file in this project, the dispatcher and its own test included, puts each
+shared library on `sys.path` from the folders the project's `pyproject.toml` names under
+`[tool.lyricsmith] shared_libraries`, each path relative to that file's own folder; in this
+repository, each library is the folder of its name directly under the root. The reader of
+that list, `lyricsmith_project/lyricsmith_project.py`, is reached from each entry file's
+own `__file__` at one fixed depth and moved FIRST on `sys.path`, so no same-named module
+can stand in for it. A tool one folder below the root, such as `album/album.py`, begins,
+after putting its own `src/` on the path:
 
 ```python
-sys.path += [
-    str(Path(__file__).resolve().parents[1] / name)
-    for name in ("stdio_utf8", "help_formatter")
-]
+_PROJECT_DIR = Path(__file__).resolve().parents[1]
+_READER_DIR = str(_PROJECT_DIR / "lyricsmith_project")
+sys.path[:] = [_READER_DIR, *(entry for entry in sys.path if entry != _READER_DIR)]
+import lyricsmith_project
+
+lyricsmith_project.add_shared_libraries(exit_on_failure=__name__ == "__main__")
 ```
 
-**One fixed candidate per name, not a search up the ancestors.** A search would also match
-a same-named folder above the checkout, in a shared temporary folder or the home folder,
-and import it in place of the real one. A fixed candidate can name only the copy this
-repository ships, so nothing outside the tree is ever imported, and a missing copy fails at
-once with Python's `No module named '<name>'`. The entries join at the END of `sys.path`,
-so none of them can shadow the standard library or the tool's own modules. The upward
-search described below is the portable form for a tree whose layout is not fixed; this
-project's layout is.
+Each tool's `src/` holds one small module that makes the same call, which any private
+module needing a shared library imports first, so that module also imports alone.
+
+**The named folders, not a search up the ancestors.** A search would also match a
+same-named folder above the checkout, in a shared temporary folder or the home folder, and
+import it in place of the real one. Nothing searches here: only the folders the list
+names are added, and a named folder that is missing fails at once with a
+`SharedLibraryError` naming the folder and the key. The entries join at the END of
+`sys.path`, so none of them can shadow the standard library or the tool's own modules.
+Each library's module must then load from its named folder, checked for every library
+before any is imported: a same-named module earlier on `sys.path` (`PYTHONPATH`,
+site-packages, the script's own folder) fails the run with a `SharedLibraryError` naming
+both, rather than being run in its place. An entry file run as a script prints that error
+and exits 2.
+The upward search described below is the portable form for a tree that has no such list.
 
 ## Importing it from a sibling tool
 

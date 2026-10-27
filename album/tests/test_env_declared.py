@@ -69,6 +69,7 @@ _VENDORED = frozenset(
         "bounded_run",
         "library_walk",
         "live_pid_guard",
+        "html_page",
     }
 )
 # Credentials the project reads but must never declare, each with its reason. A mapping,

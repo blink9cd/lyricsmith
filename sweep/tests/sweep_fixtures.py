@@ -8,18 +8,19 @@ layer's connect and name lookup with a tripwire. So no test can reach a real mus
 library, the real ledger, the network or a real config file, even by mistake.
 
 `FakeAlbumTool` stands in for the album tool child process: called with the argv the
-sweep built, it writes a run folder and a manifest through the album tool's own records and
-writer, so the sweep's reader round-trips what the album tool really writes. `SweepCase`
-sweeps five needy albums with it, and `manifest_of` and `status_outcome` build the
-manifests the tally reads. Every lyric here is INVENTED for these tests.
+sweep built, it writes a run folder and a manifest through the album tool's own records
+and writer, so the sweep's reader round-trips what the album tool really writes.
+`SweepCase` sweeps five needy albums with it, and `manifest_of` and `status_outcome`
+build the manifests the tally reads. Every lyric here is INVENTED for these tests.
 
 Not discovered as a suite (no ``test_`` prefix). Suites import it by bare name with this
-directory on ``sys.path``, after importing the entry point, which puts the album tool's own
-modules on the path.
+directory on ``sys.path``, after importing the entry point, which puts the album tool's
+own modules on the path.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import unittest
@@ -37,11 +38,13 @@ import lyrics_changed
 import lyrics_manifest
 import lyrics_model as lm
 import lyrics_records as lr
+import lyrics_refusal as lrf
 import sweep_child
 import sweep_ledger as sl
 import sweep_run as sr
 from lyrics_backup import RUN_ID_FORMAT
 from lyrics_config import GENIUS_TOKEN_ENV
+from lyrics_provider_states import CoolingState
 from sweep_survey import AlbumSurvey
 
 #: The XDG base directories redirected under the temporary HOME, by subdirectory.
@@ -180,10 +183,22 @@ def needy_album(library: Path, artist: str, album: str) -> Path:
 
 
 def refusal(
-    provider: lm.Source = lm.Source.LRCLIB, detail: str = "HTTP 429"
+    provider: lm.Source = lm.Source.LRCLIB,
+    detail: str = "HTTP 429",
+    reason: lrf.Refusal = lrf.Refusal.RATE_LIMITED,
 ) -> lr.ProviderRefusal:
-    """One refused provider call, at the synced step."""
-    return lr.ProviderRefusal(provider, lm.LyricsKind.SYNCED, detail)
+    """One refused provider call, at the synced step, of class *reason*."""
+    return lr.ProviderRefusal(provider, lm.LyricsKind.SYNCED, detail, reason)
+
+
+def breaker_open(
+    provider: lm.Source = lm.Source.GENIUS,
+    detail: str = "breaker open until 03:47:12 UTC",
+) -> lr.ProviderRefusal:
+    """A lookup an open breaker kept unsent: blocked, no status, never challenged."""
+    return lr.ProviderRefusal(
+        provider, lm.LyricsKind.UNSYNCED, detail, lrf.Refusal.BLOCKED, unsent=True
+    )
 
 
 def written(source: lm.Source = lm.Source.LRCLIB) -> lr.TrackOutcome:
@@ -208,7 +223,7 @@ def fetch_error(*refusals: lr.ProviderRefusal) -> lr.TrackOutcome:
 #: failed, which the album tool records as the track's fetch error.
 REFUSED = (
     fetch_error(refusal()),
-    fetch_error(refusal(lm.Source.NETEASE, "code -460")),
+    fetch_error(refusal(lm.Source.NETEASE, "code -460", lrf.Refusal.UNRECOGNIZED)),
 )
 #: The outcomes of an album whose providers answered.
 ANSWERED = (written(), not_found())
@@ -222,12 +237,13 @@ class Script:
     """What the fake album tool does for one album.
 
     *outcomes* are its tracks' ``after`` blocks, in order; a manifest is written only
-    when *manifest* is True, and *other_runs* more runs beside it, as a second
-    album tool run alongside would leave. *exit_code*, *timed_out*, *interrupted* and *pid* make the
-    `sweep_child.ChildResult` it returns. *changed* is what it writes to the file
-    ``--changed-list`` names, when the sweep passed one: the album-relative names of
+    when *manifest* is True, and *other_runs* more runs beside it, as a second album
+    tool run alongside would leave. *exit_code*, *timed_out*, *interrupted* and *pid*
+    make the `sweep_child.ChildResult` it returns. *changed* is what it writes to the
+    file ``--changed-list`` names, when the sweep passed one: the album-relative names of
     the MP3s it changed, as the album tool writes them, or raw bytes; None writes no
-    list, as a child killed or crashed leaves none.
+    list, as a child killed or crashed leaves none. *tekstowo* and *youtube_music* are
+    the run-level states its manifest records, ``cooling down`` among them.
     """
 
     outcomes: tuple[lr.TrackOutcome, ...] = ANSWERED
@@ -238,6 +254,8 @@ class Script:
     interrupted: bool = False
     pid: int | None = None
     changed: tuple[str, ...] | bytes | None = ()
+    tekstowo: CoolingState = CoolingState.OFF
+    youtube_music: CoolingState = CoolingState.OFF
 
 
 def option_value(argv: Sequence[str], name: str) -> str:
@@ -278,9 +296,9 @@ class FakeAlbumTool:
         album = Path(option_value(argv, "--album"))
         script = self.scripts.get(album.name, Script())
         if script.manifest:
-            self._write_manifest(album, script.outcomes)
+            self._write_manifest(album, script)
         for _ in range(script.other_runs):
-            self._write_manifest(album, script.outcomes)
+            self._write_manifest(album, script)
         listed = sweep_child.CHANGED_LIST_OPTION
         if listed in argv and script.changed is not None:
             _write_changed(album, Path(option_value(argv, listed)), script.changed)
@@ -291,20 +309,24 @@ class FakeAlbumTool:
             pid=script.pid,
         )
 
-    def _write_manifest(
-        self, album: Path, outcomes: tuple[lr.TrackOutcome, ...]
-    ) -> None:
-        """Write a complete run's manifest under *album* through the album tool's writer."""
+    def _write_manifest(self, album: Path, script: Script) -> None:
+        """Write *script*'s complete run under *album* through the album tool's writer."""
         self.clock += timedelta(seconds=1)
         run_id = self.clock.strftime(RUN_ID_FORMAT)
         run_dir = lr.run_folder(album, run_id)
         run_dir.mkdir(parents=True)
         tracks = tuple(
             lr.ManifestTrack(f"{n:02d}.mp3", (2, 4), lr.TrackBefore((), ()), after)
-            for n, after in enumerate(outcomes, start=1)
+            for n, after in enumerate(script.outcomes, start=1)
         )
         manifest = lr.Manifest(
-            run_id, "eng", lr.RunState.COMPLETE, lr.GeniusState.ABSENT, tracks
+            run_id,
+            "eng",
+            lr.RunState.COMPLETE,
+            lr.GeniusState.ABSENT,
+            tracks,
+            tekstowo=script.tekstowo,
+            youtube_music=script.youtube_music,
         )
         lyrics_manifest.write_manifest(run_dir, manifest)
 
@@ -392,6 +414,7 @@ class SweepCase(IsolatedCase):
         restart: bool = False,
         offline: bool = False,
         lang: str | None = None,
+        skip: tuple[str, ...] = (),
     ) -> sr.SweepReport:
         seams = sr.SweepSeams(
             run_child=self.run_child,
@@ -401,7 +424,7 @@ class SweepCase(IsolatedCase):
             entry=self.tmp / "album.py",
         )
         options = replace(
-            OPTIONS, limit=limit, restart=restart, offline=offline, lang=lang
+            OPTIONS, limit=limit, restart=restart, offline=offline, lang=lang, skip=skip
         )
         # Each album surveyed as one with a track lacking lyrics: one a run visits.
         surveys = [AlbumSurvey(album, none=1) for album in self.albums]
@@ -410,3 +433,40 @@ class SweepCase(IsolatedCase):
     def _ledger(self) -> list[sl.LedgerEntry]:
         records = sl.read_ledger(self.ledger).records
         return [r for r in records if isinstance(r, sl.LedgerEntry)]
+
+
+# --- Ledger lines and runs from before the owed outcome existed ---------------------
+
+
+def earlier_line(entry: sl.LedgerEntry) -> str:
+    """*entry*'s ledger line as written before ``owed_providers`` was recorded."""
+    document = json.loads(sl.encode_record(entry))
+    del document["owed_providers"]
+    return json.dumps(document, sort_keys=True)
+
+
+def append_line(ledger: Path, line: str) -> None:
+    """Add the raw *line* to the ledger at *ledger*, making its folder if need be."""
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    with ledger.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(line + "\n")
+
+
+def write_run(
+    album: Path,
+    run_id: str,
+    outcomes: Sequence[lr.TrackOutcome | None],
+    *,
+    tekstowo: CoolingState = CoolingState.ON,
+    youtube_music: CoolingState = CoolingState.ON,
+) -> None:
+    """Write run *run_id*'s complete manifest under *album*, its cooling states given."""
+    run_dir = lr.run_folder(album, run_id)
+    run_dir.mkdir(parents=True)
+    manifest = replace(
+        manifest_of(*outcomes),
+        run_id=run_id,
+        tekstowo=tekstowo,
+        youtube_music=youtube_music,
+    )
+    lyrics_manifest.write_manifest(run_dir, manifest)

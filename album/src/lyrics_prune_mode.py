@@ -27,12 +27,15 @@ class UnsafeDeleteError(LyricsError):
     """This Python's `shutil.rmtree` could follow a link out of the folder it deletes."""
 
 
-def refuse_unsafe_delete() -> None:
-    """Raise `UnsafeDeleteError` where `shutil.rmtree` is not proof against links."""
+def refuse_unsafe_delete(mode: str = "prune") -> None:
+    """Raise `UnsafeDeleteError` where `shutil.rmtree` is not proof against links.
+
+    *mode* names the mode that will not run, in the message: prune, or accept.
+    """
     if not shutil.rmtree.avoids_symlink_attacks:
         raise UnsafeDeleteError(
             "this Python's shutil.rmtree can follow a symbolic link out of the folder "
-            "it deletes, so prune will not run"
+            f"it deletes, so {mode} will not run"
         )
 
 

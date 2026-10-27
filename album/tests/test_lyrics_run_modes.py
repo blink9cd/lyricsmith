@@ -266,6 +266,15 @@ class CheckRunTest(fixtures.IsolatedCase):
         first = self.check().tracks[0]
         self.assertEqual((first.written, first.check, first.error), (False, None, None))
 
+    def test_check_tracks_matches_check_run(self) -> None:
+        lyrics_tags.strip_lyrics(self.paths[0])
+        run_dir = self.stages.select_run(self.tmp, None)
+        manifest = self.stages.read_manifest(run_dir)
+        chosen = lyrics_modes.check_tracks(
+            self.tmp, run_dir, manifest, manifest.tracks, self.stages
+        )
+        self.assertEqual(chosen, self.check().tracks)
+
     def test_the_check_changes_nothing(self) -> None:
         before = snapshot(self.tmp)
         self.check()

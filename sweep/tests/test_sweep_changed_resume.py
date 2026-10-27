@@ -1,9 +1,8 @@
 """--changed-list across the legs of one pass: a resume keeps the list, a restart empties it.
 
 A resumed sweep is the same pass as the leg it resumes, so its list must still name what
-that leg changed, or those tracks are never refreshed. The album
-tool is played by `sweep_fixtures.FakeAlbumTool`, so nothing here runs a process or
-reaches a provider.
+that leg changed, or those tracks are never refreshed. The album tool is played by
+`sweep_fixtures.FakeAlbumTool`, so nothing here runs a process or reaches a provider.
 """
 
 from __future__ import annotations
