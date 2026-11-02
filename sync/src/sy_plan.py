@@ -8,10 +8,14 @@ caught here too: the first keeps its plan, each later one is refused. Nothing he
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 
 import sy_located  # noqa: F401 - puts the other tools and libraries on sys.path
+from lyrics_heard import text_fingerprint
+from lyrics_heard_store import HeardRecord
 from lyrics_model import PlainLyrics, Source, SyncedLyrics
 from lyrics_sidecar import UNREADABLE, plan_sidecars
 from lyrics_slots import Slot, sidecar_entry
@@ -20,6 +24,8 @@ from sy_types import LRC_SUFFIX, TXT_SUFFIX, Action, Planned
 
 #: A walked name's rows that are no track: a skipped link, or not a regular file.
 UNCLAIMED = frozenset({Action.SKIP_LINKED, Action.ERROR_AUDIO})
+#: The plans that would run a child, which a --by-hand-list row turns into a skip.
+_TIMING = frozenset({Action.TIME, Action.RETIME})
 
 
 def plan_track(audio: Path, *, overwrite: bool) -> Planned:
@@ -67,7 +73,7 @@ def _plan_timed(
 
     *ours* is album's own reading of the label, so the two tools never disagree on it.
     album removes the .txt once a timed .lrc is embedded, so a re-time takes its words
-    from the .lrc.
+    from the .lrc. An empty stamped line there is a blank line between verses: it is kept.
     """
     if overwrite and ours:
         lines = text_lines("\n".join(line.text for line in lyrics.lines))
@@ -120,3 +126,38 @@ def claim_lrcs(plans: Sequence[Planned]) -> list[Planned]:
         claimed.add(key)
         kept.append(planned)
     return kept
+
+
+def listed_by_hand(
+    planned: Planned,
+    listed: Mapping[str, Action],
+    heard: Mapping[str, HeardRecord] = MappingProxyType({}),
+) -> Planned:
+    """*planned*, or its listed skip when it would time a track the list skips.
+
+    Only a plan that would run a child is turned: a listed track timed since, by hand
+    or by another tool, keeps its own skip, and so does an error. *listed*
+    maps each path, exactly as the walk names it, to its skip: one listed for timing
+    by hand, or one listed as not sung. --overwrite does not override it: removing
+    the track's row is how it is timed again.
+
+    A plan that would time a track whose transcript is kept (*heard*, by the same
+    paths) carries that transcript, so its text is judged against it and the track is
+    never heard twice; only a ``not sung`` row whose record's fingerprint is the
+    current text's still skips it. With no kept record (an older list, or no
+    --heard-dir) a row skips its track as ever.
+    """
+    path = str(planned.audio)
+    skip = listed.get(path)
+    if planned.action not in _TIMING:
+        return planned
+    record = heard.get(path)
+    if skip is not None and (
+        skip is not Action.SKIP_NOT_SUNG
+        or record is None
+        or record.fingerprint == text_fingerprint(planned.lines)
+    ):
+        return Planned(planned.audio, skip)
+    if record is None:
+        return planned
+    return replace(planned, transcript=record.transcript)

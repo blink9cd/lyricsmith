@@ -21,7 +21,7 @@ its pid rather than raising, so the album is still recorded.
 **The run it made.** The album tool names a run by its UTC start time, to the second, with
 ``-2``, ``-3`` and so on appended on a collision, and lists it once its manifest exists.
 The sweep takes the run ids present before the child starts (`run_ids`, the album tool's
-own listing, re-exported here), and afterwards the ids that were not there before
+own listing, re-exported here), and once it ends the ids that were not there before
 (`new_run_ids`): the caller reads the one new run, and
 takes none when there are several, since another process ran on the album alongside and
 which run is whose cannot be told. Comparing sets, rather than predicting the id from a
@@ -164,6 +164,8 @@ REFETCH_OPTION = "--refetch-untimed"
 IMPLAUSIBLE_OPTION = "--refetch-implausible"
 #: The option the sweep and the album tool each take for the list of the MP3s saved.
 CHANGED_LIST_OPTION = "--changed-list"
+#: The option the sweep and the album tool's fix each take for the transcript store.
+HEARD_DIR_OPTION = "--heard-dir"
 #: The option the sweep and the album tool each take to leave NetEase's steps unasked.
 NO_NETEASE_OPTION = "--no-netease"
 #: The options the sweep and the album tool each take to leave a source unasked, as
@@ -193,8 +195,14 @@ def album_argv(
     interpreter: str = sys.executable,
     only: Sequence[Source] = (),
     skip: Sequence[str] = (),
+    mode: str = MODE_RUN,
+    heard_dir: Path | None = None,
 ) -> list[str]:
-    """The command running the album tool at *entry* on *album*: a run, never ``--fresh``.
+    """The command running the album tool at *entry* on *album*, never ``--fresh``.
+
+    *mode* is the album tool's mode: a run by default, or the fix pass's
+    ``fix-text``, which *heard_dir* names the transcript store of
+    (``--heard-dir``).
 
     *refetch_untimed* adds ``--refetch-untimed``, the refetch pass's option,
     *refetch_implausible* ``--refetch-implausible``, and *changed_list*
@@ -206,7 +214,9 @@ def album_argv(
     same installed packages. The album tool keeps its flags in its parser, so the
     sweep's suite parses this command, every option on, with that real parser.
     """
-    argv = [interpreter, str(entry), "--album", str(album), "--mode", MODE_RUN]
+    argv = [interpreter, str(entry), "--album", str(album), "--mode", mode]
+    if heard_dir is not None:
+        argv += [HEARD_DIR_OPTION, str(heard_dir)]
     if lang is not None:
         argv += ["--lang", lang]
     if offline:

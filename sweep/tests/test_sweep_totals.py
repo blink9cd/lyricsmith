@@ -150,9 +150,22 @@ class TotalLinesTest(ReportCase):
         )
         self.assertIn("refusals: Genius blocked 1, breaker open 20", lines)
 
+    def test_removals_withheld_total_on_their_own_line(self) -> None:
+        lines = self.report(
+            _entry("A/B", counts=Counts(kept=2, withheld=2)),
+            _entry("A/C", counts=Counts(kept=1, withheld=1)),
+        )
+        self.assertIn("removal withheld: spoken word 3", lines)
+
     def test_a_total_that_counts_nothing_prints_no_line(self) -> None:
         lines = self.report(_entry("A/B", counts=Counts(not_found=1)), _entry("A/C"))
-        for label in ("written:", "removed:", "refusals:", "retried:"):
+        for label in (
+            "written:",
+            "removed:",
+            "removal withheld:",
+            "refusals:",
+            "retried:",
+        ):
             with self.subTest(label=label):
                 self.assertFalse(any(line.startswith(label) for line in lines))
 

@@ -340,7 +340,7 @@ def accept_mode(args: argparse.Namespace, wiring: Wiring, prog: str) -> int:
     lyrics_prune_mode.refuse_unsafe_delete("accept")
     report = accept_album(
         album,
-        apply=args.apply,
+        apply=bool(args.apply),
         acquire_lock=wiring.acquire_lock,
         stages=wiring.stages,
         environ=wiring.environ,

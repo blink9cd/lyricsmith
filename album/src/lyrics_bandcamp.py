@@ -18,6 +18,15 @@ picked from the album's track list by the usual per-track matcher
 album at all, and the track match which of its tracks is the one asked, the length
 included, so a bonus track or a reprise is not taken for another.
 
+**What is no match.** No release matching, none linking Bandcamp, no ``/music`` entry
+passing the title rule, and a page the route reaches answering 404 or 410
+(`GONE_STATUSES`): MusicBrainz's links outlive the pages they name, so a gone page is
+the album not being there, not Bandcamp refusing. A gone album page or ``/music`` page
+is the album's no match; a gone page among tied entries is passed over for the next,
+and the album is no match only when every one opened is gone. Each is kept for the
+album as any no match is. Every other error status stays an error, a 403 or a 5xx
+included, and is recorded as the refusal it is.
+
 **The cache.** One album's lookup serves all its tracks: the provider instance keeps
 each album's outcome (its tracks, why none was found, or the error) for the rest of the
 run, keyed by the artist as the matcher compares it and by the album tag's whole title,
@@ -93,6 +102,10 @@ AlbumOutcome: TypeAlias = BandcampAlbum | Miss | Exception
 MAX_TIED_ENTRIES = 8
 #: The path an artist site's album list sits under.
 _MUSIC_PATH = "/music"
+#: The statuses a Bandcamp page answers when it no longer exists, read as no match:
+#: 404, and 410 Gone, which says the same thing more firmly (the page was there and was
+#: removed). Neither is a refusal: asking again, or slower, finds nothing more.
+GONE_STATUSES = frozenset({404, 410})
 
 
 def _track_hit(track: BandcampTrack) -> Hit:
@@ -158,9 +171,17 @@ def _has_lyrics(track: BandcampTrack | None) -> bool:
     return track is not None and bool((track.lyrics or "").strip())
 
 
-def _page(session: requests.Session, url: str) -> TextReply:
-    """*url* from Bandcamp as text, any redirect followed only to Bandcamp."""
-    return get_text(session, url, Source.BANDCAMP, allowed=is_bandcamp_url)
+def _page(session: requests.Session, url: str) -> TextReply | None:
+    """*url* from Bandcamp as text, any redirect followed only to Bandcamp; None if gone."""
+    return get_text(
+        session, url, Source.BANDCAMP, allowed=is_bandcamp_url, absent=GONE_STATUSES
+    )
+
+
+def _album_at(session: requests.Session, url: str) -> BandcampAlbum | Miss:
+    """The album the page at *url* describes, or `Miss.PAGE_GONE` when it is gone."""
+    page = _page(session, url)
+    return Miss.PAGE_GONE if page is None else _album_of(page)
 
 
 @dataclass(frozen=True)
@@ -178,29 +199,34 @@ def _first_with_lyrics(
     base: str,
     entries: tuple[MusicEntry, ...],
     ask: _SiteAsk,
-) -> BandcampAlbum:
+) -> BandcampAlbum | Miss:
     """The album of *entries* to keep, opened in order until one gives lyrics.
 
     The first whose best match for the asked track carries lyrics; else the first
-    holding the track at all; else the first opened. *entries* is never empty. The
-    first page is always asked, a single best entry's alone; a further one only before
-    the deadline, past which `ProviderTimeout` is raised, as a MusicBrainz request that
-    could not start in time is, so nothing is kept and the next track asks again. A
-    page's error is the album's, as the first page's is.
+    holding the track at all; else the first opened; `Miss.PAGE_GONE` when every page
+    asked was gone, a gone one passed over. *entries* is never empty. The first page is
+    always asked, a single best entry's alone; a further one only before the deadline,
+    past which `ProviderTimeout` is raised, as a MusicBrainz request that could not
+    start in time is, so nothing is kept and the next track asks again. A page's error
+    is the album's, as the first page's is.
     """
     opened: list[BandcampAlbum] = []
     holder: BandcampAlbum | None = None
-    for entry in entries:
-        if opened and ask.clock() >= ask.give_up_at:
+    for asked, entry in enumerate(entries):
+        if asked and ask.clock() >= ask.give_up_at:
             raise ProviderTimeout("the Bandcamp step's deadline passed")
-        album = _album_of(_page(session, urljoin(base, entry.path)))
+        album = _album_at(session, urljoin(base, entry.path))
+        if isinstance(album, Miss):
+            continue
         opened.append(album)
         top = _top_track(album, ask.query)
         if _has_lyrics(top):
             return album
         if holder is None and top is not None:
             holder = album
-    return holder or opened[0]
+    if holder is not None:
+        return holder
+    return opened[0] if opened else Miss.PAGE_GONE
 
 
 def _from_site(
@@ -210,9 +236,12 @@ def _from_site(
 
     A /music page that redirects to an album page is that page, matched by its name.
     Entries tying on the best title are opened exact title first (`_best_entries`)
-    until one gives the asked track's lyrics (`_first_with_lyrics`).
+    until one gives the asked track's lyrics (`_first_with_lyrics`). A gone /music
+    page is `Miss.PAGE_GONE`.
     """
     music = _page(session, f"{site}{_MUSIC_PATH}")
+    if music is None:
+        return Miss.PAGE_GONE
     if urlsplit(music.url).path.startswith(ALBUM_PATH):
         return _named(_album_of(music), ask.wanted)
     entries = _best_entries(parse_music_page(music.text), ask.wanted)
@@ -272,7 +301,7 @@ class BandcampProvider:
             return found
         with self.page_session() as session:
             if found.kind is LinkKind.ALBUM:
-                return _album_of(_page(session, found.url))
+                return _album_at(session, found.url)
             ask = _SiteAsk(album, query, self.clock, give_up_at)
             return _from_site(session, found.url, ask)
 

@@ -1,10 +1,11 @@
 """The two modes: a run over a path, and the model fetch.
 
-A run checks its setup first and touches no track when anything is missing: the
-child's packages, ffmpeg, a model, the path. Every outside call the modes make comes
-through `Seams`, so the black-box tests fake each one. A folder the walk cannot read, a
-found name that is not a regular file, and a track whose .lrc an earlier track already
-claims, are each a failed row, never dropped; a walked link is a skipped one.
+A run checks its setup first and touches no track when anything is missing: the child's
+packages, ffmpeg, a model, whisper-cli or a whisper model, the path. Every outside call
+the modes make comes through `Seams`, so the black-box tests fake each one. A folder the
+walk cannot read, a found name that is not a regular file, and a track whose .lrc an
+earlier track already claims, are each a failed row, never dropped; a walked link is a
+skipped one.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import os
 import shlex
 import shutil
 import stat
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -25,12 +26,16 @@ import sy_located  # noqa: F401 - puts the other tools and libraries on sys.path
 import at_discover
 import at_engine
 import at_models
+import sy_by_hand
 import sy_embed
+import sy_heard_dir
 import sy_models
 import sy_plan
 import sy_summary
 import sweep_report
+from lyrics_album import deferred_interrupt
 from at_modes import NOT_REGULAR_DETAIL, say
+from lyrics_heard_store import HeardRecord
 from sy_track import time_or_skip
 from sy_types import (
     FAILED,
@@ -47,6 +52,7 @@ from sy_types import (
     Planned,
     SetupError,
     TrackResult,
+    Whisper,
 )
 
 #: The packages the child process imports, checked without importing them.
@@ -59,6 +65,12 @@ REQUIRED_MODULES: Final = (
     "numpy",
 )
 FFMPEG: Final = "ffmpeg"
+#: The program the child hears the vocals with, found on PATH as the transcribe tool
+#: finds it.
+WHISPER_CLI: Final = "whisper-cli"
+#: The transcribe tool's folder, whose name is its dispatcher command and, with
+#: ``.py``, its entry file's: the setup check names its model fetch by them.
+TRANSCRIBE_DIR: Final = Path(at_engine.__file__).resolve().parents[1]
 REQUIREMENTS: Final = Path(__file__).resolve().parent.parent / "requirements-sync.txt"
 #: Each action that writes a .lrc, and the outcome a write it finished ends as.
 WRITING_OUTCOMES: Final = MappingProxyType(
@@ -120,12 +132,55 @@ def real_seams(album_entry: Path) -> Seams:
     )
 
 
+def find_whisper_cli(seams: Seams) -> Path | None:
+    """whisper-cli as PATH finds it, absolute, so the program checked is the one run."""
+    found = seams.which(WHISPER_CLI)
+    return None if found is None else Path(found).absolute()
+
+
+def transcribe_prog(prog: Sequence[str]) -> tuple[str, ...]:
+    """The transcribe tool's words: ``<dispatcher> transcribe``, else its entry file's name.
+
+    Only a dispatched run's *prog* is more than one word.
+    """
+    name = TRANSCRIBE_DIR.name
+    return (f"{name}.py",) if len(prog) < 2 else (*prog[:-1], name)
+
+
+def _whisper_problems(
+    options: Options, whisper_cli: Path | None, prog: Sequence[str]
+) -> list[str]:
+    """Why the child could not hear the vocals: no whisper-cli, or a whisper model."""
+    problems = []
+    if whisper_cli is None:
+        problems.append(f"{WHISPER_CLI} is not on PATH: brew install whisper.cpp")
+    # Read at call time, as sync's own manifest is, so the tests' stand-in counts.
+    models = sy_models.model_problems(options.whisper_model_dir, at_models.MANIFEST)
+    if models:
+        fetch = shlex.join(
+            [
+                *transcribe_prog(prog),
+                "--mode",
+                "fetch-models",
+                "--model-dir",
+                str(options.whisper_model_dir),
+            ]
+        )
+        problems += [*models, f"fetch them: {fetch}"]
+    return problems
+
+
 def setup_problems(
-    path: Path, options: Options, seams: Seams, prog: Sequence[str]
+    path: Path,
+    options: Options,
+    seams: Seams,
+    prog: Sequence[str],
+    whisper_cli: Path | None,
 ) -> list[str]:
     """Each reason the run cannot start, in the order a person would fix them.
 
-    *prog* is this tool's words as it was run, which the model fetch's command names.
+    *prog* is this tool's words as it was run, which each model fetch's command names;
+    *whisper_cli* is the program `find_whisper_cli` found, if any.
     """
     problems = []
     if not path.exists():
@@ -143,7 +198,7 @@ def setup_problems(
             [*prog, "--mode", "fetch-models", "--model-dir", str(options.model_dir)]
         )
         problems += [*models, f"fetch them: {fetch}"]
-    return problems
+    return problems + _whisper_problems(options, whisper_cli, prog)
 
 
 def _unreadable_folder(error: OSError, root: Path) -> Planned:
@@ -174,23 +229,42 @@ def _entry_row(track: Path, named: bool) -> Planned | None:
     return None
 
 
-def _plan_one(track: Path, path: Path, overwrite: bool) -> Planned:
-    """*track*'s row when it is no track to time, else its plan from its sidecars."""
+def _plan_one(
+    track: Path,
+    path: Path,
+    overwrite: bool,
+    listed: Mapping[str, Action],
+    heard: Mapping[str, HeardRecord],
+) -> Planned:
+    """*track*'s row when it is no track to time, else its plan from its sidecars.
+
+    A plan to time a track *listed* to be skipped becomes its listed skip, and a plan
+    to time a track whose transcript is kept (*heard*) carries it, unless its ``not
+    sung`` row holds for its unchanged text (`sy_plan.listed_by_hand`).
+    """
     row = _entry_row(track, named=track == path)
-    return row or sy_plan.plan_track(track, overwrite=overwrite)
+    planned = row or sy_plan.plan_track(track, overwrite=overwrite)
+    return sy_plan.listed_by_hand(planned, listed, heard)
 
 
 def plan_all(
-    path: Path, options: Options, root: Path
+    path: Path,
+    options: Options,
+    root: Path,
+    listed: Mapping[str, Action] = MappingProxyType({}),
+    heard: Mapping[str, HeardRecord] = MappingProxyType({}),
 ) -> tuple[list[Planned], list[Path]]:
     """Each unreadable folder's row and each track's plan, claims settled; every track.
 
     Every track found, planned or not, decides the folders --embed runs album on; a
     name that is no track (a link, a FIFO, one that could not be read) decides nothing.
+    A track *listed* to be skipped is a track: it claims its .lrc and counts.
     """
     errors: list[OSError] = []
     audio = at_discover.find_audio(path, options.extensions, errors)
-    plans = [_plan_one(track, path, options.overwrite) for track in audio]
+    plans = [
+        _plan_one(track, path, options.overwrite, listed, heard) for track in audio
+    ]
     folders = [_unreadable_folder(error, root) for error in errors]
     tracks = [plan.audio for plan in plans if plan.action not in sy_plan.UNCLAIMED]
     return folders + sy_plan.claim_lrcs(plans), tracks
@@ -207,25 +281,80 @@ def run_mode(
     path = options.path
     if path is None:
         raise SetupError("--path is required in run mode")
-    problems = setup_problems(path, options, seams, prog)
+    listed, unread = _read_listed(options.by_hand_list)
+    store, unread_store = sy_heard_dir.read_store(options.heard_dir)
+    whisper_cli = find_whisper_cli(seams)
+    problems = [
+        *setup_problems(path, options, seams, prog, whisper_cli),
+        *unread,
+        *unread_store,
+    ]
     album = sweep_report.album_prog(tuple(prog), seams.album_entry.name)
     if problems and not options.dry_run:
         raise SetupError("; ".join(problems))
+    keeper, store, said = sy_heard_dir.open_store(
+        options.heard_dir, store, path, dry_run=options.dry_run
+    )
+    for line in said:
+        say(line)
     root = at_discover.walk_root(path)
-    plans, discovered = plan_all(path, options, root) if path.exists() else ([], [])
-    if options.dry_run:
+    skipped = sy_by_hand.skipped_paths(listed)
+    heard = sy_heard_dir.by_path(store)
+    plans, discovered = (
+        plan_all(path, options, root, skipped, heard) if path.exists() else ([], [])
+    )
+    if options.dry_run or whisper_cli is None:
+        # Without whisper-cli the setup check failed, and only a dry run gets past it.
         return _dry_run(plans, problems, root)
     label = Label(tool_version, seams.version("demucs"), seams.version("torchaudio"))
-    results, interrupted, in_hand = _time_each(plans, options, label, seams, root)
+    kept = sy_heard_dir.Kept(sy_by_hand.Recorder(options.by_hand_list, listed), keeper)
+    whisper = Whisper(whisper_cli, options.whisper_model_dir)
+    results, interrupted, in_hand = _time_each(
+        plans, options.model_dir, label, seams, root, kept, whisper
+    )
     if interrupted:
-        return _interrupted(plans, results, in_hand, discovered, root, album)
+        ended = _interrupted(plans, results, in_hand, discovered, root, album)
+        _say_listed(kept)
+        return ended
     written = sy_summary.written_tracks(results)
     units = sy_embed.embed_units(written, discovered, root)
-    return _finish(results, units, options.embed, seams, album)
+    code = _finish(results, units, options.embed, seams, album)
+    _say_listed(kept)
+    return EXIT_FAILED if kept.recorder.failed or keeper.failed else code
+
+
+def _read_listed(
+    target: Path | None,
+) -> tuple[tuple[sy_by_hand.Row, ...], list[str]]:
+    """The --by-hand-list rows, and the setup problem when it cannot be read.
+
+    Read whole before any track is touched; with no option, or no file yet, no rows.
+    """
+    if target is None:
+        return (), []
+    try:
+        return sy_by_hand.read_by_hand_list(target), []
+    except sy_by_hand.ByHandListError as error:
+        return (), [f"{sy_by_hand.OPTION} {error}"]
+
+
+def _say_listed(kept: sy_heard_dir.Kept) -> None:
+    """Print the footer's lines naming the list and the store, when this run added to them."""
+    recorder = kept.recorder
+    for line in sy_summary.by_hand_lines(recorder.added, recorder.target):
+        say(line)
+    for line in sy_heard_dir.kept_lines(kept.keeper):
+        say(line)
 
 
 def _time_each(
-    plans: Sequence[Planned], options: Options, label: Label, seams: Seams, root: Path
+    plans: Sequence[Planned],
+    model_dir: Path,
+    label: Label,
+    seams: Seams,
+    root: Path,
+    kept: sy_heard_dir.Kept,
+    whisper: Whisper,
 ) -> tuple[list[TrackResult], bool, InHand | None]:
     """Each plan's result, its rows printed as it ends; whether a Ctrl-C stopped it.
 
@@ -233,7 +362,12 @@ def _time_each(
     track's temporary folder is removed on the way out; its .lrc is written atomically
     or not at all. A result is kept before its rows print, so a Ctrl-C while they print
     cannot cost a written track its album command. The last track taken in hand comes
-    back too, with its .lrc entry as it was just before the track was timed.
+    back too, with its .lrc entry as it was just before the track was timed. The child
+    hears each track's vocals with *whisper* before it aligns. Each
+    result is then put in the --heard-dir store and the --by-hand-list (*kept*) before
+    its rows print, any note either adds printed beneath them; keeping it and recording
+    it are done with Ctrl-C held, so an interrupt between them cannot cost the track
+    its row or its record.
     """
     results: list[TrackResult] = []
     in_hand: InHand | None = None
@@ -241,8 +375,12 @@ def _time_each(
         for index, planned in enumerate(plans):
             before = lrc_identity(planned.audio.with_suffix(LRC_SUFFIX))
             in_hand = InHand(index, planned, before)
-            result = time_or_skip(planned, options.model_dir, label, seams.run)
-            results.append(result)
+            result = time_or_skip(planned, model_dir, label, seams.run, whisper=whisper)
+            # Held, so a Ctrl-C can never fall between keeping the result and
+            # recording its row: it is raised once both are done.
+            with deferred_interrupt():
+                results.append(result)
+                result = results[-1] = kept.record(planned, result)
             for line in sy_summary.result_lines(result, root):
                 say(line)
     except KeyboardInterrupt:

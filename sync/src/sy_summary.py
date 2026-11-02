@@ -11,6 +11,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+import sy_located  # noqa: F401 - puts album's modules on sys.path
+from lyrics_heard import MIN_HEARD_PAIRS
 from sy_types import (
     EXIT_FAILED,
     EXIT_OK,
@@ -34,6 +36,12 @@ EMBED_OPTIONS: Final = ("--offline", "--album")
 BY_HAND: Final = (
     "A low-confidence track gets no .lrc: time it by hand in a tap-along LRC editor run"
     " locally, such as lrc-maker."
+)
+NOT_SUNG: Final = (
+    "A text not sung gets no .lrc: whisper-cli heard the vocals, and too few of the"
+    " word pairs it heard are the text's, so the .txt may hold another song's lyrics."
+    " Check it against the track and correct it; under --by-hand-list, remove the"
+    " track's row to time it again."
 )
 
 
@@ -59,7 +67,7 @@ def plan_lines(planned: Planned, root: Path) -> list[str]:
 
 
 def result_lines(result: TrackResult, root: Path) -> list[str]:
-    """*result*'s row, then its detail, the first-line flag and the unaligned count."""
+    """*result*'s row, then its detail, then each note: first line, unaligned, little heard."""
     lines = [_row(result.outcome.value, result.audio, root)]
     lines += [f"{DETAIL_INDENT}{detail}" for detail in result.detail]
     if result.first_line is not None:
@@ -69,6 +77,11 @@ def result_lines(result: TrackResult, root: Path) -> list[str]:
         lines.append(
             f"{DETAIL_INDENT}{result.unaligned} line(s) with nothing to align"
             " took the next line's stamp, or after the last sung line its end"
+        )
+    if result.little_heard is not None:
+        lines.append(
+            f"{DETAIL_INDENT}only {result.little_heard} word pairs heard, under"
+            f" {MIN_HEARD_PAIRS}: its text was not checked against the vocals"
         )
     return lines
 
@@ -163,7 +176,16 @@ def footer_lines(
         lines.append(first_line_fix(album))
     if any(result.outcome is Outcome.LOW_CONFIDENCE for result in results):
         lines.append(BY_HAND)
+    if any(result.outcome is Outcome.NOT_SUNG for result in results):
+        lines.append(NOT_SUNG)
     return lines
+
+
+def by_hand_lines(added: int, target: Path | None) -> list[str]:
+    """The footer's line naming the --by-hand-list file, when this run added rows to it."""
+    if not added or target is None:
+        return []
+    return [f"listed for timing by hand: {added} row(s) added to {target}"]
 
 
 def interrupted_line(left: int) -> str:

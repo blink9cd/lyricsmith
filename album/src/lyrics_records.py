@@ -264,7 +264,8 @@ class TrackOutcome:
     judged apart, were too implausible to keep, which a track the refetch found
     nothing for is then `OutcomeStatus.REMOVED` for, with each such side removed whole.
     *refetch_implausible* is True when a ``--refetch-implausible`` run asked the
-    providers again for the track, whose serving lyrics were implausible; *implausible*
+    providers again for the track, whose serving lyrics were implausible, or either
+    refetch option did for a track holding a lyrics frame over the cap; *implausible*
     then says why, as for a refetch. Any run sets *implausible* alone,
     ``placeholder lyrics``, on a track whose only lyrics are placeholders, which it
     removes the same way when nothing answers.
@@ -293,6 +294,11 @@ class TrackOutcome:
     silence_failed: str | None = None
     #: What the track held before the run changed anything, None when not read.
     held: HeldBefore | None = None
+    #: The album-relative path of the track a fix took the written text from.
+    origin: str | None = None
+    #: Why a fix kept a wrong text it would have removed: the album looks spoken
+    #: (`lyrics_spoken`), so its transcripts are speech no text is sung in.
+    withheld: str | None = None
 
 
 @dataclass(frozen=True)

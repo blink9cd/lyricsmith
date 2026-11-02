@@ -30,10 +30,19 @@ class PlanTest(sy_cases.IsolatedCase):
         return sy_plan.plan_track(audio, overwrite=overwrite)
 
     def test_a_txt_alone_is_timed_with_its_lines(self) -> None:
-        planned = self.plan(txt="la la\n\nlo lo\n")
+        planned = self.plan(txt="\nla la\n\nlo lo\n\n")
         self.assertEqual(
-            (planned.action, planned.lines), (Action.TIME, ("la la", "lo lo"))
+            (planned.action, planned.lines), (Action.TIME, ("la la", "", "lo lo"))
         )
+
+    def test_our_lrc_keeps_its_blank_lines_through_a_re_time(self) -> None:
+        lines = ("A gull", "", "on the railing")
+        spaced = sy_lrc.lrc_text(Label("0", "0", "0"), lines, (1.0, 2.0, 2.0))
+        planned = self.plan(lrc=spaced, overwrite=True)
+        self.assertEqual((planned.action, planned.lines), (Action.RETIME, lines))
+
+    def test_blank_lines_alone_are_still_no_text(self) -> None:
+        self.assertIs(self.plan(txt="\n  \n\n").action, Action.SKIP_NO_TEXT)
 
     def test_a_timed_lrc_is_skipped(self) -> None:
         self.assertIs(self.plan(lrc=fixtures.LIGHTHOUSE_LRC).action, Action.SKIP_TIMED)

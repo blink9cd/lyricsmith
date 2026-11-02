@@ -209,8 +209,9 @@ class FailureReuseTest(fixtures.IsolatedCase):
             }
         )
         result = _fetch(server)
+        # The field search and its three retries, then the one search by ``q``.
         self.assertEqual(
-            server.paths(), [LRCLIB_GET, *[LRCLIB_SEARCH] * 4, NETEASE_SEARCH]
+            server.paths(), [LRCLIB_GET, *[LRCLIB_SEARCH] * 5, NETEASE_SEARCH]
         )
         self.assertEqual(
             _steps(result),

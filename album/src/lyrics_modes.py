@@ -237,11 +237,13 @@ def _plan_track(
             stages.check_writable(path)
             stage = ErrorStage.STRIP
             check_slot(path)
-            # A miss keeps what the track holds, so only an empty one expects none.
-            marked = marked and not _holds_lyrics(path, tags, lang)
-            return PlannedTrack(
-                rel, _expecting(_afresh_plan(target), marked=marked), query.markers
-            )
+            plan = _afresh_plan(target)
+            # A miss keeps what the track holds, so only an empty one expects none;
+            # asked only of a plain fetch, since a refetch's frames may be over the
+            # cap, which reading them would refuse.
+            if plan == PLAN_FETCH:
+                marked = marked and not _holds_lyrics(path, tags, lang)
+            return PlannedTrack(rel, _expecting(plan, marked=marked), query.markers)
         sidecar = stages.normalize_sidecars(path, album=album, apply=False)
         # Inside the boundary: a frame over the cap ends this track's plan alone.
         embedded = embedded_lyrics(tags.frames, lang)

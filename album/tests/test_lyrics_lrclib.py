@@ -1,5 +1,7 @@
 """The LRCLIB step: the exact lookup by the track's tags, then the search, on its public API.
 
+The search by ``q`` after a field search's server error is `test_lyrics_lrclib_q`.
+
 No test here reaches the network: each one replaces the HTTP transport's ``send`` with a
 fake that answers from memory, so the real adapter, its session and the status hook all
 still run. Every name and lyric is invented.
@@ -82,19 +84,26 @@ class FakeLrclib(http_fakes.RecordingServer):
         self,
         exact: dict[str, object] | int = 404,
         hits: object = None,
+        q_hits: object = None,
     ) -> None:
         """Answer the lookup with *exact* and the search with *hits*, none when None.
 
         Either is a status alone when an int; *hits* may also be raw bytes or any
         other body, so a refusal test can answer in a shape the tool does not know.
+        The search by ``q`` answers *q_hits*, or the same as the field search when None:
+        a server failing one search fails the other unless a test says otherwise.
         """
         super().__init__()
         self.exact = exact
         self.hits: object = [] if hits is None else hits
+        self.q_hits: object = self.hits if q_hits is None else q_hits
 
     def reply(self, path: str) -> object:
-        """The lookup's answer for its path, the search's for any other."""
-        return self.exact if path == "/api/get" else self.hits
+        """The lookup's answer for its path, the search's for any other, by its fields."""
+        if path == "/api/get":
+            return self.exact
+        by_q = "q" in self.params(len(self.requests) - 1)
+        return self.q_hits if by_q else self.hits
 
 
 def _step(kind: lm.LyricsKind) -> lm.Provider:

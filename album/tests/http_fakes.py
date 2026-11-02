@@ -58,14 +58,22 @@ def json_body(value: object) -> bytes:
     return json.dumps(value).encode()
 
 
-def transport(answer: Answer) -> AbstractContextManager[object]:
-    """Replace the HTTP transport's ``send`` with *answer*, which never touches a socket."""
+def transport(
+    answer: Answer, timeouts: list[object] | None = None
+) -> AbstractContextManager[object]:
+    """Replace the HTTP transport's ``send`` with *answer*, which never touches a socket.
+
+    Each request's timeout, as the adapter is handed it, is appended to *timeouts* when
+    given, so a test can read what a request was allowed.
+    """
 
     def send(
         adapter: requests.adapters.HTTPAdapter,
         request: requests.PreparedRequest,
         **kwargs: object,
     ) -> requests.Response:
+        if timeouts is not None:
+            timeouts.append(kwargs.get("timeout"))
         return answer(request)
 
     return mock.patch.object(requests.adapters.HTTPAdapter, "send", send)

@@ -9,7 +9,8 @@ tool's folder, both from fixed places; importing the album tool puts the album t
 own private modules on the path too.
 
 `main` parses the options, finds the library's albums through the shared walk, surveys
-them, and for ``--mode run`` hands the surveys to the sweep, which plans its visits
+them (for ``--mode fix-text`` only those holding a transcript record, `sweep_fix_text`),
+and for ``--mode run`` or ``fix-text`` hands the surveys to the sweep, which plans its visits
 against the ledger exactly as the survey does (`plan_visits`), with the real child
 runner, sleep and clock bound (`real_wiring`); a test passes its own `Wiring` instead.
 """
@@ -54,20 +55,24 @@ import lyrics_prune_mode  # noqa: E402 - import follows the sys.path bootstrap a
 import stdio_utf8  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_accept  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_changed  # noqa: E402 - import follows the sys.path bootstrap above
+import sweep_fix_text  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_lock  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_report  # noqa: E402 - import follows the sys.path bootstrap above
 from sweep_report import Words  # noqa: E402 - follows the bootstrap
 import sweep_run  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_silence  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_waiting  # noqa: E402 - import follows the sys.path bootstrap above
-from sweep_types import positive_int, seconds  # noqa: E402 - follows the bootstrap
+from sweep_types import absolute_path, positive_int, seconds  # noqa: E402 - bootstrap
 from sweep_wiring import Wiring, real_wiring  # noqa: E402 - follows the bootstrap
 from library_walk import DEFAULT_LIBRARY  # noqa: E402 - follows the bootstrap
 from stdio_utf8 import spell_unsafe  # noqa: E402 - follows the bootstrap
 from sweep_ledger import ledger_path, read_records  # noqa: E402 - follows the bootstrap
 from sweep_options import (  # noqa: E402 - follows the bootstrap
+    CHILD_MODES,
     EPILOG,
+    FLAG_HELP,
     MODE_ACCEPT,
+    MODE_FIX_TEXT,
     MODE_RUN,
     MODE_SILENCE,
     MODE_SURVEY,
@@ -93,9 +98,10 @@ _WINDOWS = "nt"
 #: The pause between albums, in seconds. Conservative: it has run a whole library
 #: unchanged, and has not been tuned.
 DEFAULT_PAUSE_S = 10.0
-#: How many consecutive refused albums stop a run. Conservative and untuned, like the
-#: pause.
+#: Consecutive refused albums that stop a run; conservative and untuned, like the pause.
 DEFAULT_STOP_AFTER = 3
+#: How the help of an option both a run and the fix take opens.
+_BOTH = "run and fix-text only:"
 
 
 # --- The options ---------------------------------------------------------------------
@@ -117,17 +123,21 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=(MODE_SURVEY, MODE_RUN, MODE_ACCEPT, MODE_SILENCE),
+        choices=(MODE_SURVEY, MODE_RUN, MODE_ACCEPT, MODE_SILENCE, MODE_FIX_TEXT),
         default=MODE_SURVEY,
         help="survey: count each album's tracks by the lyrics they hold, writing "
         "nothing. run: run the album tool on each album a survey would visit. "
         "accept: report, by the album tool's accept rules, what dropping each "
         "album's runs and backups would remove; it removes them with --apply. "
-        "silence: measure every track's peak and list the silent ones, judged.",
+        "silence: measure every track's peak and list the silent ones, judged. "
+        "fix-text: run the album tool's fix on each album with a --heard-dir record.",
     )
     parser.add_argument(
         "--apply",
         action="store_true",
+        # None, not False, when omitted, on every on/off flag here: --help then shows
+        # no default, and each reader that keeps the value makes it a bool first.
+        default=None,
         help="accept only: record each album's manifests outside the library, then "
         "remove its .lyricsmith folder; without it accept only reports.",
     )
@@ -141,29 +151,20 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser.add_argument(
         "--refetch-untimed",
         action="store_true",
-        help="The refetch pass: a run passes --refetch-untimed to the album tool, which "
-        "asks the providers again for each track holding only untimed lyrics. It "
-        "keeps its own done albums in the ledger, apart from a normal sweep's, and a "
-        "survey with it lists the albums this pass would visit. Not with --offline.",
+        default=None,
+        help=FLAG_HELP["--refetch-untimed"],
     )
     parser.add_argument(
         "--refetch-implausible",
         action="store_true",
-        help="A run passes --refetch-implausible to the album tool, which asks the "
-        "providers again for each track serving implausible lyrics, removing them "
-        "when none answers; a survey or run with it also visits an album whose "
-        "every track is synced when one serves implausible lyrics. It keeps the "
-        "pass: the normal one, or the refetch pass beside --refetch-untimed. Not "
-        "with --offline.",
+        default=None,
+        help=FLAG_HELP["--refetch-implausible"],
     )
     parser.add_argument(
         "--owe-earlier-runs",
         action="store_true",
-        help="A survey or run also counts as owed an album whose newest ledger line "
-        "is done but predates the owed outcome, owing each refusing provider it names "
-        "and each provider its run left out by a cool-down that could still answer "
-        "a track; a run asks it only those. Not with --restart, --offline or "
-        "--mode accept.",
+        default=None,
+        help=FLAG_HELP["--owe-earlier-runs"],
     )
     _add_run_options(parser)
     parser.add_argument("--resume", type=Path, help=sweep_silence.RESUME_HELP)
@@ -171,73 +172,86 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
 
 
 def _add_run_options(parser: argparse.ArgumentParser) -> None:
-    """The options only a run uses."""
+    """The options only a run or the fix uses."""
+    parser.add_argument(
+        "--heard-dir",
+        type=absolute_path,
+        help="fix-text only, and required there: the transcript folder sync "
+        "--heard-dir wrote, passed to each album's fix, which only reads it.",
+    )
     parser.add_argument(
         "--offline",
         action="store_true",
+        default=None,
         help="run only: pass --offline to the album tool, which then asks no provider.",
     )
     parser.add_argument(
         "--no-netease",
         action="store_true",
-        help="run only: pass --no-netease to the album tool, which then skips both "
+        default=None,
+        help=f"{_BOTH} pass --no-netease to the album tool, which then skips both "
         "NetEase steps. " + lyrics_help.terms_note("--no-netease"),
     )
     parser.add_argument(
         "--no-bandcamp",
         action="store_true",
-        help="run only: pass --no-bandcamp to the album tool, which then skips its "
+        default=None,
+        help=f"{_BOTH} pass --no-bandcamp to the album tool, which then skips its "
         "Bandcamp step. " + lyrics_help.terms_note("--no-bandcamp"),
     )
     parser.add_argument(
         "--no-youtube-music",
         action="store_true",
-        help="run only: pass --no-youtube-music to the album tool, which then "
+        default=None,
+        help=f"{_BOTH} pass --no-youtube-music to the album tool, which then "
         "skips its YouTube Music steps. "
         + lyrics_help.terms_note("--no-youtube-music"),
     )
     parser.add_argument(
         "--no-genius",
         action="store_true",
-        help="run only: pass --no-genius to the album tool, which then skips its "
+        default=None,
+        help=f"{_BOTH} pass --no-genius to the album tool, which then skips its "
         "Genius step. " + lyrics_help.terms_note("--no-genius"),
     )
     parser.add_argument(
         "--no-tekstowo",
         action="store_true",
-        help="run only: pass --no-tekstowo to the album tool, which then skips its "
+        default=None,
+        help=f"{_BOTH} pass --no-tekstowo to the album tool, which then skips its "
         "Tekstowo step. " + lyrics_help.terms_note("--no-tekstowo"),
     )
     parser.add_argument(
         "--pause-seconds",
         type=seconds,
         default=DEFAULT_PAUSE_S,
-        help="run only: the pause between one album and the next.",
+        help=f"{_BOTH} the pause between one album and the next.",
     )
     parser.add_argument(
         "--stop-after",
         type=positive_int,
         default=DEFAULT_STOP_AFTER,
-        help="run only: stop after this many consecutive albums whose providers "
+        help=f"{_BOTH} stop after this many consecutive albums whose providers "
         "only refused.",
     )
     parser.add_argument(
         "--limit",
         type=positive_int,
         default=None,
-        help="run and silence only: visit at most this many albums; every album "
-        "left when omitted.",
+        help="run, fix-text and silence only: visit at most this many albums; "
+        "every album left when omitted.",
     )
     parser.add_argument(
         "--restart",
         action="store_true",
-        help="run only: visit albums the ledger holds as done, as well.",
+        default=None,
+        help=f"{_BOTH} visit albums the ledger holds as done, as well.",
     )
     parser.add_argument(
         "--changed-list",
         type=Path,
         default=None,
-        help="run only: add the absolute path of every MP3 the run's albums saved to "
+        help=f"{_BOTH} add the absolute path of every MP3 the albums saved to "
         "this file, one per line, for an app that rereads their tags, rewritten after "
         "each album; --restart starts it empty; no list when omitted.",
     )
@@ -272,7 +286,8 @@ def _survey(args: argparse.Namespace, library: Path) -> list[AlbumSurvey]:
         lang=lang,
         on_skip=_skipped,
         on_linked=_linked,
-        refetch_implausible=args.refetch_implausible,
+        refetch_untimed=bool(args.refetch_untimed),
+        refetch_implausible=bool(args.refetch_implausible),
     )
 
 
@@ -311,8 +326,8 @@ def _survey_mode(
         surveys,
         library,
         plan,
-        refetch_untimed=args.refetch_untimed,
-        refetch_implausible=args.refetch_implausible,
+        refetch_untimed=bool(args.refetch_untimed),
+        refetch_implausible=bool(args.refetch_implausible),
         earlier=earlier if args.owe_earlier_runs else None,
         waiting=waiting,
     )
@@ -320,16 +335,29 @@ def _survey_mode(
     return sweep_run.EXIT_OK
 
 
+def _child_surveys(args: argparse.Namespace, library: Path) -> list[AlbumSurvey]:
+    """A run's albums surveyed, or the fix's: those holding a record in --heard-dir."""
+    if args.heard_dir is None:
+        return _survey(args, library)
+    albums = contained_albums(library, on_skip=_skipped, on_linked=_linked)
+    lang = sweep_run.lang_of(build_options(args))
+    return sweep_fix_text.fix_surveys(albums, args.heard_dir, lang=lang, notice=_notice)
+
+
 def _run_mode(
     args: argparse.Namespace, library: Path, wiring: Wiring, words: Words
 ) -> int:
-    """Hold the library's lock, run the sweep, print the report; 2 if it is held."""
+    """Hold the library's lock, run the sweep (a run or the fix), print the report."""
     ledger = ledger_path(library, os.environ)
     try:
         with sweep_lock.held(sweep_lock.lock_path(ledger)):
             return _sweep_held(args, library, ledger, wiring, words)
-    # Both are raised before any album is visited, so there is no report to print.
-    except (sweep_lock.SweepLockError, sweep_changed.ChangedListError) as error:
+    # Each is raised before any album is visited, so there is no report to print.
+    except (
+        sweep_lock.SweepLockError,
+        sweep_changed.ChangedListError,
+        sweep_fix_text.HeardDirError,
+    ) as error:
         _notice(f"{' '.join(words)}: {error}")
         return sweep_run.EXIT_USAGE
 
@@ -338,10 +366,10 @@ def _sweep_held(
     args: argparse.Namespace, library: Path, ledger: Path, wiring: Wiring, words: Words
 ) -> int:
     """Visit each album that needs it and is not done, then print the report."""
-    surveys = _survey(args, library)
+    surveys = _child_surveys(args, library)
     options = build_options(args)
     with sweep_changed.changed_union(
-        args.changed_list, _notice, restart=args.restart
+        args.changed_list, _notice, restart=bool(args.restart)
     ) as changed:
         seams = sweep_run.SweepSeams(
             wiring.run_child, wiring.sleep, wiring.now, _notice, ALBUM_ENTRY
@@ -369,15 +397,10 @@ def _sweep_held(
 
 def _print_resume(args: argparse.Namespace, library: Path, words: Words) -> None:
     """Print the command that resumes this run, named by *words* when dispatched."""
-    command = sweep_report.resume_command(
-        sweep_report.resume_prog(words, _PROG_FILE),
-        library,
-        build_options(args),
-        changed_list=args.changed_list,
+    prog = sweep_report.resume_prog(words, _PROG_FILE)
+    print(
+        sweep_report.resume_line(prog, library, build_options(args), args.changed_list)
     )
-    # Escaped like the report: a library named with a control character prints as
-    # visible escapes, so a pasted command then holds them as text.
-    print(spell_unsafe(f"resume: {command}"))
 
 
 def _accept_mode(
@@ -391,7 +414,7 @@ def _accept_mode(
     ledger = ledger_path(library, os.environ)
     run = sweep_accept.AcceptRun(
         library,
-        args.apply,
+        bool(args.apply),
         wiring.accept or sweep_accept.real_seams(),
         wiring.now,
         " ".join(sweep_report.resume_prog(words, _PROG_FILE)),
@@ -420,6 +443,7 @@ _MODES: dict[str, Callable[[argparse.Namespace, Path, Wiring, Words], int]] = {
     MODE_RUN: _run_mode,
     MODE_ACCEPT: _accept_mode,
     MODE_SILENCE: functools.partial(sweep_silence.silence_mode, prog_file=_PROG_FILE),
+    MODE_FIX_TEXT: _run_mode,
 }
 
 
@@ -441,8 +465,10 @@ def main(
     refuse_misplaced(parser, args)
     # Checked before any path is built: a run stops the album tool with SIGINT, which
     # only a POSIX system delivers as Ctrl-C's own signal.
-    if args.mode == MODE_RUN and os.name == _WINDOWS:
-        _notice(f"{parser.prog}: --mode {MODE_RUN} needs a POSIX system (macOS, Linux)")
+    if args.mode in CHILD_MODES and os.name == _WINDOWS:
+        _notice(
+            f"{parser.prog}: --mode {args.mode} needs a POSIX system (macOS, Linux)"
+        )
         return sweep_run.EXIT_USAGE
     library = Path(args.library).expanduser()
     if not library.is_dir():
@@ -465,7 +491,7 @@ def main(
     # resume line, no report.
     except KeyboardInterrupt:
         _notice(f"{parser.prog}: interrupted")
-        if args.mode == MODE_RUN:
+        if args.mode in CHILD_MODES:
             _print_resume(args, library, words)
         return sweep_run.EXIT_INTERRUPTED
 

@@ -47,6 +47,7 @@ class EntriesTest(sy_cases.IsolatedCase):
         self.models = self.tmp / "models"
         self.models.mkdir()
         (self.models / TINY[0].name).write_bytes(DATA)
+        self.whisper = sy_cases.invented_whisper_models(self, self.tmp / "whisper")
         self.album = self.tmp / "Album"
         track = fixtures.TrackSpec("01 A.mp3", seconds=1.0, txt="\n".join(LINES))
         (self.audio,) = fixtures.build_album(self.album, (track,))
@@ -80,6 +81,7 @@ class EntriesTest(sy_cases.IsolatedCase):
         """main() on *argv* plus the model folder; its code and standard output."""
         out = io.StringIO()
         full = [*argv, "--model-dir", str(self.models)]
+        full += ["--whisper-model-dir", str(self.whisper)]
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             code = sync.main(
                 full,
@@ -164,12 +166,15 @@ class EntriesTest(sy_cases.IsolatedCase):
         self.assertRegex(out, r"ERROR audio +01 A\.mp3")
         self.assertIn("could not read it: refused", out)
 
-    def test_the_path_and_the_model_folder_are_made_absolute(self) -> None:
-        parser = sync.build_parser(self.models)
+    def test_the_path_and_the_model_folders_are_made_absolute(self) -> None:
+        parser = sync.build_parser(self.models, self.whisper)
         args = ["--path", "http:x.mp3", "--model-dir", "pipe:0"]
-        options = sync.resolve_options(parser.parse_args(args))
+        options = sync.resolve_options(
+            parser.parse_args([*args, "--whisper-model-dir", "w"])
+        )
         self.assertEqual(options.path, Path.cwd() / "http:x.mp3")
         self.assertEqual(options.model_dir, Path.cwd() / "pipe:0")
+        self.assertEqual(options.whisper_model_dir, Path.cwd() / "w")
 
     def test_a_first_time_write_never_replaces_a_link_at_the_lrc_name(self) -> None:
         lrc = self.audio.with_suffix(".lrc")

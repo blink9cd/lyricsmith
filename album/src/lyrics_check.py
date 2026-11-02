@@ -37,7 +37,7 @@ import re
 import unicodedata
 from difflib import SequenceMatcher
 
-from lyrics_model import Lyrics, SyncedLyrics
+from lyrics_model import WORD_STAMP, Lyrics, SyncedLyrics
 from lyrics_placeholder import is_placeholder_lyrics
 from lyrics_records import CheckReason, CheckResult, CheckRule
 
@@ -76,8 +76,11 @@ _SHOWN_PLACES = 3
 _SYNCED_ROWS_SKIPPED = "timing and too-many-words rows not checked"
 _UNTIMED_ROWS_SKIPPED = "too-many-words row not checked"
 #: A bracketed run (an LRC time stamp or tag, or a section header such as "[Chorus]"),
-#: or an enhanced-LRC inline word stamp such as "<00:01.80>".
-_STAMPS_AND_TAGS = re.compile(r"\[[^\]]*\]|<\d+:\d+(?:[.:]\d+)?>")
+#: or an enhanced-LRC inline word stamp such as "<00:01.80>". The word stamp is the
+#: LRC reader's own `WORD_STAMP`, so the check drops exactly the stamps the reader
+#: removes: a bracket the reader would keep as text (seconds past 59, a 4-digit
+#: fraction) is read here as words, too.
+_STAMPS_AND_TAGS = re.compile(r"\[[^\]]*\]|" + WORD_STAMP.pattern)
 #: Anything that is neither a word character nor whitespace.
 _NON_WORD = re.compile(r"[^\w\s]")
 #: Straight and curly apostrophes: deleted, so a contraction and its apostrophe-less

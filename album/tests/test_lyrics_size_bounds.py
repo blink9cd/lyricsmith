@@ -17,6 +17,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent), str(_HERE.parent / "src")]
 
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_cap as lcap  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_check as lc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_inventory as linv  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
@@ -108,6 +109,21 @@ class FrameCapTest(fixtures.IsolatedCase):
         large = tag_builders.uslt("w" * (lr.MAX_LYRICS_CHARS + 1), lang="deu")
         with self.assertRaises(lm.FrameTooLargeError):
             linv.embedded_lyrics((small, large), _LANG)
+
+    def test_the_reason_names_the_first_over_the_cap(self) -> None:
+        small = tag_builders.uslt("A lamp swings")
+        large = tag_builders.uslt("w" * (lr.MAX_LYRICS_CHARS + 1))
+        self.assertIsNone(lcap.oversized_reason((small,)))
+        self.assertEqual(
+            lcap.oversized_reason((small, large)),
+            f"a USLT frame is too large: over {lr.MAX_LYRICS_CHARS} characters",
+        )
+
+    def test_within_cap_sets_aside_only_the_frames_over_it(self) -> None:
+        small = tag_builders.uslt("A lamp swings")
+        at_cap = tag_builders.uslt("w" * lr.MAX_LYRICS_CHARS, lang="deu")
+        large = tag_builders.uslt("w" * (lr.MAX_LYRICS_CHARS + 1), lang="fra")
+        self.assertEqual(lcap.within_cap((small, large, at_cap)), (small, at_cap))
 
     def test_it_is_a_lyrics_error(self) -> None:
         self.assertTrue(issubclass(lm.FrameTooLargeError, lm.LyricsError))

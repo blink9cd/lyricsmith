@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -28,6 +29,7 @@ _COUNTS = Counts(
     written=3,
     not_found=1,
     removed=2,
+    withheld=1,
     written_by={lc.WrittenCategory.UPGRADED: 2, lc.WrittenCategory.NEW_SYNCED: 1},
     removed_by={lc.RemovedReason.PLACEHOLDER: 2},
 )
@@ -85,6 +87,7 @@ class RoundTripTest(sf.IsolatedCase):
         counts = document["counts"]
         assert isinstance(counts, dict)
         self.assertEqual(counts["removed"], 2)
+        self.assertEqual(counts["withheld"], 1)
         self.assertEqual(counts["written_by"], {"upgraded": 2, "new synced": 1})
         self.assertEqual(counts["removed_by"], {"placeholder": 2})
 
@@ -98,7 +101,7 @@ class OlderLineTest(sf.IsolatedCase):
             del document[name]
         counts = document["counts"]
         assert isinstance(counts, dict)
-        for name in ("removed", "written_by", "removed_by"):
+        for name in ("removed", "withheld", "written_by", "removed_by"):
             del counts[name]
         entry = _parsed(document)
         self.assertEqual(
@@ -110,8 +113,26 @@ class OlderLineTest(sf.IsolatedCase):
             (entry.counts.removed, entry.counts.written_by, entry.counts.removed_by),
             (0, {}, {}),
         )
+        self.assertEqual(entry.counts.withheld, 0)
         # An older line's not found still includes its removals, read as written.
         self.assertEqual(entry.counts.not_found, 1)
+
+
+class RecordsDigestTest(sf.IsolatedCase):
+    """A fix entry's records digest: optional, a SHA-256, read back exactly."""
+
+    def test_a_digest_round_trips_and_an_entry_without_one_writes_none(self) -> None:
+        fixed = replace(_OWED, pass_=sl.SweepPass.FIX_TEXT, records_digest="ab" * 32)
+        self.assertEqual(sl.parse_record(sl.encode_record(fixed)), fixed)
+        self.assertNotIn("records_digest", _document())
+
+    def test_a_line_without_a_digest_reads_as_none(self) -> None:
+        self.assertIsNone(_parsed(_document()).records_digest)
+
+    def test_a_digest_that_is_not_a_sha256_is_refused(self) -> None:
+        for bad in (None, 7, "AB" * 32, "ab" * 31, "ab" * 32 + "\n"):
+            with self.subTest(bad=bad), self.assertRaises(sl.LedgerLineError):
+                sl.parse_record(json.dumps(_document(records_digest=bad)))
 
 
 class RefusedValueTest(sf.IsolatedCase):

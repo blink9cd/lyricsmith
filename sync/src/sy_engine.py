@@ -17,8 +17,8 @@ import sy_located  # noqa: F401 - puts the other tools and libraries on sys.path
 from lyrics_files import open_regular
 import at_engine
 import mutagen
-from sy_request import Reply, ReplyError, Request, dump_request, load_reply
-from sy_types import MAX_TRACK_S
+from sy_request import NotSung, Reply, ReplyError, Request, dump_request, load_reply
+from sy_types import MAX_TRACK_S, WHISPER_BASE_S, WHISPER_PER_SECOND
 
 CHILD: Final = Path(__file__).resolve().with_name("sy_child.py")
 REQUEST_NAME: Final = "request.json"
@@ -33,7 +33,7 @@ CHILD_PER_SECOND: Final = 2.0
 class Aligned:
     """The child's checked reply, or None with what went wrong."""
 
-    reply: Reply | None
+    reply: Reply | NotSung | None
     detail: tuple[str, ...] = ()
 
 
@@ -54,14 +54,17 @@ def track_seconds(audio: Path) -> float | None:
 
 
 def child_timeout(seconds: float | None) -> float:
-    """The child's bound: a minute, plus twice the track's length.
+    """The child's bound: a minute plus twice the track's length, then whisper-cli's.
 
-    The length is the tags' claim, so it counts for no more than `MAX_TRACK_S`, which
-    is also the length assumed when there is none to read: a crafted header cannot
-    stretch the watchdog past the longest track's bound.
+    whisper-cli's own bound in the child, a minute plus half the length, is added on
+    top, so the time left to separate, score and align is what it was before the sung
+    check. The length is the tags' claim, so it counts for no more than
+    `MAX_TRACK_S`, which is also the length assumed when there is none to read: a
+    crafted header cannot stretch the watchdog past the longest track's bound.
     """
     length = MAX_TRACK_S if seconds is None else min(seconds, MAX_TRACK_S)
-    return CHILD_BASE_S + CHILD_PER_SECOND * length
+    timing = CHILD_BASE_S + CHILD_PER_SECOND * length
+    return timing + WHISPER_BASE_S + WHISPER_PER_SECOND * length
 
 
 def child_argv(workdir: Path) -> list[str]:

@@ -26,11 +26,19 @@ WAV2VEC2_FILE: Final = "wav2vec2_fairseq_base_ls960_asr_ls960.pth"
 #: The htdemucs bag: a YAML naming its one model's signature, and that model's weights.
 DEMUCS_BAG: Final = "htdemucs.yaml"
 DEMUCS_WEIGHTS: Final = "955717e8.safetensors"
+#: wav2vec2's sample rate, mono: the rate the vocal stem is scored and heard at.
+MODEL_RATE: Final = 16000
 #: The longest track timed, in seconds. The child holds the whole decoded track in memory,
 #: about 705 KB a second as 32-bit stereo and twice that while separating, so a longer
 #: track is skipped before any child starts, and ffmpeg decodes no more than this. It is
 #: also the length the child's bound assumes when a track's own cannot be read.
 MAX_TRACK_S: Final = 3600
+#: whisper-cli's bound in the child, a minute plus half the track's decoded length. It
+#: ran a median 7.8 s a track on the test library, about 0.036 of the track's length,
+#: model load included: half the length leaves over ten times that. The parent's bound
+#: on the whole child adds the same on top of its own.
+WHISPER_BASE_S: Final = 60.0
+WHISPER_PER_SECOND: Final = 0.5
 #: --extensions when none is given: comma-separated, as the option takes them.
 DEFAULT_EXTENSIONS: Final = "mp3"
 #: Each extension --extensions may name, and the ffmpeg demuxer that reads it. ffmpeg
@@ -76,6 +84,8 @@ class Action(enum.Enum):
     SKIP_NO_TEXT = "skip: no untimed text"
     SKIP_UNTIMED_LRC = "skip: untimed .lrc (run album first)"
     SKIP_LINKED = "skip: linked"
+    SKIP_BY_HAND = "skip: listed for timing by hand"
+    SKIP_NOT_SUNG = "skip: listed as not sung"
     ERROR_TEXT = "ERROR text"
     ERROR_AUDIO = "ERROR audio"
 
@@ -89,9 +99,13 @@ class Outcome(enum.Enum):
     SKIP_NO_TEXT = Action.SKIP_NO_TEXT.value
     SKIP_UNTIMED_LRC = Action.SKIP_UNTIMED_LRC.value
     SKIP_LINKED = Action.SKIP_LINKED.value
+    SKIP_BY_HAND = Action.SKIP_BY_HAND.value
+    SKIP_NOT_SUNG = Action.SKIP_NOT_SUNG.value
     SKIP_LONG_TRACK = "skip: track too long"
     TOO_LONG = "skip: text longer than the track"
     LOW_CONFIDENCE = "low confidence: time by hand"
+    #: whisper-cli heard the vocals, and too little of what it heard is the text.
+    NOT_SUNG = "not sung: left untimed"
     ERROR_TEXT = Action.ERROR_TEXT.value
     ERROR_AUDIO = Action.ERROR_AUDIO.value
     ERROR_ALIGN = "ERROR align"
@@ -105,13 +119,16 @@ UNTIMED_OUTCOMES: Final[Mapping[Action, Outcome]] = MappingProxyType(
         Action.SKIP_NO_TEXT: Outcome.SKIP_NO_TEXT,
         Action.SKIP_UNTIMED_LRC: Outcome.SKIP_UNTIMED_LRC,
         Action.SKIP_LINKED: Outcome.SKIP_LINKED,
+        Action.SKIP_BY_HAND: Outcome.SKIP_BY_HAND,
+        Action.SKIP_NOT_SUNG: Outcome.SKIP_NOT_SUNG,
         Action.ERROR_TEXT: Outcome.ERROR_TEXT,
         Action.ERROR_AUDIO: Outcome.ERROR_AUDIO,
     }
 )
 #: The outcomes that wrote a .lrc.
 WRITTEN: Final = frozenset({Outcome.TIMED, Outcome.RETIMED})
-#: The outcomes that make the run exit 1. A low-confidence track is a planned outcome.
+#: The outcomes that make the run exit 1. A low-confidence track is a planned outcome,
+#: and so is a text not sung.
 FAILED: Final = frozenset(
     {Outcome.ERROR_TEXT, Outcome.ERROR_AUDIO, Outcome.ERROR_ALIGN, Outcome.ERROR_WRITE}
 )
@@ -125,6 +142,9 @@ class Planned:
     action: Action
     lines: tuple[str, ...] = ()
     detail: str = ""
+    #: What whisper-cli heard of the track when its earlier text was found not sung,
+    #: kept so a changed text is judged against it rather than heard again.
+    transcript: str | None = None
 
 
 @dataclass(frozen=True)
@@ -136,8 +156,24 @@ class TrackResult:
     detail: tuple[str, ...] = ()
     #: The first line's stamp, when that line is stretched and should be checked by ear.
     first_line: str | None = None
-    #: How many lines had nothing to align and took a neighboring line's stamp.
+    #: How many non-blank lines had nothing to align and took a neighboring line's stamp.
     unaligned: int = 0
+    #: A low-confidence track's median line confidence, as its row prints it.
+    confidence: str | None = None
+    #: A text not sung: the share of what was heard that is the text's, as printed.
+    share: str | None = None
+    #: The distinct word pairs whisper-cli heard, when too few to judge the text.
+    little_heard: int | None = None
+    #: A text not sung: what whisper-cli heard, which --heard-dir keeps.
+    transcript: str | None = None
+
+
+@dataclass(frozen=True)
+class Whisper:
+    """What the child hears a track's vocals with: whisper-cli, and its models' folder."""
+
+    cli: Path
+    model_dir: Path
 
 
 @dataclass(frozen=True)
@@ -151,6 +187,12 @@ class Options:
     overwrite: bool
     dry_run: bool
     model_dir: Path
+    #: The folder holding the transcribe tool's whisper models, absolute.
+    whisper_model_dir: Path
+    #: The --by-hand-list file, absolute; None when the option is not given.
+    by_hand_list: Path | None = None
+    #: The --heard-dir folder, absolute; None when the option is not given.
+    heard_dir: Path | None = None
 
 
 @dataclass(frozen=True)

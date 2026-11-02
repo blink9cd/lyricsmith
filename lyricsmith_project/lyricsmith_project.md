@@ -15,7 +15,7 @@ a folder beside the project, the paths climb out to it; in the published reposit
 library is a folder directly under the root, beside the tools.
 
 Every entry file (`lyricsmith.py`, each tool's `<tool>.py`, `album/samples`'s builder
-and sync's child process) begins the same way: it puts this folder FIRST on `sys.path`,
+and sync's child process) begins the same way: it puts this folder first on `sys.path`,
 from its own `__file__` at one fixed depth, moving it there when it is already on the
 path behind another folder, so no same-named module can stand in for this one, then
 imports this module and calls `add_shared_libraries()`, exiting 2 on a
@@ -51,7 +51,7 @@ transcribe suite can import a private module before anything has imported the to
 same-named folder above the checkout, in a shared temporary folder or the home folder,
 and import it in place of the real one; and where it stops depends on markers (`.git`,
 a `pyproject.toml`) that a copy of the tree may lack. Nothing searches here: only the
-folders the list names are added. They join at the END of `sys.path`, once each, so none
+folders the list names are added. They join at the end of `sys.path`, once each, so none
 can shadow the standard library or a tool's own modules, and calling it again adds
 nothing. Then each library's module must load from its named folder, checked for every
 library before any is imported: a same-named module earlier on `sys.path` (`PYTHONPATH`,

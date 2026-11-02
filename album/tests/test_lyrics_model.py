@@ -148,6 +148,88 @@ class ParseLrcTest(fixtures.IsolatedCase):
         self.assertEqual(lm.parse_lrc(""), lm.PlainLyrics(""))
 
 
+class WordStampTest(fixtures.IsolatedCase):
+    """Enhanced LRC: inline word stamps leave a timed line's text, its timing stays."""
+
+    def test_each_word_stamp_shape_is_removed(self) -> None:
+        for stamp in ("<00:01>", "<00:01.5>", "<00:01.50>", "<00:01.500>", "<0:01:50>"):
+            with self.subTest(stamp=stamp):
+                text = f"[00:01.00]<00:01.00>Lanterns {stamp}drift"
+                self.assertEqual(
+                    lm.parse_lrc(text), fixtures.synced_lines((1000, "Lanterns drift"))
+                )
+
+    def test_the_owner_example_reads_as_its_words(self) -> None:
+        self.assertEqual(
+            lm.parse_lrc("[00:01.00]<00:01.00>One <00:01.50>two"),
+            fixtures.synced_lines((1000, "One two")),
+        )
+
+    def test_a_glued_stamp_keeps_the_two_words_apart(self) -> None:
+        self.assertEqual(
+            lm.parse_lrc("[00:01.00]One<00:01.50>two<00:02.00>"),
+            fixtures.synced_lines((1000, "One two")),
+        )
+
+    def test_the_whitespace_of_a_stamped_line_collapses(self) -> None:
+        self.assertEqual(
+            lm.parse_lrc("[00:01.00] <00:01.00>  One \t<00:01.50> two  "),
+            fixtures.synced_lines((1000, "One two")),
+        )
+
+    def test_a_repeated_chorus_with_word_stamps_expands_clean(self) -> None:
+        text = "[00:10.00][00:30.00]<00:10.00>Ferry <00:10.40>bells\n[00:20.00]Verse"
+        self.assertEqual(
+            lm.parse_lrc(text),
+            fixtures.synced_lines(
+                (10000, "Ferry bells"), (20000, "Verse"), (30000, "Ferry bells")
+            ),
+        )
+
+    def test_a_malformed_word_stamp_stays_as_text(self) -> None:
+        for stamp in ("<00:60.00>", "<00:01.0000>", "<0000000000:01>"):
+            with self.subTest(stamp=stamp):
+                text = f"[00:01.00]One  {stamp}two"
+                self.assertEqual(
+                    lm.parse_lrc(text),
+                    fixtures.synced_lines((1000, f"One  {stamp}two")),
+                )
+
+    def test_a_line_with_no_word_stamp_keeps_its_inner_whitespace(self) -> None:
+        self.assertEqual(
+            lm.parse_lrc("[00:01.00]  One  \ttwo  "),
+            fixtures.synced_lines((1000, "One  \ttwo")),
+        )
+
+    def test_untimed_text_with_word_stamps_stays_verbatim(self) -> None:
+        text = "<00:01.00>One <00:01.50>two\n"
+        self.assertEqual(lm.parse_lrc(text), lm.PlainLyrics(text))
+
+    def test_a_line_stamp_behind_a_word_stamp_still_times_the_line(self) -> None:
+        # Line and word stamps interleave at a line's start: a line stamp behind a word
+        # stamp times the line too, so no line text opens with one, which a sidecar
+        # written from the lyrics would read back as a stamp and the frames as text.
+        self.assertEqual(
+            lm.parse_lrc("[00:01.00]<00:01.00>[00:02.00]x"),
+            fixtures.synced_lines((1000, "x"), (2000, "x")),
+        )
+        self.assertEqual(
+            lm.parse_lrc("<00:01.00> [00:02.00]x"), fixtures.synced_lines((2000, "x"))
+        )
+
+    def test_a_line_opened_by_word_stamps_alone_is_untimed(self) -> None:
+        text = "<00:01.00>One <00:01.50>two\n"
+        self.assertEqual(lm.parse_lrc(text), lm.PlainLyrics(text))
+
+    def test_the_pattern_matches_exactly_the_word_stamp_shapes(self) -> None:
+        for stamp in ("<1:2>", "<123456789:59.999>", "<00:00:000>"):
+            with self.subTest(stamp=stamp):
+                self.assertIsNotNone(lm.WORD_STAMP.fullmatch(stamp))
+        for other in ("<00:60>", "<1234567890:00>", "<00:01.>", "[00:01]", "<a:01>"):
+            with self.subTest(other=other):
+                self.assertIsNone(lm.WORD_STAMP.fullmatch(other))
+
+
 class FormatLrcTest(fixtures.IsolatedCase):
     """format_lrc: millisecond stamps, one line each."""
 
@@ -231,6 +313,7 @@ class QueryAndFetchTest(fixtures.IsolatedCase):
                 "Tekstowo",
                 "machine transcript",
                 "machine timed",
+                "album text",
             ],
         )
 
@@ -243,9 +326,15 @@ class QueryAndFetchTest(fixtures.IsolatedCase):
         self.assertEqual(source.value, "Lrclib")
         self.assertIs(lm.Source("Lrclib"), source)
 
+    def test_another_track_s_text_displays_as_such(self) -> None:
+        source = lm.Source.ALBUM_TEXT
+        self.assertEqual((source.label, str(source)), ("another track's text",) * 2)
+        self.assertIs(lm.Source("album text"), source)
+
     def test_every_other_source_displays_its_value(self) -> None:
+        relabeled = {lm.Source.LRCLIB, lm.Source.ALBUM_TEXT}
         for source in lm.Source:
-            if source is not lm.Source.LRCLIB:
+            if source not in relabeled:
                 with self.subTest(source=source.value):
                     self.assertEqual((source.label, str(source)), (source.value,) * 2)
 
@@ -288,13 +377,18 @@ class QueryAndFetchTest(fixtures.IsolatedCase):
 
 # --- Properties --------------------------------------------------------------------
 
-#: A line's text as format_lrc can carry it: one line, no surrounding whitespace, and
-#: not opening with "[", which would read back as a stamp or a tag.
+#: A line's text as format_lrc can carry it: one line, no surrounding whitespace, not
+#: opening with "[", which would read back as a stamp or a tag, and no word stamp.
 _LINE_TEXT = (
     st.text(max_size=30)
     .map(str.strip)
     .filter(
-        lambda t: len(t.splitlines()) <= 1 and t == t.strip() and not t.startswith("[")
+        lambda t: (
+            len(t.splitlines()) <= 1
+            and t == t.strip()
+            and not t.startswith("[")
+            and not lm.WORD_STAMP.search(t)
+        )
     )
 )
 _LINES = st.lists(
@@ -312,14 +406,32 @@ _LRC_ISH = st.lists(
     max_size=10,
 ).map("\n".join)
 
+#: Enhanced LRC: timed lines whose text mixes inline word stamps of every shape with
+#: noise, so the parser meets word stamps glued, spaced, repeated and malformed.
+_WORD_STAMP = st.from_regex(r"<\d{1,3}:[0-5]?\d([.:]\d{1,4})?>", fullmatch=True)
+_WORDED = st.lists(st.one_of(_WORD_STAMP, _STAMP, st.text(max_size=8)), max_size=6).map(
+    "".join
+)
+_ENHANCED_LRC = st.lists(
+    st.tuples(st.lists(_STAMP, min_size=1, max_size=2), _WORDED).map(
+        lambda pair: "".join(pair[0]) + pair[1]
+    ),
+    min_size=1,
+    max_size=8,
+).map("\n".join)
+
 
 class LrcPropertyTest(fixtures.IsolatedCase):
-    """parse_lrc never crashes, and its own output reads back unchanged."""
+    """parse_lrc never crashes, keeps no word stamp, and its output reads back."""
 
-    @given(st.one_of(st.text(max_size=200), _LRC_ISH))
+    @given(st.one_of(st.text(max_size=200), _LRC_ISH, _ENHANCED_LRC))
     def test_fuzz_parse_lrc(self, text: str) -> None:
         lyrics = lm.parse_lrc(text)
         if isinstance(lyrics, lm.SyncedLyrics):
+            stamped = [
+                line.text for line in lyrics.lines if lm.WORD_STAMP.search(line.text)
+            ]
+            self.assertEqual(stamped, [])
             self.assertEqual(lm.parse_lrc(lm.format_lrc(lyrics.lines)), lyrics)
         else:
             self.assertEqual(lyrics, lm.PlainLyrics(text))

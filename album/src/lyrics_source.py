@@ -42,6 +42,9 @@ class Source(StrEnum):
     MACHINE_TRANSCRIPT = "machine transcript"
     #: A timed ``.lrc`` the sync tool made, labeled so in its header (`machine_label`).
     MACHINE_TIMED = "machine timed"
+    #: Another track's stored untimed text, which a fix wrote where no run recorded
+    #: the provider it came from (`lyrics_fix_text`); the track is the outcome's origin.
+    ALBUM_TEXT = "album text"
 
     @property
     def label(self) -> str:
@@ -59,4 +62,6 @@ class Source(StrEnum):
 
 #: Display labels that differ from the value, keyed by the value. Kept outside the
 #: class, where the enum would read an assignment as one more member.
-SOURCE_LABELS: Mapping[str, str] = MappingProxyType({"Lrclib": "LRCLIB"})
+SOURCE_LABELS: Mapping[str, str] = MappingProxyType(
+    {"Lrclib": "LRCLIB", "album text": "another track's text"}
+)

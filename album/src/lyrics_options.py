@@ -23,6 +23,7 @@ MODE_RUN, MODE_CHECK, MODE_UNDO, MODE_STRIP, MODE_COMPARE, MODE_PRUNE, MODE_ACCE
     "prune",
     "accept",
 )
+MODE_FIX_TEXT = "fix-text"
 #: The language code a run writes into new frames when --lang is not given.
 DEFAULT_LANG = "eng"
 #: An ISO 639-2 language code, as ID3 stores one: three lowercase letters.
@@ -66,6 +67,8 @@ _CHANGED_LIST = ("changed_list", "--changed-list")
 #: The option that lets an accept remove what its report lists: every other mode
 #: refuses it.
 _APPLY = ("apply", "--apply")
+#: The transcript store a fix reads: the fix needs it, and every other mode refuses it.
+_HEARD_DIR = ("heard_dir", "--heard-dir")
 #: Options a mode has no use for, refused rather than silently ignored. A strip is a
 #: new run that asks no provider, of every track or the one --track names, so it
 #: refuses --run-id and every run-only option. A check changes nothing, so its list
@@ -75,12 +78,15 @@ _APPLY = ("apply", "--apply")
 #: prune judges every run folder by its rules, so it names no run and no track, asks
 #: no provider and saves no MP3: of the run-only options it takes --dry-run alone. An
 #: accept takes every run, as prune does, and only reports unless told otherwise: it
-#: takes --apply alone, and refuses --dry-run, which leaving out --apply already is.
+#: takes --apply alone, and refuses --dry-run, which leaving out --apply already is. A
+#: fix is a new run that asks the providers for some tracks again, as a refetch does:
+#: it takes a run's options but the offline run, which could ask none, and the three
+#: replacing options, whose work it does itself; it alone takes --heard-dir.
 _REFUSED: dict[str, tuple[tuple[str, str], ...]] = {
-    MODE_RUN: (_RUN_PICKER, _APPLY),
-    MODE_CHECK: (*_RUN_ONLY, _CHANGED_LIST, _APPLY),
-    MODE_UNDO: (*_RUN_ONLY, _APPLY),
-    MODE_STRIP: (_RUN_PICKER, *_RUN_ONLY, _APPLY),
+    MODE_RUN: (_RUN_PICKER, _APPLY, _HEARD_DIR),
+    MODE_CHECK: (*_RUN_ONLY, _CHANGED_LIST, _APPLY, _HEARD_DIR),
+    MODE_UNDO: (*_RUN_ONLY, _APPLY, _HEARD_DIR),
+    MODE_STRIP: (_RUN_PICKER, *_RUN_ONLY, _APPLY, _HEARD_DIR),
     MODE_COMPARE: (
         _RUN_PICKER,
         _DRY_RUN,
@@ -89,6 +95,7 @@ _REFUSED: dict[str, tuple[tuple[str, str], ...]] = {
         *_REFETCHES,
         _CHANGED_LIST,
         _APPLY,
+        _HEARD_DIR,
     ),
     MODE_PRUNE: (
         _RUN_PICKER,
@@ -96,8 +103,16 @@ _REFUSED: dict[str, tuple[tuple[str, str], ...]] = {
         *(option for option in _RUN_ONLY if option != _DRY_RUN),
         _CHANGED_LIST,
         _APPLY,
+        _HEARD_DIR,
     ),
-    MODE_ACCEPT: (_RUN_PICKER, ("track", "--track"), *_RUN_ONLY, _CHANGED_LIST),
+    MODE_ACCEPT: (
+        _RUN_PICKER,
+        ("track", "--track"),
+        *_RUN_ONLY,
+        _CHANGED_LIST,
+        _HEARD_DIR,
+    ),
+    MODE_FIX_TEXT: (_RUN_PICKER, _OFFLINE, _FRESH, *_REFETCHES, _APPLY),
 }
 
 
@@ -115,6 +130,8 @@ def refuse_misplaced(parser: argparse.ArgumentParser, args: argparse.Namespace) 
     for attr, flag in _REFUSED[args.mode]:
         if getattr(args, attr) not in (None, False):
             parser.error(f"{flag} cannot be used with --mode {args.mode}")
+    if args.mode == MODE_FIX_TEXT and getattr(args, _HEARD_DIR[0]) is None:
+        parser.error(f"{_HEARD_DIR[1]} is required with --mode {MODE_FIX_TEXT}")
     # A fresh run asks only the providers, and an offline one asks none of them. A
     # refetch asks the providers too, and accepts the answers a fresh run declines.
     if args.fresh and args.offline:

@@ -15,6 +15,7 @@ import argparse
 import contextlib
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import lyrics_album
@@ -31,6 +32,7 @@ import lyrics_silence
 import lyrics_summary
 from lyrics_exit import EXIT_OK, EXIT_TRACK_ERRORS
 from lyrics_fetch import PROVIDER_DEADLINE_S
+from lyrics_genre import NO_LYRICS_GENRES
 from lyrics_model import ProviderTable, Source
 from lyrics_options import DEFAULT_LANG
 from lyrics_records import GeniusState
@@ -94,11 +96,11 @@ def _dry_run(
         album,
         tracks,
         wiring.stages,
-        offline=args.offline,
+        offline=bool(args.offline),
         lang=lang,
-        fresh=args.fresh,
-        refetch_untimed=args.refetch_untimed,
-        refetch_implausible=args.refetch_implausible,
+        fresh=bool(args.fresh),
+        refetch_untimed=bool(args.refetch_untimed),
+        refetch_implausible=bool(args.refetch_implausible),
         no_lyrics_genres=no_lyrics_genres,
     )
     plan = lyrics_summary.format_plan(planned, album=album, prog=prog, genius=label)
@@ -107,21 +109,33 @@ def _dry_run(
     return EXIT_TRACK_ERRORS if any(t.error for t in planned) else EXIT_OK
 
 
-def run_mode(
-    args: argparse.Namespace, wiring: Wiring, prog: str, notice: Notice
-) -> int:
-    """Run the album, or plan it for a dry run, and print the summary."""
-    album, found = discover(args, notice)
-    tracks = lyrics_album.track_selection(album, found, args.track)
-    if args.dry_run:
-        return _dry_run(args, album, tracks, wiring, prog, notice)
-    no_lyrics_genres = lyrics_choices.no_lyrics_choice(args, wiring.environ, notice)
-    # Genius first: whether a key was found decides whether its breaker file is read.
+@dataclass(frozen=True)
+class AskedProviders:
+    """The providers a run asks, as its options chose them, and its summary's labels.
+
+    *label* is the Genius label the summary shows; *chosen* the optional providers'
+    settings and cool-downs (`lyrics_choices.OptionalProviders`); *table* the steps
+    asked, none for an offline run.
+    """
+
+    genius: GeniusState
+    label: str
+    chosen: lyrics_choices.OptionalProviders
+    table: ProviderTable
+
+
+def choose_providers(
+    args: argparse.Namespace, wiring: Wiring, notice: Notice
+) -> AskedProviders:
+    """The providers *args* ask for: the Genius key, the optional ones, --only-providers.
+
+    Genius first: whether a key was found decides whether its breaker file is read.
+    """
     key, label = lyrics_choices.genius_choice(args, wiring.environ, notice)
     chosen = lyrics_choices.optional_providers(
         args, wiring.environ, wiring.now, notice, genius=key is not None
     )
-    providers = (
+    table = (
         {}
         if args.offline
         else lyrics_only.restrict(
@@ -130,36 +144,60 @@ def run_mode(
         )
     )
     genius = GeniusState.CONFIGURED if key is not None else GeniusState.ABSENT
-    lang = args.lang or DEFAULT_LANG
-    ffmpeg = wiring.find_ffmpeg()
-    options = lyrics_run.RunOptions(
-        lang,
+    return AskedProviders(genius, label, chosen, table)
+
+
+def provider_options(
+    args: argparse.Namespace,
+    asked: AskedProviders,
+    *,
+    no_lyrics_genres: tuple[str, ...] = NO_LYRICS_GENRES,
+    ffmpeg: str | None = None,
+) -> lyrics_run.RunOptions:
+    """The run options *args* and *asked* give, each cool-down read where it is used."""
+    chosen, table = asked.chosen, asked.table
+    return lyrics_run.RunOptions(
+        args.lang or DEFAULT_LANG,
         PROVIDER_DEADLINE_S,
-        genius,
-        fresh=args.fresh,
-        refetch_untimed=args.refetch_untimed,
-        refetch_implausible=args.refetch_implausible,
+        asked.genius,
+        fresh=bool(args.fresh),
+        refetch_untimed=bool(args.refetch_untimed),
+        refetch_implausible=bool(args.refetch_implausible),
         no_lyrics_genres=no_lyrics_genres,
         bandcamp=chosen.bandcamp.state,
-        youtube_music=chosen.reader(Source.YOUTUBE_MUSIC, providers),
+        youtube_music=chosen.reader(Source.YOUTUBE_MUSIC, table),
         ffmpeg=ffmpeg,
-        tekstowo=chosen.reader(Source.TEKSTOWO, providers),
+        tekstowo=chosen.reader(Source.TEKSTOWO, table),
         retried=chosen.retried(),
     )
+
+
+def run_reported(
+    asked: AskedProviders, notice: Notice, run: Callable[[], lyrics_run.RunReport]
+) -> lyrics_run.RunReport:
+    """*run*'s report; as it raises, each cool-down's and breaker's failed write said."""
     try:
-        report = lyrics_run.run_album(
-            album,
-            tracks,
-            providers,
-            options,
-            wiring.stages,
-            acquire_lock=wiring.acquire_lock,
-            started=wiring.now(),
-            progress=notice,
-        )
+        return run()
     except BaseException:
-        _report_cooling_on_failure(chosen, providers, notice)
+        _report_cooling_on_failure(asked.chosen, asked.table, notice)
         raise
+
+
+def finish_run(
+    args: argparse.Namespace,
+    album: Path,
+    report: lyrics_run.RunReport,
+    asked: AskedProviders,
+    prog: str,
+    notice: Notice,
+    *,
+    silence: str | None,
+) -> int:
+    """Write the changed list and the run's summary, and return the run's exit code.
+
+    *silence* is the silence check's label, None for a run that measures nothing.
+    """
+    chosen, providers = asked.chosen, asked.table
     with lyrics_exit.report_writes():
         youtube_label = _cooling_report(Source.YOUTUBE_MUSIC, chosen, providers, notice)
         tekstowo_label = _cooling_report(Source.TEKSTOWO, chosen, providers, notice)
@@ -174,14 +212,46 @@ def run_mode(
             album=album,
             prog=prog,
             command=args.command_prefix,
-            genius=label,
+            genius=asked.label,
             bandcamp=chosen.bandcamp.label,
             youtube_music=youtube_label,
-            silence=lyrics_silence.check_label(ffmpeg),
+            silence=silence,
             tekstowo=tekstowo_label,
         )
         print(summary, end="", file=sys.stdout)
         return lyrics_exit.report_exit(report, prog, written, notice)
+
+
+def run_mode(
+    args: argparse.Namespace, wiring: Wiring, prog: str, notice: Notice
+) -> int:
+    """Run the album, or plan it for a dry run, and print the summary."""
+    album, found = discover(args, notice)
+    tracks = lyrics_album.track_selection(album, found, args.track)
+    if args.dry_run:
+        return _dry_run(args, album, tracks, wiring, prog, notice)
+    no_lyrics_genres = lyrics_choices.no_lyrics_choice(args, wiring.environ, notice)
+    asked = choose_providers(args, wiring, notice)
+    ffmpeg = wiring.find_ffmpeg()
+    options = provider_options(
+        args, asked, no_lyrics_genres=no_lyrics_genres, ffmpeg=ffmpeg
+    )
+    report = run_reported(
+        asked,
+        notice,
+        lambda: lyrics_run.run_album(
+            album,
+            tracks,
+            asked.table,
+            options,
+            wiring.stages,
+            acquire_lock=wiring.acquire_lock,
+            started=wiring.now(),
+            progress=notice,
+        ),
+    )
+    silence = lyrics_silence.check_label(ffmpeg)
+    return finish_run(args, album, report, asked, prog, notice, silence=silence)
 
 
 def compare_mode(

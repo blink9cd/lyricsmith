@@ -3,7 +3,7 @@
 The pass measures every track of every album the survey's walk finds, whatever its
 lyrics, and appends each album's silent and unmeasured tracks to a list under the state
 directory, then a marker naming the album done. ffmpeg is `silence_fixtures.FakeFfmpeg`,
-so nothing here starts a process. Every album and title here is INVENTED.
+so nothing here starts a process. Every album and title here is invented.
 """
 
 from __future__ import annotations

@@ -6,7 +6,7 @@ one track, so no suite here starts a process. `add_track` writes a silent MP3 th
 the album tool's own test builder (its frames are what mutagen reads a length from),
 tagged with an invented title and track number. `SilenceCase` runs `sweep.main` with
 ``--mode silence`` and that fake, on the isolated library and state directory of
-`sweep_fixtures.IsolatedCase`. Every name and title here is INVENTED.
+`sweep_fixtures.IsolatedCase`. Every name and title here is invented.
 
 Not discovered as a suite (no ``test_`` prefix). Suites import it by bare name with this
 directory on ``sys.path``, after importing the entry point.

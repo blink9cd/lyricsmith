@@ -1,12 +1,18 @@
-"""The words and statuses a provider records for a challenge: a leaf, importing nothing.
+"""The words a provider records for a refusal: a leaf, importing none of the tool.
 
 Each provider raises its challenge with these, and the old-manifest detail reader
 (`lyrics_refusal_detail`) reads a detail's class back by them, so the two cannot drift
-apart. They live here, not in the providers, so reading a manifest (undo, check, prune,
-the sweep) loads no provider client and not Genius's library. Nothing here prints.
+apart. The words naming which Genius request a refusal came from, by its host, are here
+too: the Genius session's allowed hosts are their keys (`lyrics_genius.GENIUS_HOSTS`),
+and the summary names a refusal's request by them (`lyrics_refusal_tally`). They live
+here, not in the providers, so reading a manifest (undo, check, prune, the sweep) loads
+no provider client and not Genius's library. Nothing here prints.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
+from types import MappingProxyType
 
 #: The HTTP statuses Genius's front end answers a challenge with.
 GENIUS_CHALLENGE_STATUSES = frozenset({403, 429})
@@ -14,3 +20,15 @@ GENIUS_CHALLENGE_STATUSES = frozenset({403, 429})
 TEKSTOWO_CHALLENGE = "challenge page"
 #: The stop words each YouTube Music challenge redirect records.
 TO_CONSENT, TO_SORRY = "redirect to consent", "redirect to sorry"
+#: Each Genius host, and the request a refusal from it was, in the order the summary
+#: lists them. lyricsgenius sends only its song record request to ``api.genius.com``,
+#: with the key; its searches and the lyrics page go to ``genius.com``, with none. So
+#: the host tells a refused key from a refused site, though not a search from a page.
+REQUEST_LABELS: Mapping[str, str] = MappingProxyType(
+    {"api.genius.com": "keyed API", "genius.com": "unkeyed site"}
+)
+
+
+def request_label(host: str | None) -> str | None:
+    """The request a refusal from *host* was, or None for no host or an unlabeled one."""
+    return None if host is None else REQUEST_LABELS.get(host)

@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lyricsmith"
-version = "0.2.0"
+version = "0.3.0"
 description = "Find, check, transcribe and time an album's lyrics: album, sweep, transcribe and sync."
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -42,9 +42,8 @@ dependencies = [
 test = ["hypothesis==6.165.10"]
 # The packages sync's child process imports directly, each at the exact version
 # sync/requirements-sync.txt pins. That file stays the documented install route, because
-# it pins the whole resolved stack, not just these five; this extra names sync's direct
-# imports so the export's dependency check can count them as declared. Neither the
-# suites nor the other three tools install it.
+# it pins the whole resolved stack, not just these five; this extra only declares sync's
+# direct imports. Neither the suites nor the other three tools install it.
 sync = [
   "demucs==4.1.0",
   "numpy==2.5.4",
@@ -147,94 +146,9 @@ module = [
 follow_imports = "skip"
 ignore_missing_imports = true
 
-# --- Gate configuration: the lint, test, scan and doc checks this tree is held to. ---
-
-[tool.pii_scan]
-# The license notice names the copyright holder, which is what it is for.
-exclude = ["LICENSE"]
-
-[tool.python_gate]
-# bounded_run ships the grandchild fixture its live boundary test launches, and which a
-# human can run by hand to watch the bound hold. It is an INPUT the test drives, not a
-# module of the tool -- and it deliberately never exits, so it could not be imported by
-# a paired test even in principle.
-exclude = ["bounded_run/samples"]
-
-[tool.samples_presence]
-# Libraries with no CLI: nothing in them turns an input into an output a human could run
-# by hand. bounded_run is deliberately NOT here: it does ship a samples/ pair.
-exempt = [
-  # The project's own manifest reader, a library with no command line like the others.
-  "lyricsmith_project",
-  "stdio_utf8",
-  "help_formatter",
-  "run_lock",
-  "library_walk",
-  "live_pid_guard",
-  "html_page",
-]
-
-[tool.stdio_policy]
-# The whole tree, libraries included: a library is exactly where a stray print() does
-# not belong.
-paths = ["."]
-
-[tool.dep_audit]
-# Pinning checks only in the inner loop; the network CVE audit is run on demand.
-offline = "skip"
-
 [tool.gate_cache]
-# The variable whose value changes which tests run: LYRICSMITH_OFFLINE skips album's
-# live LRCLIB, NetEase, Bandcamp, YouTube Music and Tekstowo tests, so a verdict recorded
-# with one setting is never replayed into a run with another.
-# album/tests/test_env_declared.py fails when this list and the project's environment
-# reads, by literal or module-level constant, differ.
+# Kept because album/tests/test_env_declared.py reads it: that test fails unless this list
+# and the project's environment reads, by literal or module-level constant, agree. The
+# one variable here is LYRICSMITH_OFFLINE, which skips album's live LRCLIB, NetEase,
+# Bandcamp, YouTube Music and Tekstowo tests, so it changes which tests run.
 env = ["LYRICSMITH_OFFLINE"]
-
-[tool.claim_check.bases]
-# The tool docs write their run procedures the way their reader sees the PROJECT: paths
-# relative to the repository root, not to the doc's own directory one level down. "." is
-# this file's own directory, added as an extra resolution root for every doc under each
-# tool folder named below.
-"album" = ["."]
-"sweep" = ["."]
-"transcribe" = ["."]
-"sync" = ["."]
-
-[tool.cli_doc_consistency]
-# README.md is the dispatcher's user guide and --help its option reference, so no
-# lyricsmith.md companion ships beside lyricsmith.py. Each tool's own CLI keeps its
-# companion doc in its folder and is still checked.
-exclude = ["lyricsmith.py"]
-
-[tool.prose_terms]
-# Words this project's prose must not use, so they cannot creep back in. A measurement's
-# provenance stands without naming whose data it was ("measured on a real library"), and
-# whoever runs a tool is "the operator". Pointers to documents that do not ship with the
-# project resolve for no reader -- state the rule instead. The gate prunes samples/ by
-# name, so those READMEs are held to the same words by review. Each entry waives itself:
-# the declaration is not prose.
-#
-# `exclude` holds out the one vendored file whose matches are code, not prose: the run_lock
-# suite loads its subject through importlib's spec_from_file_location, and the names it
-# must use for that API contain the word this list bans.
-exclude = ["run_lock/test_run_lock.py"]
-terms = [
-  # prose: ignore[owner] the declaration itself
-  "owner",
-  # prose: ignore[spec] the declaration itself
-  "spec",
-  # prose: ignore[AGENTS] the declaration itself
-  "AGENTS",
-  # prose: ignore[R13] the declaration itself
-  "R13",
-]
-
-[tool.prose_terms.patterns]
-# Shapes a single word cannot express: a pointer into a tracking list (the word "entry"
-# and a number), a decision or finding tag (a capital D, F, G, I or M and one or two
-# digits), and a ruling cited by number, each naming a record no reader of this project
-# has. State the rule or the measurement instead.
-entry-tag = '(?<![0-9A-Za-z_])entry\s+\d+'
-ruling-tag = '(?<![0-9A-Za-z_])(?-i:[DFGIM])[1-9][0-9]?(?![0-9A-Za-z_])'
-ruling-number = '(?<![0-9A-Za-z_])ruling\s+\d+'

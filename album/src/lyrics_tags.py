@@ -22,7 +22,7 @@ Four properties hold for every write:
   orders, mood, release time and more) and rewrites the dates. So a writer loads the tag
   untranslated and saves it at its own version with no conversion, keeping a v2.3
   frame's several values null-separated rather than joined with mutagen's default
-  slash: only the `SYLT` and `USLT` frames differ afterwards. The one exception no load
+  slash: only the `SYLT` and `USLT` frames differ after the save. The one exception no load
   setting avoids: a frame mutagen cannot parse (a lyrics frame whose language is not
   ASCII, say) is skipped at load, so any save drops it. To avoid converting, a
   restore whose recorded version differs from the file's current ID3v2 version raises
@@ -464,7 +464,7 @@ def restore_frames(
     `TagVersionError`, before anything changes, when *id3_version* cannot be written or
     differs from the file's current ID3v2 version (converting the tag would change
     frames this tool does not own), and `ReadBackError` when the file does not hold
-    *frames* afterwards.
+    *frames* once written.
     """
     minor = _writable_minor(id3_version)
     loaded = _load_for_write(path)

@@ -250,6 +250,7 @@ class RoundTripProofTest(BackupCase):
             "out of time order": tb.sylt((900, "late"), (100, "early")),
             "surrounding space": tb.sylt((100, "  padded ")),
             "bracket at the start": tb.sylt((100, "[00:02.000]looks timed")),
+            "word stamps in an entry": tb.sylt((100, "Salt <00:00.50>window")),
         }
         for case, frame in lossy.items():
             with self.subTest(case=case):

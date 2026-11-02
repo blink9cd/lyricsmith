@@ -150,3 +150,23 @@ class GetJsonTest(fixtures.IsolatedCase):
         ):
             lh.get_json(session, URL, {}, lm.Source.LRCLIB)
         self.assertEqual(seen, [lh.REQUEST_TIMEOUT_S])
+
+    def test_a_reply_carries_the_timeout_it_is_given(self) -> None:
+        """Through one attempt and through the retrying send alike."""
+
+        def answer(request: requests.PreparedRequest) -> requests.Response:
+            return http_fakes.response(request, 200, b"[]")
+
+        for retry in (None, lh.RetryPolicy().within(100.0)):
+            with self.subTest(retried=retry is not None):
+                seen: list[object] = []
+                with lh.new_session() as session, http_fakes.transport(answer, seen):
+                    lh.get_reply(
+                        session,
+                        URL,
+                        {},
+                        lm.Source.LRCLIB,
+                        retry=retry,
+                        timeout_s=(1.0, 2.0),
+                    )
+                self.assertEqual(seen, [(1.0, 2.0)])

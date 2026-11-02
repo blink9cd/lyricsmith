@@ -4,7 +4,7 @@ A run folder goes only when it holds nothing that is not already back in the fil
 run whose every track is undone with nothing set aside in its ``undo`` folder, a backup
 that never finished, or a folder an earlier prune renamed and did not finish deleting.
 The newest readable run goes only when every run left behind is undone, so a plain
-``--mode undo`` afterwards can only land on a run it has nothing left to do for. This
+``--mode undo`` after the prune can only land on a run it has nothing left to do for. This
 module's rules (`classify`, `judge`) are pure; `scan`, `remove_folder` and
 `prune_album` read and change the ``.lyricsmith`` run folder, which itself stays.
 """

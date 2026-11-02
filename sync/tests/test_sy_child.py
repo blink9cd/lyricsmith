@@ -7,6 +7,7 @@ the real ones.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import os
 import random
@@ -15,7 +16,7 @@ import socket
 import subprocess
 import sys
 import unittest
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -24,8 +25,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import sy_cases  # noqa: E402 - puts the tool, src/ and album's fixtures on the path
 import sy_child  # noqa: E402 - import follows the sys.path bootstrap above
+from lyrics_heard import Heard  # noqa: E402 - import follows the sys.path bootstrap above
+from lyrics_heard_store import transcript_fits  # noqa: E402 - follows the bootstrap
 import sy_request as rq  # noqa: E402 - import follows the sys.path bootstrap above
+from sy_breaks import Levels  # noqa: E402 - import follows the sys.path bootstrap above
 from sy_lines import Span  # noqa: E402 - import follows the sys.path bootstrap above
+from sy_text import NO_LINE  # noqa: E402 - import follows the sys.path bootstrap above
 
 #: The message every refused network call carries.
 REFUSAL = "never uses the network"
@@ -44,6 +49,55 @@ SOCKET_ENTRY_POINTS: tuple[tuple[object, str], ...] = (
 )
 #: The frames and seconds the stand-in emissions hold.
 FRAMES, SECONDS = 5, 0.1
+#: A track of one frame a second, its vocal stem 40 dB under the band over frames 20
+#: to 34: a 15 s break, two frames trimmed from each edge.
+BREAK_TRACK_FRAMES = 40
+QUIET_FRAMES = range(20, 35)
+TRIMMED_BREAK = ((22, 33),)
+#: Two lines of one letter each, the second sung at frame 2.
+TWO_LINES = rq.Request(
+    Path("/music/a.mp3"),
+    (2, 1, 3),
+    Path("/m"),
+    (0, NO_LINE, 1),
+    Path("/w"),
+    Path("/wm"),
+)
+FIRST = [Span(0, 1, 0.9), Span(1, 2, 0.9), Span(2, 3, 0.9)]
+SECOND = [Span(0, 1, 0.8), Span(1, 2, 0.8), Span(36, 37, 0.8)]
+
+
+def levels(frames: int, quiet: range = range(0)) -> Levels:
+    """*frames* frames of a band at 1.0, the vocal stem at 0.01 over *quiet*, else 1.0."""
+    vocal = tuple(0.01 if index in quiet else 1.0 for index in range(frames))
+    return Levels(vocal, (1.0,) * frames)
+
+
+class FakeAligner:
+    """An aligner giving each of *results* in turn, recording what it aligned over."""
+
+    def __init__(self, *results: list[Span]) -> None:
+        self.results = list(results)
+        self.over: list[object] = []
+
+    def __call__(self, emissions: object, ids: Sequence[int]) -> list[Span]:
+        self.over.append(emissions)
+        return self.results.pop(0)
+
+
+class FakeMask:
+    """A mask recording the ranges it was given and returning a marker."""
+
+    MASKED = "masked emissions"
+
+    def __init__(self) -> None:
+        self.ranges: list[tuple[tuple[int, int], ...]] = []
+
+    def __call__(self, emissions: object, ranges: Sequence[tuple[int, int]]) -> str:
+        self.ranges.append(tuple(ranges))
+        return self.MASKED
+
+
 #: Starting the child as a script, with no request to read, takes a second or two.
 SCRIPT_TIMEOUT_S = 60.0
 #: An invented second of tone from ffmpeg's own generator: no file or network read.
@@ -70,6 +124,26 @@ class Refused(Exception):
 def stand_in_align(emissions: object, ids: Sequence[int]) -> list[Span]:
     """One span a token, back to back, as the real alignment gives."""
     return [Span(index, index + 1, 0.9) for index in range(len(ids))]
+
+
+#: An invented sung line of 21 distinct word pairs, none of them in a one-word text.
+WRONG_SONG = (
+    "red kites over the harbor wall seven lanterns in the rain a quiet engine hums"
+    " all night and nobody comes home again"
+)
+#: What a child run leaves in its folder: its whisper work folder is removed.
+NAMES_LEFT = ["reply.json", "request.json"]
+
+
+def whisper_hears(text: str) -> Callable[..., subprocess.CompletedProcess[str]]:
+    """A whisper-cli stand-in that writes *text* as its transcript and exits 0."""
+
+    def run(argv: Sequence[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+        out = Path(argv[argv.index("-of") + 1])
+        out.with_suffix(".txt").write_text(text, encoding="utf-8", newline="\n")
+        return subprocess.CompletedProcess(list(argv), 0, "", "")
+
+    return run
 
 
 class ChildTest(sy_cases.IsolatedCase):
@@ -210,6 +284,89 @@ class ChildTest(sy_cases.IsolatedCase):
         self.assertEqual((reply.status, len(reply.spans)), (rq.STATUS_OK, 2))
         self.assertAlmostEqual(reply.frame_seconds, SECONDS / FRAMES)
 
+    def test_a_break_after_the_second_line_is_masked_and_aligned_again(self) -> None:
+        align, mask = FakeAligner(FIRST, SECOND), FakeMask()
+        spans = self.reply_spans(TWO_LINES, align, mask, QUIET_FRAMES)
+        self.assertEqual(spans, SECOND)
+        self.assertEqual(mask.ranges, [TRIMMED_BREAK])
+        self.assertEqual(align.over[1], FakeMask.MASKED)
+
+    def test_with_no_break_the_first_alignment_stands(self) -> None:
+        align, mask = FakeAligner(FIRST), FakeMask()
+        self.assertEqual(self.reply_spans(TWO_LINES, align, mask), FIRST)
+        self.assertEqual((len(align.over), mask.ranges), (1, []))
+
+    def test_a_track_of_one_line_has_no_break(self) -> None:
+        one_line = dataclasses.replace(TWO_LINES, line_of=(0, NO_LINE, 0))
+        align, mask = FakeAligner(FIRST), FakeMask()
+        self.assertEqual(self.reply_spans(one_line, align, mask, QUIET_FRAMES), FIRST)
+        self.assertEqual(mask.ranges, [])
+
+    def test_a_quiet_stretch_before_the_second_line_is_left_alone(self) -> None:
+        late = [Span(0, 1, 0.9), Span(1, 2, 0.9), Span(22, 23, 0.9)]
+        align, mask = FakeAligner(late), FakeMask()
+        self.assertEqual(self.reply_spans(TWO_LINES, align, mask, QUIET_FRAMES), late)
+        self.assertEqual(mask.ranges, [])
+
+    def test_a_mask_leaving_too_few_frames_for_the_text_keeps_the_first(self) -> None:
+        # 30 letters need 30 frames; the track has 40, and the break takes 11 of them.
+        ids, line_of = (2, 3) * 15, (0,) * 15 + (1,) * 15
+        request = dataclasses.replace(TWO_LINES, ids=ids, line_of=line_of)
+        first = [Span(index, index + 1, 0.9) for index in range(30)]
+        align, mask = FakeAligner(first), FakeMask()
+        self.assertEqual(self.reply_spans(request, align, mask, QUIET_FRAMES), first)
+        self.assertEqual(mask.ranges, [])
+
+    def test_a_mask_leaving_exactly_the_frames_the_text_needs_is_applied(self) -> None:
+        # 29 letters need 29 frames: the 40 less the break's 11, so it still fits.
+        ids, line_of = (2, 3) * 14 + (2,), (0,) * 14 + (1,) * 15
+        request = dataclasses.replace(TWO_LINES, ids=ids, line_of=line_of)
+        first = [Span(index, index + 1, 0.9) for index in range(29)]
+        align, mask = FakeAligner(first, SECOND), FakeMask()
+        self.assertEqual(self.reply_spans(request, align, mask, QUIET_FRAMES), SECOND)
+        self.assertEqual(mask.ranges, [TRIMMED_BREAK])
+
+    def test_main_replies_with_the_second_alignment_over_a_break(self) -> None:
+        reply = self.run_main(
+            TWO_LINES.ids,
+            TWO_LINES.line_of,
+            frames=BREAK_TRACK_FRAMES,
+            quiet=QUIET_FRAMES,
+            align=FakeAligner(FIRST, SECOND),
+        )
+        self.assertEqual((reply.status, list(reply.spans)), (rq.STATUS_OK, SECOND))
+
+    def test_a_text_that_is_not_heard_is_refused_before_scoring(self) -> None:
+        reply = self.child_reply((2, 3), heard=WRONG_SONG)
+        self.assertEqual(reply, rq.NotSung(Heard(21, 0.0), WRONG_SONG))
+        self.assertFalse(self.scored.called)
+
+    def test_a_text_not_sung_heard_at_length_replies_with_no_transcript(self) -> None:
+        heard = " ".join([WRONG_SONG] * 600)
+        self.assertFalse(transcript_fits(heard))
+        reply = self.child_reply((2, 3), heard=heard)
+        # One pair more than the song once: its last word leads into its first.
+        self.assertEqual(reply, rq.NotSung(Heard(22, 0.0), None))
+
+    def test_an_aligned_reply_carries_what_was_heard(self) -> None:
+        reply = self.run_main((2, 3), heard="et et et")
+        self.assertEqual((reply.status, reply.heard), (rq.STATUS_OK, Heard(1, 0.0)))
+        self.assertTrue(self.scored.called)
+        too_long = self.run_main((2, 3, 4, 5, 6, 7))
+        self.assertEqual(too_long.heard, Heard(0, 0.0))
+
+    def reply_spans(
+        self,
+        request: rq.Request,
+        align: FakeAligner,
+        mask: FakeMask,
+        quiet: range = range(0),
+    ) -> list[Span]:
+        """The spans the child replies with for *request* over the break track."""
+        emissions = SimpleNamespace(shape=(BREAK_TRACK_FRAMES,))
+        track_levels = levels(BREAK_TRACK_FRAMES, quiet)
+        return sy_child.reply_spans(emissions, request, track_levels, 1.0, align, mask)
+
     @contextlib.contextmanager
     def restored_sockets(self) -> Iterator[None]:
         """Put back whatever stands in each socket entry point, the tripwire included."""
@@ -223,25 +380,68 @@ class ChildTest(sy_cases.IsolatedCase):
                 )
             yield
 
-    def run_main(self, ids: tuple[int, ...]) -> rq.Reply:
-        """The child's main on a request for *ids*, PyTorch's steps stood in; its reply."""
-        request, reply = self.tmp / "request.json", self.tmp / "reply.json"
-        dumped = rq.dump_request(rq.Request(self.tmp / "a.mp3", ids, self.tmp))
+    def run_main(
+        self,
+        ids: tuple[int, ...],
+        line_of: tuple[int, ...] | None = None,
+        *,
+        frames: int = FRAMES,
+        quiet: range = range(0),
+        align: FakeAligner | None = None,
+        heard: str = "",
+    ) -> rq.Reply:
+        """`child_reply`, which must be an aligned or too-long reply."""
+        reply = self.child_reply(
+            ids, line_of, frames=frames, quiet=quiet, align=align, heard=heard
+        )
+        assert isinstance(reply, rq.Reply), reply
+        return reply
+
+    def child_reply(
+        self,
+        ids: tuple[int, ...],
+        line_of: tuple[int, ...] | None = None,
+        *,
+        frames: int = FRAMES,
+        quiet: range = range(0),
+        align: FakeAligner | None = None,
+        heard: str = "",
+    ) -> rq.Reply | rq.NotSung:
+        """The child's main on a request for *ids*, PyTorch's steps stood in; its reply.
+
+        The track has *frames* frames over *frames* seconds when *quiet* names a break,
+        else over `SECONDS`; *align*, when given, stands in for the alignment, and
+        whisper-cli hears *heard*: by default nothing, which cannot judge the text.
+        """
+        work = self.tmp / "work"
+        work.mkdir(exist_ok=True)
+        request, reply = work / "request.json", work / "reply.json"
+        lines = line_of if line_of is not None else tuple(range(len(ids)))
+        asked = dataclasses.replace(
+            TWO_LINES, audio=self.tmp / "a.mp3", ids=ids, model_dir=self.tmp
+        )
+        dumped = rq.dump_request(dataclasses.replace(asked, line_of=lines))
         request.write_text(dumped, encoding="utf-8", newline="\n")
-        emissions = SimpleNamespace(shape=(FRAMES,))
+        emissions = SimpleNamespace(shape=(frames,))
+        seconds = float(frames) if quiet else SECONDS
+        found = (emissions, seconds, levels(frames, quiet))
         with (
             mock.patch.object(sy_child, "_refuse_network"),
             mock.patch.object(sy_child, "_decode"),
-            mock.patch.object(sy_child, "_vocals"),
+            mock.patch.object(sy_child, "_stems", return_value=(None, ())),
+            mock.patch.object(sy_child, "_pcm16", return_value=b"\0\0" * 16000),
+            mock.patch.object(sy_child.at_engine, "run_bounded", whisper_hears(heard)),
             mock.patch.object(
-                sy_child, "_emissions", return_value=(emissions, SECONDS)
-            ),
-            mock.patch.object(sy_child, "_align", side_effect=stand_in_align),
+                sy_child, "_emissions", return_value=found
+            ) as self.scored,
+            mock.patch.object(sy_child, "_align", side_effect=align or stand_in_align),
+            mock.patch.object(sy_child, "_mask", FakeMask()),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
             code = sy_child.main(["--request", str(request), "--reply", str(reply)])
         self.assertEqual(code, 0)
+        self.assertEqual(sorted(p.name for p in work.iterdir()), NAMES_LEFT)
         return rq.load_reply(reply.read_text(encoding="utf-8"), len(ids))
 
 

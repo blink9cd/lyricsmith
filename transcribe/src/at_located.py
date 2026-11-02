@@ -3,7 +3,7 @@
 A private module that imports a shared library imports this first, so it imports alone,
 in an interpreter whose path holds only ``src/``, as well as after ``transcribe.py`` has
 run the same bootstrap. The project's manifest reader is a fixed folder under the
-project root, two folders above this one; it goes FIRST on ``sys.path``, so no
+project root, two folders above this one; it goes first on ``sys.path``, so no
 same-named module can stand in for it, and puts each library the project's
 ``pyproject.toml`` names on the path, refusing one that a same-named module would
 shadow (``lyricsmith_project/lyricsmith_project.md``). Importing it again does nothing

@@ -1,7 +1,7 @@
 """The real Genius client's error statuses: a challenge is retried, anything else is not.
 
 lyricsgenius answers a non-OK API status with a bare ``AssertionError``, so these tests
-drive the REAL client, as `build_genius_client` builds it, rather than a fake that says
+drive the real client, as `build_genius_client` builds it, rather than a fake that says
 what the library is supposed to raise. Its HTTP transport answers from memory
 (`http_fakes`), so no request leaves the process, and the clock and sleeper are fakes,
 so the retry schedule runs in no time.

@@ -159,6 +159,33 @@ class ManifestRefusalTest(fixtures.IsolatedCase):
                 mb.first_track(document)["path"] = path
                 self.assert_refused(mb.encode(document))
 
+    def test_an_origin_is_an_mp3_inside_the_album_and_may_be_absent(self) -> None:
+        for origin in ("../02.mp3", "/abs/02.mp3", "CD1/02.txt", 2):
+            with self.subTest(origin=origin):
+                document = mb.document()
+                after = cast(dict[str, object], mb.first_track(document)["after"])
+                after["origin"] = origin
+                self.assert_refused(mb.encode(document))
+        # A manifest from before a fix recorded where its text came from has none.
+        document = mb.document()
+        del cast(dict[str, object], mb.first_track(document)["after"])["origin"]
+        after_read = lmf.parse_manifest(mb.encode(document)).tracks[0].after
+        assert after_read is not None
+        self.assertIsNone(after_read.origin)
+
+    def test_a_withheld_reason_reads_back_and_may_be_absent(self) -> None:
+        document = mb.document()
+        after = cast(dict[str, object], mb.first_track(document)["after"])
+        after["withheld"] = "spoken word (genre Comedy)"
+        after_read = lmf.parse_manifest(mb.encode(document)).tracks[0].after
+        assert after_read is not None
+        self.assertEqual(after_read.withheld, "spoken word (genre Comedy)")
+        # A manifest from before a fix recorded a withheld removal has none.
+        del after["withheld"]
+        after_read = lmf.parse_manifest(mb.encode(document)).tracks[0].after
+        assert after_read is not None
+        self.assertIsNone(after_read.withheld)
+
     def test_a_track_path_must_name_an_mp3(self) -> None:
         for path in ("01.flac", "CD1/01", "01.mp3/notes.txt", "CD1/.mp3"):
             with self.subTest(path=path):

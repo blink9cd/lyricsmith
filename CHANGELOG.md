@@ -2,6 +2,153 @@
 
 Notable changes to lyricsmith, newest first.
 
+## 0.3.0 - 2026-11-02
+
+### Added
+
+- `album --mode fix-text --heard-dir <dir>` fixes the untimed texts `sync` found are not
+  sung, such as another song's words stored on a track. For each track with a record in
+  the folder `sync --heard-dir` kept, it tries the album's other untimed texts first, with
+  no request, then each provider's untimed step in the chain's order, and writes the first
+  text the kept transcript sings, backed up as a run's writes are and undone the same way.
+  A text taken from another track names that track in the row and the manifest. When
+  nothing is sung, the wrong text is removed, backed up, as `wrong text removed`, but only
+  when every provider the run meant to ask answered; a failure, a timeout, an open
+  breaker, or a cool-down keeps the text and makes the track an error. On an album that
+  looks spoken, where a transcript of speech matches no text, a removal is withheld
+  instead: any track tagged `Comedy`, `Spoken Word`, `Stand-up Comedy`, or `Stand-Up` (in
+  any case, an ID3v1 numeric genre read by name), or more than half its tracks holding a
+  kept `not sung` transcript, keeps its text and reads `kept existing: removal withheld,
+  spoken word (<why>)`, counted on a `removal withheld:` line, never an error. A text the
+  transcript sings is still written there. `--dry-run` prints each track's plan and asks
+  nothing. The fix only reads the folder and keeps every record.
+- `sweep --mode fix-text --heard-dir <dir>` runs that fix over a library: it visits only
+  the albums holding a record in the folder, with the run's ledger, pace, resume, Ctrl-C
+  handling, and changed list, and keeps its own done albums. A fix is never owed; one that
+  kept a wrong text ends as track errors and is retried whole.
+- `sync --heard-dir <dir>`, beside `--by-hand-list`, keeps what `whisper-cli` heard of each
+  track it finds not sung: one private JSON file a track (`0o600` in a `0o700` folder),
+  written in the same Ctrl-C hold as its `not sung` row. A listed track whose text has
+  changed is judged against that transcript without hearing it again; still not sung, its
+  row and record are written again, otherwise it is timed without running `whisper-cli`.
+  A timed track's record is removed, and a run's start removes the records of tracks under
+  `--path` that are gone or timed. A transcript over 64 KB is never stored.
+- `album`: a refusal from Genius records which of its two hosts refused, `api.genius.com`
+  (the keyed API) or `genius.com` (the unkeyed site), as the manifest entry's `host`, and
+  the summary's `refusals:` line names it. An entry written before the field reads as no
+  host.
+- `help_formatter`: `UnsetHidingFormatter`, the counterpart of `RawNoneHidingFormatter`
+  for a help whose epilog argparse may rewrap, hides a `None` or empty-list default.
+- `sync`: each track's text is checked against its vocals before it is timed, so another
+  song's lyrics are no longer timed with confidence. Once the vocals are separated, and
+  before wav2vec2 loads, the vocal stem is transcribed by `whisper-cli` with the
+  transcribe tool's fixed call, in English, and the share of the transcript's distinct
+  word pairs found among the text's is the verdict. A share under 0.25, with 20 or more
+  pairs heard, is `not sung: left untimed`: no `.lrc`, a planned outcome that exits `0`.
+  Under 20 pairs the check cannot judge, and the track is timed as before with a note.
+  Measured on about 190 test-library tracks: wrong texts scored at most 0.16, right ones at
+  least 0.34. `--by-hand-list` gains two reasons: `not sung` (the share; a rerun plans
+  it as `skip: listed as not sung`) and `little heard` (the pair count; information
+  only). A run now needs `whisper-cli` on `PATH` and the transcribe tool's two models,
+  which the setup check names with `lyricsmith transcribe --mode fetch-models`;
+  `--whisper-model-dir` reads them from elsewhere. It adds a median 7.8 s a track,
+  against separation's 59 s; a `whisper-cli` that fails is the track's `ERROR align`,
+  never a pass.
+- `sync`: `--by-hand-list <file>` keeps a list of each track left for a person, so a
+  library timed in resumable legs never times a low-confidence track twice. As each track
+  ends, a low-confidence track adds a `low confidence` row (its median line confidence)
+  and a track written with a flagged first line a `first line` row (the stamp to check),
+  each a line of three tab-separated fields: the absolute path, the reason, and the
+  detail. The file is replaced atomically with Ctrl-C held, `0o600` in `0o700` folders,
+  and never written through a link, so an interrupted leg keeps every row it reached. The
+  next run reads it before timing anything, and a listed low-confidence track plans as
+  `skip: listed for timing by hand`, `--overwrite` or not; removing the row times it
+  again. A list that cannot be read or breaks the format exits `2`, naming the line; a
+  row that cannot be written is said beneath the track's row and exits `1`.
+
+### Changed
+
+- `--help` of every tool no longer prints `(default: False)` beside an on/off option, as
+  it already printed no default for an option left unset. Such an option left off now
+  parses as None rather than False; every value a run keeps is still False.
+- The README's install steps now make a virtual environment first, since Homebrew and
+  Debian Python refuse a system-wide `pip install`. They give the download sizes of
+  `transcribe`'s models (about 1.6 GB) and `sync`'s (about 460 MB), say that `sync`'s
+  install pulls in PyTorch and that `sync` needs `transcribe`'s `whisper-cli` and models,
+  and say how to get a Genius key.
+- `sync/sync.md` and `sync/requirements-sync.txt` no longer say the sync stack is kept out
+  of the `pyproject.toml` extras, which hold a `sync` extra naming sync's direct imports;
+  they say instead why the whole stack is pinned apart.
+- The docs, comments, and help text read more plainly: dashes used as punctuation,
+  scattered bold and capitals for emphasis, and pointers to files that do not ship are
+  rewritten.
+- `pyproject.toml` keeps only the settings a shipped tool or test reads.
+
+### Fixed
+
+- `bounded_run`: the `ps` snapshot a tree kill reads on macOS and Linux could stall for
+  minutes under heavy load, and the kill waited for it to be reaped. An overdue `ps` is now
+  killed, given one second to be reaped, and then abandoned, so the kill goes on.
+- `album`: a Bandcamp page that MusicBrainz links but that answers `404` or `410` is
+  now nothing found (`page gone`), not a refusal recorded as `unrecognized`: such links
+  outlive the pages they name, so an album whose page is gone is no longer counted as
+  refused by Bandcamp or by a run's stop. A gone page among same-titled `/music` entries
+  is passed over for the next. A `403`, a `5xx`, and every other error status stay
+  Bandcamp's error, as before.
+- `sweep`: a track holding a machine-labeled timed `.lrc` (`sync`'s `[by:machine timed]`,
+  or a transcript) whose frames have not taken it, holding no timed lyrics or its lines at
+  other times, now makes its album one to visit, so `sweep --mode run --offline` embeds
+  what `sync` timed. The survey read the sidecar alone and counted such a track as
+  synced, so an album whose owed tracks had all just been timed was never visited. The
+  survey names each one, `unembedded: <album>/<track> (machine timed)`; the fix pass does
+  not visit for it, since a fix embeds nothing, and an album the ledger holds as done
+  is passed over for it without `--restart`, as for any other track it owes.
+- `album`: LRCLIB's search by title and artist answers a server error,
+  `ServerOverloaded`, for a song LRCLIB does not hold, so nearly every such track recorded
+  LRCLIB as overloaded. A field search still failing with a server error once retried is
+  now followed by one search by `q` (the artist, then the title), unretried, only while
+  the call's deadline has room and with its timeout cut to fit what is left, whose hits
+  go through the same matcher; its empty list is a real "no match". If it fails too, the
+  refusal is recorded exactly as before, as overloaded, so the breaker and the sweep's
+  refusal tally still count it. A server error is never read as "not found".
+- `album`: under `--refetch-untimed` or `--refetch-implausible`, a lyrics frame over the
+  65,536-character cap is judged implausible junk, as a `.txt` too large to read already
+  was, instead of ending the track as `ERROR sidecar: a USLT frame is too large`. The
+  track is asked again as though it held nothing; a plausible answer replaces every old
+  frame, and the check's `unlike backup` row is a `SKIP` naming the backed-up frame. With
+  no answer every lyrics frame is removed, its sidecars judged apart, so an oversized
+  `.txt` beside it goes too; undo restores both. Without either option the track is its
+  error, as before. It is marked `refetch_implausible` under either option. `sweep`'s
+  survey under either option names such a track implausible, with that reason, rather
+  than unreadable.
+- `album`: the backup refuses a lyrics frame whose export or exact copy would pass the
+  manifest's 16 MiB cap, as that track's `backup` error, so the track is never written.
+  Undo reads each copy under that cap, so the backup once held a frame undo could not
+  restore, and a strip or a refetch could remove it for good.
+- `album`: enhanced LRC's inline word stamps (`<00:01.50>`) are no longer embedded as
+  text. A timed line read from a `.lrc` or a provider's answer kept everything after its
+  line stamps, so the stamps reached every `SYLT` entry and the `USLT`. Each is now
+  removed, keeping the line's timing and collapsing its spacing; a line stamp behind one
+  still times the line, and a partly timed answer's untimed lines lose theirs too. A
+  `.lrc` holding them is left as it is on disk, a line with none reads exactly as before,
+  and untimed text stays verbatim. The check reads the same pattern, so a malformed stamp
+  (seconds past 59) now counts as words there too, and a `SYLT` entry holding one takes
+  the backup's exact copy.
+- `sync`: machine-timed tracks keep the blank lines between verses. The `.lrc` held only
+  the sung lines, and the album tool embeds the untimed lyrics from the `.lrc`, so every
+  stanza break was lost. Each blank line between two lines of the text is now written as an
+  empty line stamped with the next line's start, just before it; leading and trailing blank
+  lines are still dropped, no sung line's stamp moves, a re-time keeps them, and the row does
+  not count them as lines with nothing to align.
+- `sync`: lines are no longer spread across a long instrumental break. The child reads each
+  model frame's level of the vocal stem against the rest of the band, and a stretch of 12 s
+  or longer where the vocals sit more than 12 dB under the band (smoothed over 1 s, 1.5 s
+  trimmed from each edge) that starts after the second line is closed to every letter, and
+  the text aligned again. On a reference track with a 48 s break, the lines more than 3 s
+  off fell from between 6 and 9, across five separation seeds, to 3. Of 60 held-out
+  tracks, 9 improved and 5 got worse; the rest were unchanged, and each worse one already
+  held a line 20 s or more off. A track with no such stretch is timed exactly as before.
+
 ## 0.2.0 - 2026-10-27
 
 ### Added

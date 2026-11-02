@@ -4,12 +4,20 @@ The exact lookup (``GET /api/get``) asks by the track's title, artist, album and
 in whole seconds, all from its tags; LRCLIB matches the length within about two seconds
 itself, and answers 404 when nothing matches, which is "not found" here, never an error.
 A server error (5xx) from the lookup is treated the same way, because the lookup can be
-overloaded while the search still answers; a server error from the search is an error.
-When the lookup finds no matching record with text of a step's kind, or the album tag
-or a usable length is missing, the search (``GET /api/search``) asks by title and
-artist, and its hits go through our matcher (`lyrics_match`). The exact lookup's own
-answer goes through the matcher too, so a lookup that matched loosely cannot slip
-another song in.
+overloaded while the search still answers. When the lookup finds no matching record
+with text of a step's kind, or the album tag or a usable length is missing, the search
+(``GET /api/search``) asks by title and artist, and its hits go through our matcher
+(`lyrics_match`). The exact lookup's own answer goes through the matcher too, so a
+lookup that matched loosely cannot slip another song in.
+
+That field search can answer a server error for a song LRCLIB does not hold, while the
+search by ``q`` (the artist, then the title) answers an empty list. So a field search
+still failing with a server error once retried is followed by one search by ``q``,
+unretried, only while the call's deadline has room and with its timeout cut to fit
+what is left, whose hits go through the same matcher; its empty list is a real "no
+match". If it fails too, the field search's error is the search's failure, so the
+refusal still reads as overloaded. A server error from the search is never read as
+"not found".
 
 A record LRCLIB flags as instrumental is nothing found. A synced step takes only a
 record's timed text; a plain step takes its plain text, else its timed text, whose
@@ -26,7 +34,8 @@ with it.
 
 The table's step retries a transient refusal of either request (`lyrics_http.Retry`),
 both requests sharing one call's deadline; a server error from the lookup still falls
-through to the search unretried, since the search is the other try.
+through to the search unretried, since the search is the other try, and the search
+by ``q`` is likewise the field search's other try.
 
 Nothing here prints.
 """
@@ -43,6 +52,8 @@ from lyrics_answer import KindAnswer, LrcAnswer
 from lyrics_breakers import BreakerGuard
 from lyrics_http import (
     PROVIDER_DEADLINE_S,
+    REQUEST_TIMEOUT_S,
+    RequestTimeout,
     Retry,
     RetryPolicy,
     get_json,
@@ -51,7 +62,7 @@ from lyrics_http import (
 )
 from lyrics_match import Hit, has_artist, rank_hits, usable_length
 from lyrics_model import LyricsKind, Source, TrackQuery
-from lyrics_providers import ProviderError
+from lyrics_providers import ProviderError, RetriedError, http_status
 from lyrics_reply import flag_field, number_field, unexpected_reply
 
 #: LRCLIB's public API root.
@@ -65,6 +76,15 @@ NOT_FOUND = 404
 SERVER_ERRORS = range(500, 600)
 #: The exact lookup's statuses that fall through to the search.
 LOOKUP_FALLS_THROUGH = frozenset({NOT_FOUND, *SERVER_ERRORS})
+#: The part of the call's time left that the search by ``q``'s timeout never spends.
+#: The watchdog's clock starts before the call's own deadline is set, and a timed-out
+#: request still has to unwind and close its session, so a timeout ending exactly at
+#: the deadline would end past the watchdog, reading as a timeout, not an overload.
+Q_SEARCH_HEADROOM_S = 1.0
+#: The least budget (the time left less `Q_SEARCH_HEADROOM_S`) the search by ``q`` is
+#: sent with. Its timeout is cut to the budget in the default's proportions, where
+#: connecting has a third, so below this its connect window is under a second.
+Q_SEARCH_MIN_BUDGET_S = 3.0
 
 
 @dataclass(frozen=True)
@@ -261,21 +281,103 @@ class LrclibProvider:
     ) -> dict[LyricsKind, KindAnswer]:
         """*settled*, with each other kind's text from the best matching search hit.
 
-        A search answering an error status or a refused reply, or whose request fails,
-        is each unsettled kind's failure, while the kinds the lookup settled keep their
-        text: the plain step still takes what the lookup found. Any other failure
-        propagates and fails the whole call.
+        A field search failing with a server error asks the search by ``q`` once
+        (`_q_fallback`), whose hits, none included, are then the search's answer. A
+        search answering an error status or a refused reply, or whose request fails,
+        with no answering fallback, is each unsettled kind's failure, while the kinds
+        the lookup settled keep their text: the plain step still takes what the lookup
+        found. Any other failure propagates and fails the whole call.
         """
         params = {"track_name": query.title, "artist_name": query.artist}
         try:
-            reply = get_reply(
-                session, LRCLIB_SEARCH_URL, params, Source.LRCLIB, retry=retry
-            )
-            ranked = rank_hits(query, parse_records(reply.body), lambda r: r.hit)
+            ranked = _ranked_search(session, query, params, retry)
         # An error status, a refused reply shape, or the transport failing: carried to
         # the steps that needed the search, each of which records it as its error.
         except (ProviderError, requests.RequestException) as error:
-            return {kind: settled.get(kind, error) for kind in LyricsKind}
+            fallback = _q_fallback(session, query, error, retry)
+            if fallback is None:
+                return {kind: settled.get(kind, error) for kind in LyricsKind}
+            ranked = fallback
         return {
             kind: settled.get(kind, _best_text(ranked, kind)) for kind in LyricsKind
         }
+
+
+def _ranked_search(
+    session: requests.Session,
+    query: TrackQuery,
+    params: Mapping[str, str],
+    retry: Retry | None,
+    timeout_s: RequestTimeout = REQUEST_TIMEOUT_S,
+) -> list[LrclibRecord]:
+    """The search's records for *params*, those the matcher accepts for *query*, best first.
+
+    Each request has *timeout_s*. Any error status, a refused reply shape, or the
+    transport failing raises.
+    """
+    reply = get_reply(
+        session,
+        LRCLIB_SEARCH_URL,
+        params,
+        Source.LRCLIB,
+        retry=retry,
+        timeout_s=timeout_s,
+    )
+    return rank_hits(query, parse_records(reply.body), lambda r: r.hit)
+
+
+def _overloaded(error: Exception) -> bool:
+    """Whether *error* is a server error status, retried or not."""
+    last = error.last if isinstance(error, RetriedError) else error
+    return http_status(last) in SERVER_ERRORS
+
+
+def _q_timeout(retry: Retry | None) -> RequestTimeout | None:
+    """The search by ``q``'s timeout, fitted to the call's time left; None to not send it.
+
+    The default timeout, scaled down when its two halves together would outlast the
+    budget, what is left less `Q_SEARCH_HEADROOM_S`. That bounds a silent server only,
+    which then fails inside the call as a transport error rather than past the
+    watchdog, where the attempt would read as a timeout, not an overload. A read
+    timeout runs between bytes, so a server trickling its reply can still overrun, and
+    resolving the name is not bounded at all: the watchdog stays the last bound. None
+    when the budget is under `Q_SEARCH_MIN_BUDGET_S`. With no *retry*, the call has no
+    clock here, and the watchdog alone bounds it.
+    """
+    if retry is None:
+        return REQUEST_TIMEOUT_S
+    budget_s = retry.give_up_at - retry.policy.clock() - Q_SEARCH_HEADROOM_S
+    if budget_s < Q_SEARCH_MIN_BUDGET_S:
+        return None
+    connect_s, read_s = REQUEST_TIMEOUT_S
+    scale = min(1.0, budget_s / (connect_s + read_s))
+    return (connect_s * scale, read_s * scale)
+
+
+def _q_fallback(
+    session: requests.Session,
+    query: TrackQuery,
+    error: Exception,
+    retry: Retry | None,
+) -> list[LrclibRecord] | None:
+    """The ranked hits of one search by ``q``, after the field search failed with *error*.
+
+    Sent only when *error* is a server error and the call has time left for it
+    (`_q_timeout`): the field search can answer 503 for a song LRCLIB does not hold
+    while the search by ``q`` answers an empty list, which is a real "no match". That
+    empty list is taken as LRCLIB's answer on the evidence of 2026-11-01, when ``q``
+    answered while the field search shed load. One attempt and no retry, since the
+    field search already spent the call's retries waiting on the same server. None
+    when it is not sent or fails as the field search may, so *error* stays the
+    provider's failure: never a "not found", which would let fix-text remove a text
+    on an outage.
+    """
+    timeout_s = _q_timeout(retry)
+    if not _overloaded(error) or timeout_s is None:
+        return None
+    params = {"q": f"{query.artist} {query.title}"}
+    try:
+        return _ranked_search(session, query, params, None, timeout_s)
+    # The fallback failing tells nothing the field search's failure did not.
+    except (ProviderError, requests.RequestException):
+        return None

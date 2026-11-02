@@ -1,7 +1,7 @@
 """The real Genius client's own session: capped replies, refused redirects, no cookies.
 
 lyricsgenius reads each reply whole, follows redirects itself and keeps a cookie jar of
-its own, so these tests drive the REAL client, as `build_genius_client` builds it, with
+its own, so these tests drive the real client, as `build_genius_client` builds it, with
 its HTTP transport answering from memory (`http_fakes`): no request leaves the process.
 Every value is invented, and the key is an obvious fake.
 """

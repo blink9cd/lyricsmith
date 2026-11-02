@@ -52,7 +52,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, TypeAlias, overload
 from urllib.parse import urljoin
 
 import requests
@@ -74,11 +74,13 @@ UNKNOWN_VERSION = lyricsmith_project.UNKNOWN_VERSION
 #: What the User-Agent names the tool when the name it is given cleans to nothing. Generic
 #: on purpose, so a bad name never stands in for the tool's own.
 FALLBACK_TOOL_NAME = "lyrics-tool"
-#: Every character a User-Agent half may NOT keep: all but ASCII letters, digits, . _ -
+#: Every character a User-Agent half may not keep: all but ASCII letters, digits, . _ -
 _UNSAFE_TOKEN_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+#: A request's timeout: seconds to connect, then seconds between bytes of the reply.
+RequestTimeout: TypeAlias = tuple[float, float]
 #: Seconds to connect, then seconds between bytes of the reply. The watchdog bounds the
 #: whole call; this bounds each request inside it, so a stalled socket fails on its own.
-REQUEST_TIMEOUT_S = (5.0, 10.0)
+REQUEST_TIMEOUT_S: RequestTimeout = (5.0, 10.0)
 #: The most bytes a reply may hold. LRCLIB's search answers at most 20 records and any
 #: lyrics text over 64 KiB is refused anyway, so a real reply is far below this.
 MAX_REPLY_BYTES = 2 * 1024 * 1024
@@ -240,8 +242,9 @@ def _send(
     absent: frozenset[int],
     *,
     redirects: bool = False,
+    timeout_s: RequestTimeout = REQUEST_TIMEOUT_S,
 ) -> requests.Response:
-    """GET *url* with *params*, its body not yet read.
+    """GET *url* with *params* within *timeout_s*, its body not yet read.
 
     An error status not in *absent*, or a redirect unless *redirects*, raises in it.
     """
@@ -249,7 +252,7 @@ def _send(
     return session.get(
         url,
         params=dict(params),
-        timeout=REQUEST_TIMEOUT_S,
+        timeout=timeout_s,
         hooks={"response": [hook]},
         # Never followed here, so `get_text` sees each hop: requests' own following would
         # carry a 3xx reply's cookie to the next hop past the refusing jar.
@@ -265,18 +268,19 @@ def _send_retrying(
     source: Source,
     absent: frozenset[int],
     retry: Retry | None,
+    timeout_s: RequestTimeout = REQUEST_TIMEOUT_S,
 ) -> requests.Response:
     """`_send`, tried again after each transient failure *retry* has room to wait for.
 
-    With no *retry*, one attempt. The final failure is raised as it is when no retry
-    was made, else as a `RetriedError` counting them.
+    With no *retry*, one attempt. Each attempt has *timeout_s*. The final failure is
+    raised as it is when no retry was made, else as a `RetriedError` counting them.
     """
     if retry is None:
-        return _send(session, url, params, source, absent)
+        return _send(session, url, params, source, absent, timeout_s=timeout_s)
     retries = 0
     while True:
         try:
-            return _send(session, url, params, source, absent)
+            return _send(session, url, params, source, absent, timeout_s=timeout_s)
         except (HttpStatusError, requests.RequestException) as error:
             schedule = retry.policy.waits_s
             pause = None
@@ -368,12 +372,15 @@ def get_reply(
     source: Source,
     *,
     retry: Retry | None = None,
+    timeout_s: RequestTimeout = REQUEST_TIMEOUT_S,
 ) -> Reply:
     """GET *url* with *params*; its JSON reply, every error status raised.
 
-    With a *retry*, a transient refusal is tried again first (`Retry`).
+    With a *retry*, a transient refusal is tried again first (`Retry`). Each request
+    has *timeout_s*, which a caller with less of its call left than the default lowers.
     """
-    with _send_retrying(session, url, params, source, frozenset(), retry) as response:
+    sent = _send_retrying(session, url, params, source, frozenset(), retry, timeout_s)
+    with sent as response:
         return _decoded(response, source)
 
 
@@ -386,6 +393,7 @@ def _text_body(response: requests.Response, source: Source) -> str:
         raise ProviderError(message, detail=REPLY_NOT_TEXT) from error
 
 
+@overload
 def get_text(
     session: requests.Session,
     url: str,
@@ -393,20 +401,48 @@ def get_text(
     *,
     allowed: Callable[[str], bool],
     max_redirects: int = MAX_REDIRECTS,
-) -> TextReply:
+    absent: None = None,
+) -> TextReply: ...
+
+
+@overload
+def get_text(
+    session: requests.Session,
+    url: str,
+    source: Source,
+    *,
+    allowed: Callable[[str], bool],
+    max_redirects: int = MAX_REDIRECTS,
+    absent: frozenset[int],
+) -> TextReply | None: ...
+
+
+def get_text(
+    session: requests.Session,
+    url: str,
+    source: Source,
+    *,
+    allowed: Callable[[str], bool],
+    max_redirects: int = MAX_REDIRECTS,
+    absent: frozenset[int] | None = None,
+) -> TextReply | None:
     """GET *url* as text, following at most *max_redirects* redirects *allowed* accepts.
 
     *url* and each ``Location`` must pass *allowed* before it is asked. Never retried.
     A *url* it refuses is `URL_REFUSED`; a ``Location`` it refuses, or none given, is
-    `REDIRECT_REFUSED`.
+    `REDIRECT_REFUSED`. A status in *absent*, on whichever hop answers it, is None, as
+    `get_json`'s is; with no *absent* every error status raises.
     """
     if not allowed(url):
         raise ProviderError(f"{source} URL refused", detail=URL_REFUSED)
+    passes = absent or frozenset()
     current: str | None = url
     for _hop in range(max_redirects + 1):
         if current is None or not allowed(current):
             raise ProviderError(f"{source} redirect refused", detail=REDIRECT_REFUSED)
-        with _send(session, current, {}, source, frozenset(), redirects=True) as reply:
+        with _send(session, current, {}, source, passes, redirects=True) as reply:
+            if reply.status_code in passes:
+                return None
             if reply.status_code not in REDIRECT_STATUSES:
                 return TextReply(current, _text_body(reply, source))
             location = reply.headers.get("Location")

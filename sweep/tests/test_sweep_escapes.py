@@ -4,7 +4,7 @@ An album or library folder's name is text the sweep did not write: one holding a
 escape sequence (a color, an OSC 8 hyperlink, a C1 control), a direction override or a
 carriage return would drive the terminal, or make one name read as another. So the
 survey, the run report and the resume line each pass through `stdio_utf8.spell_unsafe`,
-as the album tool's own reports do. Every name here is INVENTED for these tests.
+as the album tool's own reports do. Every name here is invented for these tests.
 """
 
 from __future__ import annotations

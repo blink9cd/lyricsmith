@@ -26,7 +26,9 @@ loudly when the client is built. That session:
   `lyrics_providers`, where lyricsgenius would raise a bare ``AssertionError`` whose
   only record of the status is its message text: a reworded message would silently
   stop every retry. The hook also sees the lyrics page request, so a challenge answered
-  there with an error status is retried too, instead of reading as no lyrics;
+  there with an error status is retried too, instead of reading as no lyrics. The
+  error names the refusing host (`genius_host`), the keyed API or the unkeyed site,
+  so a refusal records which was refused, and never the URL's path or query;
 - reads each reply through `lyrics_http.capped_body` before the library reads it, so a
   reply over `lyrics_http.MAX_REPLY_BYTES`, counted as it inflates, is refused unread
   past the cap, with the same ``reply too large`` detail as every other provider's;
@@ -90,6 +92,7 @@ from lyrics_refusal import ClassedError, Refusal, RefusalFacts, classify
 from lyrics_refusal_words import (
     GENIUS_CHALLENGE_STATUSES as GENIUS_CHALLENGE_STATUSES,
 )
+from lyrics_refusal_words import REQUEST_LABELS
 
 #: The Genius client's own per-request timeout; its own retry is off, since ours is explicit.
 GENIUS_TIMEOUT_S = 10
@@ -97,8 +100,9 @@ GENIUS_TIMEOUT_S = 10
 GENIUS_MIN_INTERVAL_S = 3.0
 #: The waits before each retry of a Genius call answered by a challenge; then it is an error.
 GENIUS_RETRY_WAITS_S: tuple[float, ...] = (15.0, 45.0, 90.0)
-#: The hosts a Genius redirect may lead to, over https on its default port alone.
-GENIUS_HOSTS = frozenset({"genius.com", "api.genius.com"})
+#: The hosts a Genius redirect may lead to, over https on its default port alone: the
+#: hosts whose requests a refusal is named by (`lyrics_refusal_words.REQUEST_LABELS`).
+GENIUS_HOSTS = frozenset(REQUEST_LABELS)
 #: The most redirects one Genius request follows: the shared text GET's limit.
 GENIUS_MAX_REDIRECTS = MAX_REDIRECTS
 #: The only scheme and port a Genius redirect may name.
@@ -124,7 +128,7 @@ class GeniusChallengeError(ClassedError):
     Its detail names the last challenge's status and the retries made, such as
     ``HTTP 429 after 3 retries``, or fewer when the call's deadline left room for fewer:
     a challenge a retry got past is no failure at all. Its class is blocked, whatever
-    the status, and it keeps the last reply's asked wait and ``Server`` header.
+    the status, and it keeps the last reply's asked wait, ``Server`` header and host.
     """
 
     def __init__(
@@ -134,10 +138,13 @@ class GeniusChallengeError(ClassedError):
         *,
         retry_after_s: float | None = None,
         server: str | None = None,
+        host: str | None = None,
     ) -> None:
         """Name the last challenge's *status* and the *retries* made before it."""
         detail = f"HTTP {status} after {retries_phrase(retries)}"
-        facts = RefusalFacts(Refusal.BLOCKED, status, retries, retry_after_s, server)
+        facts = RefusalFacts(
+            Refusal.BLOCKED, status, retries, retry_after_s, server, host=host
+        )
         super().__init__(f"still challenged: {detail}", detail=detail, facts=facts)
         self.status = status
         self.retries = retries
@@ -334,7 +341,11 @@ def _still_challenged(challenges: list[HttpStatusError]) -> ProviderError:
         return challenges[0]
     last = challenges[-1]
     return GeniusChallengeError(
-        last.status, retries, retry_after_s=last.retry_after_s, server=last.server
+        last.status,
+        retries,
+        retry_after_s=last.retry_after_s,
+        server=last.server,
+        host=last.host,
     )
 
 
@@ -354,6 +365,16 @@ def genius_url_allowed(url: str) -> bool:
         and port in (None, _HTTPS_PORT)
         and "@" not in parts.netloc
     )
+
+
+def genius_host(url: str) -> str | None:
+    """*url*'s hostname when it is a Genius host (`GENIUS_HOSTS`), else None.
+
+    The hostname alone, lowercased as ``urlsplit`` reads it: never the path or the
+    query, which hold the track's title and artist.
+    """
+    host = urlsplit(url).hostname
+    return host if host in GENIUS_HOSTS else None
 
 
 def refuse_foreign_redirect(
@@ -418,7 +439,7 @@ class GeniusSession(requests.Session):
         # In order: a refused redirect is never read, an error status is raised
         # unread, and only then is the body read through the cap.
         self.hooks["response"].append(refuse_foreign_redirect)
-        hook_status_errors(self, Source.GENIUS)
+        hook_status_errors(self, Source.GENIUS, host_of=genius_host)
         self.hooks["response"].append(read_capped)
 
     def rebuild_auth(

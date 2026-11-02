@@ -1,4 +1,4 @@
-"""What does NOT stop Tekstowo for the run: a refused redirect, a marker in a read page.
+"""What does not stop Tekstowo for the run: a refused redirect, a marker in a read page.
 
 A redirect off the site fails only that track, so one odd ``Location`` never switches
 the source off for a day; a page its reader recognizes is read, whatever words its

@@ -96,9 +96,13 @@ _REFUSALS, _REFETCH, _UNREADABLE = "refusals", "refetch_untimed", "sidecar_unrea
 _PEAK, _SILENCE_FAILED = "peak_dbfs", "silence_failed"
 _REFETCH_IMPLAUSIBLE = "refetch_implausible"
 _HELD = "held"
-#: The refusal fields older manifests lack, beside ``status``, ``retry_after_s`` and
-#: ``server``, which read as absent when missing: the class, the retries made, and
-#: whether an open breaker left the step unsent (sent when missing).
+#: A fix's track whose text it wrote; a manifest from before it was recorded has none.
+_ORIGIN = "origin"
+#: Why a fix withheld a removal; a manifest from before it was recorded has none.
+_WITHHELD = "withheld"
+#: The refusal fields older manifests lack, beside ``status``, ``retry_after_s``,
+#: ``server`` and ``host``, which read as absent when missing: the class, the retries
+#: made, and whether an open breaker left the step unsent (sent when missing).
 _REASON, _RETRIES, _UNSENT = "reason", "retries", "unsent"
 #: A SHA-256 digest as lowercase hex.
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -234,11 +238,12 @@ def _wait(value: object, where: str) -> float:
 
 
 def _refusal(value: object, where: str) -> ProviderRefusal:
-    """One provider refusal; its detail and server read capped, as the record caps them.
+    """One provider refusal; its detail, server and host read capped, as the record does.
 
     Its facts came later than the rest, so an entry without them reads its class from
     its provider and detail (`reason_from_detail`), no retries, every other fact absent.
-    An entry from before ``unsent`` was kept reads as sent: no breaker marked it.
+    An entry from before ``unsent`` was kept reads as sent: no breaker marked it, and
+    one from before ``host`` was kept reads as naming no host.
     """
     fields = Fields(value, where)
     provider = member(Source)(fields.value("provider"), fields.at("provider"))
@@ -259,6 +264,7 @@ def _refusal(value: object, where: str) -> ProviderRefusal:
         retry_after_s=fields.later("retry_after_s", _wait),
         server=fields.later("server", text_value),
         unsent=fields.has(_UNSENT) and fields.flag(_UNSENT),
+        host=fields.later("host", text_value),
     )
 
 
@@ -292,6 +298,8 @@ def _after(value: object, where: str) -> TrackOutcome:
         peak_dbfs=fields.later(_PEAK, real_value),
         silence_failed=fields.later(_SILENCE_FAILED, text_value),
         held=fields.later(_HELD, member(HeldBefore)),
+        origin=fields.later(_ORIGIN, _mp3_path),
+        withheld=fields.later(_WITHHELD, text_value),
     )
 
 

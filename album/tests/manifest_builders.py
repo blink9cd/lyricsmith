@@ -56,6 +56,7 @@ FULL_AFTER = lr.TrackOutcome(
     ),
     refetch_implausible=True,
     held=lr.HeldBefore.UNTIMED,
+    origin="CD1/02 Café.mp3",
 )
 BEFORE = lr.TrackBefore(
     frames=(

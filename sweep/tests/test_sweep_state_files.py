@@ -7,7 +7,7 @@ while the ``--changed-list`` the operator named is followed. What the sweep writ
 under the state folder (the ledger, its lock, the silence list and its page) is 0o600,
 each state folder it makes 0o700; a folder that already exists keeps its mode, and the
 ``--changed-list`` keeps the default. A read that could block runs under album's
-`fifo_fakes.within_deadline`. Every album here is INVENTED.
+`fifo_fakes.within_deadline`. Every album here is invented.
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ def recorded_open_flags() -> Iterator[list[int]]:
 
 
 class StateCase(sf.IsolatedCase):
-    """Each test under `_UMASK`, the process's own restored afterwards."""
+    """Each test under `_UMASK`, the process's own restored after it."""
 
     def setUp(self) -> None:
         """Set the umask, and put the old one back when the test ends."""

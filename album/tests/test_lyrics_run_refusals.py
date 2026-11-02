@@ -162,6 +162,7 @@ class RefusalOutcomeTest(RefusalRunCase):
                     "retry_after_s": None,
                     "server": None,
                     "unsent": False,
+                    "host": None,
                 }
             ],
         )

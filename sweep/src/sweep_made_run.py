@@ -24,11 +24,12 @@ from sweep_tally import AlbumTally, tally_manifest
 
 def _made_run_id(
     album: Path, before: frozenset[str], name: str, progress: Callable[[str], None]
-) -> str | None:
-    """The id of the one run made on *album* since *before*, or None.
+) -> tuple[str | None, bool]:
+    """The id of the one run made on *album* since *before*, or None; and if none was.
 
     Several new runs mean another album tool ran on the album alongside: none is
-    taken, since which is whose cannot be told, and *progress* says so.
+    taken, since which is whose cannot be told, and *progress* says so. The flag is
+    True only when no new run appeared at all.
     """
     new = sweep_child.new_run_ids(album, before)
     if len(new) > 1:
@@ -37,9 +38,9 @@ def _made_run_id(
             "none is read, so the album has no record"
         )
     if len(new) != 1:
-        return None
+        return None, not new
     (run_id,) = new
-    return run_id
+    return run_id, False
 
 
 @dataclass(frozen=True)
@@ -47,12 +48,15 @@ class MadeRun:
     """The run a child made, as far as it was read.
 
     *run_id* is None when no run was found, or when the one found could not be read
-    to its end; *tally* is None until the manifest was read and tallied.
+    to its end; *tally* is None until the manifest was read and tallied. *no_run* is
+    True when the run folder was listed and no new run was there: a fix with nothing
+    to fix makes none.
     """
 
     run_id: str | None
     tally: AlbumTally | None
     result: sweep_child.ChildResult
+    no_run: bool = False
 
 
 def tally_made_run(
@@ -88,7 +92,7 @@ def tally_made_run(
     run_id: str | None = None
     try:
         try:
-            run_id = _made_run_id(album, before, name, progress)
+            run_id, no_run = _made_run_id(album, before, name, progress)
         except OSError as error:
             # The album tool ran, and may have changed tags: the album is no record,
             # its exit code kept, never could not run (`sweep_visits.visit_one`).
@@ -97,7 +101,9 @@ def tally_made_run(
                 f"{error}"
             )
             return MadeRun(None, None, result)
-        manifest = None if run_id is None else sweep_child.read_run(album, run_id)
+        if run_id is None:
+            return MadeRun(None, None, result, no_run=no_run)
+        manifest = sweep_child.read_run(album, run_id)
         if manifest is None:
             return MadeRun(None, None, result)
         run_id = manifest.run_id

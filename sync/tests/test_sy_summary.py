@@ -57,6 +57,27 @@ class SummaryTest(sy_cases.IsolatedCase):
         lines = ss.result_lines(TrackResult(A, Outcome.TIMED, unaligned=2), ROOT)
         self.assertIn("2 line(s) with nothing to align", lines[1])
 
+    def test_a_track_too_little_heard_says_its_text_was_not_checked(self) -> None:
+        lines = ss.result_lines(TrackResult(A, Outcome.TIMED, little_heard=12), ROOT)
+        self.assertEqual(
+            lines[1].strip(),
+            "only 12 word pairs heard, under 20: its text was not checked against"
+            " the vocals",
+        )
+
+    def test_a_text_not_sung_prints_its_note_once(self) -> None:
+        results = [
+            TrackResult(A, Outcome.NOT_SUNG, ("0.04 of the 30 word pairs",)),
+            TrackResult(B, Outcome.NOT_SUNG),
+        ]
+        lines = ss.result_lines(results[0], ROOT)
+        self.assertEqual(lines[0].split()[:4], ["not", "sung:", "left", "untimed"])
+        self.assertEqual(lines[1].strip(), "0.04 of the 30 word pairs")
+        footer = ss.footer_lines(results, album=DISPATCHED)
+        self.assertEqual(footer.count(ss.NOT_SUNG), 1)
+        self.assertNotIn(ss.BY_HAND, footer)
+        self.assertNotIn(ss.NOT_SUNG, ss.footer_lines(results[:0], album=DISPATCHED))
+
     def test_the_count_line_names_each_outcome_seen(self) -> None:
         results = [
             TrackResult(A, Outcome.TIMED),
@@ -155,7 +176,7 @@ class SummaryTest(sy_cases.IsolatedCase):
         self.assertEqual(spaced, f"'my album.py' --offline --album {ROOT}")
 
     def test_the_exit_code_is_1_for_a_track_error_or_an_embed_not_done(self) -> None:
-        low = [TrackResult(A, Outcome.LOW_CONFIDENCE)]
+        low = [TrackResult(A, Outcome.LOW_CONFIDENCE), TrackResult(B, Outcome.NOT_SUNG)]
         self.assertEqual(ss.exit_code(low, []), EXIT_OK)
         failed = [TrackResult(A, Outcome.ERROR_ALIGN)]
         self.assertEqual(ss.exit_code(failed, []), EXIT_FAILED)

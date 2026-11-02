@@ -89,9 +89,10 @@ class ParserTest(fixtures.IsolatedCase):
             (args.mode, args.track, args.run_id, args.lang, args.config),
             ("run", None, None, None, None),
         )
+        # None, not False: an omitted flag shows no default in --help.
         self.assertEqual(
             (args.dry_run, args.offline, args.no_genius, args.fresh),
-            (False, False, False, False),
+            (None, None, None, None),
         )
 
     def test_the_help_states_the_effective_language_and_no_none_default(self) -> None:

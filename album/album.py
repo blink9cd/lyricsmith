@@ -44,6 +44,7 @@ import lyrics_changed  # noqa: E402 - import follows the sys.path bootstrap abov
 import lyrics_exit  # noqa: E402 - import follows the sys.path bootstrap above
 import help_formatter  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_fetch  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_fix_mode  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_help  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_modes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_only  # noqa: E402 - import follows the sys.path bootstrap above
@@ -72,6 +73,7 @@ from lyrics_options import (  # noqa: E402 - follows the bootstrap
     MODE_ACCEPT,
     MODE_CHECK,
     MODE_COMPARE,
+    MODE_FIX_TEXT,
     MODE_PRUNE,
     MODE_RUN,
     MODE_STRIP,
@@ -96,7 +98,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
         description="Find an album's lyrics, embed them, check them; strip them; "
-        "undo a run.",
+        "fix a wrong text; undo a run.",
         formatter_class=help_formatter.RawNoneHidingFormatter,
         epilog=lyrics_help.EPILOG,
     )
@@ -123,6 +125,7 @@ def _add_album_options(parser: argparse.ArgumentParser) -> None:
             MODE_COMPARE,
             MODE_PRUNE,
             MODE_ACCEPT,
+            MODE_FIX_TEXT,
         ),
         default=MODE_RUN,
         help="run: back up, fetch, embed and check. check: re-check a run's tracks. "
@@ -131,11 +134,18 @@ def _add_album_options(parser: argparse.ArgumentParser) -> None:
         "untimed-only track and report whether any agrees with its lyrics; writes "
         "nothing. prune: remove the run folders nothing needs. accept: keep the "
         "album as it is and report what removing every run's backup would lose; "
-        "with --apply, remove them.",
+        "with --apply, remove them. fix-text: for each track the --heard-dir "
+        "store holds a transcript of, write the first text that transcript sings, "
+        "the album's other untimed texts tried before the providers' answers; with "
+        "none, remove the wrong text, listed as wrong text removed.",
     )
     parser.add_argument(
         "--apply",
         action="store_true",
+        # None, not False, when omitted, here and on every on/off flag below: the
+        # formatter hides a None default, and a flag's help already says what giving
+        # it does. Each reader that keeps the value makes it a bool first.
+        default=None,
         help="accept only: record each run's manifest outside the album, then "
         "remove the album's .lyricsmith folder, every backup and undo with it; "
         "a report only when omitted.",
@@ -144,7 +154,8 @@ def _add_album_options(parser: argparse.ArgumentParser) -> None:
         "--track",
         type=Path,
         default=None,
-        help="run, strip, check, undo and compare: one MP3 under --album, relative to the "
+        help="run, strip, check, undo, compare and fix-text: one MP3 under --album, "
+        "relative to the "
         "working directory; every track when omitted.",
     )
     parser.add_argument(
@@ -156,9 +167,18 @@ def _add_album_options(parser: argparse.ArgumentParser) -> None:
         "--changed-list",
         type=Path,
         default=None,
-        help="run, strip and undo: write the absolute path of every MP3 this saved to "
+        help="run, strip, undo and fix-text: write the absolute path of every MP3 this "
+        "saved to "
         "this file, one per line, for a library app or script that rereads those "
         "files' tags; refused with --dry-run; no list when omitted.",
+    )
+    parser.add_argument(
+        "--heard-dir",
+        type=Path,
+        default=None,
+        help="fix-text only, and required there: the transcript store sync "
+        "--heard-dir wrote, one record per track whose untimed text it found not "
+        "sung; the fix only reads it, and keeps every record.",
     )
 
 
@@ -168,7 +188,7 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
         "--lang",
         type=iso_639_2,
         default=None,
-        help="run and compare only: the ISO 639-2 code whose frames rank first among "
+        help="run, compare and fix-text only: the ISO 639-2 code whose frames rank first among "
         "a track's own, the frames compare may judge included; a run also writes "
         "it into new lyrics frames; "
         f"{DEFAULT_LANG} when omitted.",
@@ -177,7 +197,7 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
         "--config",
         type=Path,
         default=None,
-        help="run and compare only: a config file holding the Genius key, the [no_lyrics] "
+        help="run, compare and fix-text only: a config file holding the Genius key, the [no_lyrics] "
         "genre list and the [musicbrainz] contact, the only place any is read, under "
         "--offline and --no-genius too; the environment and the default config paths "
         "when omitted.",
@@ -185,42 +205,50 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="run and prune only: report what would happen; write nothing at all.",
+        default=None,
+        help="run, prune and fix-text only: report what would happen; write nothing "
+        "at all.",
     )
     parser.add_argument(
         "--offline",
         action="store_true",
+        default=None,
         help="run only: no network; only sidecars beside the MP3s are used.",
     )
     parser.add_argument(
         "--no-genius",
         action="store_true",
-        help="run and compare only: skip the Genius step. "
+        default=None,
+        help="run, compare and fix-text only: skip the Genius step. "
         + lyrics_help.terms_note("--no-genius"),
     )
     parser.add_argument(
         "--no-netease",
         action="store_true",
-        help="run and compare only: skip both NetEase steps. "
+        default=None,
+        help="run, compare and fix-text only: skip both NetEase steps. "
         + lyrics_help.terms_note("--no-netease"),
     )
     parser.add_argument(
         "--no-bandcamp",
         action="store_true",
-        help="run and compare only: skip the Bandcamp step, which looks an album up on "
+        default=None,
+        help="run, compare and fix-text only: skip the Bandcamp step, which looks an album up on "
         "MusicBrainz and reads its Bandcamp page. "
         + lyrics_help.terms_note("--no-bandcamp"),
     )
     parser.add_argument(
         "--no-youtube-music",
         action="store_true",
-        help="run and compare only: skip the YouTube Music steps. "
+        default=None,
+        help="run, compare and fix-text only: skip the YouTube Music steps. "
         + lyrics_help.terms_note("--no-youtube-music"),
     )
     parser.add_argument(
         "--no-tekstowo",
         action="store_true",
-        help="run and compare only: skip the Tekstowo step, the last untimed source. "
+        default=None,
+        help="run, compare and fix-text only: skip the Tekstowo step, the last untimed source. "
         + lyrics_help.terms_note("--no-tekstowo"),
     )
     parser.add_argument(
@@ -230,7 +258,7 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
         type=lyrics_only.parse_only_providers,
         default=None,
         metavar="NAME[,NAME...]",
-        help="run and compare only: ask only the providers named, one comma-separated "
+        help="run, compare and fix-text only: ask only the providers named, one comma-separated "
         f"value of {', '.join(lyrics_only.PROVIDER_NAMES)}; a provider left out is "
         "not asked and records nothing, and one also turned off by its --no-* "
         "option stays off. MusicBrainz is asked only by the Bandcamp step. Refused "
@@ -239,6 +267,7 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--fresh",
         action="store_true",
+        default=None,
         help="run only: ask the providers even where a sidecar would serve a track; "
         "an accepted answer replaces its old frames and sidecars, and a track with "
         "none keeps them. An answer unlike the old frames is not accepted, nor an "
@@ -248,6 +277,7 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--refetch-untimed",
         action="store_true",
+        default=None,
         help="run only: ask the providers again for each track whose lyrics are "
         "untimed only, as though it held none; any answer replaces its old frames "
         "and sidecars, however unlike them, and a track with none keeps them. "
@@ -256,6 +286,7 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--refetch-implausible",
         action="store_true",
+        default=None,
         help="run only: ask the providers again for each track whose serving lyrics "
         "are implausible (synced lines past the audio's end, or more words a second "
         "than any song), as though it held none; a plausible answer replaces them, "
@@ -280,6 +311,11 @@ def _run_mode(args: argparse.Namespace, wiring: Wiring, prog: str) -> int:
 def _compare_mode(args: argparse.Namespace, wiring: Wiring, prog: str) -> int:
     """Compare each untimed-only track's lyrics with the providers' answers; write nothing."""
     return lyrics_provider_modes.compare_mode(args, wiring, prog, _notice)
+
+
+def _fix_text_mode(args: argparse.Namespace, wiring: Wiring, prog: str) -> int:
+    """Replace each wrong untimed text the --heard-dir store names, or remove it."""
+    return lyrics_fix_mode.fix_text_mode(args, wiring, prog, _notice)
 
 
 def _strip_mode(args: argparse.Namespace, wiring: Wiring, prog: str) -> int:
@@ -357,6 +393,7 @@ _MODES: dict[str, Callable[[argparse.Namespace, Wiring, str], int]] = {
     MODE_COMPARE: _compare_mode,
     MODE_PRUNE: lyrics_prune_mode.prune_mode,
     MODE_ACCEPT: lyrics_accept_mode.accept_mode,
+    MODE_FIX_TEXT: _fix_text_mode,
 }
 
 

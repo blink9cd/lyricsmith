@@ -15,7 +15,12 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import lyrics_located  # noqa: F401 - puts the shared libraries on sys.path
-from lyrics_categories import count_categories, format_removed, format_written
+from lyrics_categories import (
+    count_categories,
+    format_removed,
+    format_withheld,
+    format_written,
+)
 from lyrics_check import shown
 from lyrics_compare import (
     COMPARED,
@@ -31,6 +36,7 @@ from lyrics_outcomes import (
     describe_removed,
     describe_status,
     is_genre_flagged,
+    shown_source,
 )
 from lyrics_records import (
     RUN_FOLDER_NAME,
@@ -42,7 +48,7 @@ from lyrics_records import (
     UndoStatus,
     UndoTrackResult,
 )
-from lyrics_refusal_tally import count_refusals, format_refusals
+from lyrics_refusal_tally import count_refusals, count_requests, format_refusals
 from lyrics_run import RunReport
 from lyrics_tally import DOT, format_tally, track_count
 from stdio_utf8 import spell_unsafe
@@ -130,7 +136,7 @@ def run_row(track: ManifestTrack) -> tuple[str, str, str]:
     after = track.after
     if after is None:
         return EMPTY, EMPTY, NOT_REACHED
-    source = str(after.source) if after.source is not None else EMPTY
+    source = shown_source(after) if after.source is not None else EMPTY
     kind = str(after.kind) if after.kind is not None else EMPTY
     return source, kind, _verdict(after)
 
@@ -226,10 +232,11 @@ def format_run(
 ) -> str:
     """The run summary: rows, counts, the optional lines (`_optional_lines`), tally, backup.
 
-    The counts line is followed by the written tracks by category and the removed
-    ones by reason, each line only when it counts a track (`lyrics_categories`). The
-    provider tally is followed by the refusals by provider and reason, when there
-    were any (`lyrics_refusal_tally`).
+    The counts line is followed by the written tracks by category, the removed ones
+    by reason, and the kept ones whose removal a fix withheld, each line only when it
+    counts a track (`lyrics_categories`). The
+    provider tally is followed by the refusals by provider and reason, a Genius
+    refusal's request named, when there were any (`lyrics_refusal_tally`).
     """
     rows = [(t.path, *run_row(t)) for t in report.tracks]
     notes = [
@@ -244,12 +251,18 @@ def format_run(
         _run_counts_line(outcomes, genius),
         *_present(format_written(categories)),
         *_present(format_removed(categories)),
+        *_present(format_withheld(categories)),
         *_optional_lines(bandcamp, youtube_music, tekstowo, silence),
         format_tally(report.providers),
-        *_present(format_refusals(count_refusals(report.tracks))),
+        *_present(_refusals_line(report.tracks)),
         _backup_footer(report, album, command),
     ]
     return report_text(lines)
+
+
+def _refusals_line(tracks: Sequence[ManifestTrack]) -> str | None:
+    """The ``refusals:`` line over *tracks*, each Genius request named; None for none."""
+    return format_refusals(count_refusals(tracks), requests=count_requests(tracks))
 
 
 def _present(line: str | None) -> tuple[str, ...]:
@@ -290,18 +303,32 @@ def format_strip(report: RunReport, *, album: Path, prog: str, command: str) -> 
 # --- The dry run, the check and undo -------------------------------------------------
 
 
+#: How a dry run's report is named, and the line it ends with.
+DRY_RUN, DRY_RUN_CLOSING = "dry run", "dry run: nothing was written"
+
+
 def format_plan(
-    planned: Sequence[PlannedTrack], *, album: Path, prog: str, genius: str
+    planned: Sequence[PlannedTrack],
+    *,
+    album: Path,
+    prog: str,
+    genius: str,
+    what: str = DRY_RUN,
+    closing: str = DRY_RUN_CLOSING,
 ) -> str:
-    """The dry run's report: what each track would use, and that nothing was written."""
+    """A plan's report: what each track would use, and that nothing was written.
+
+    A dry run's, unless *what* names the report otherwise and *closing* gives its last
+    line, as a fix with nothing to fix does.
+    """
     rows = [(t.path, t.error.summary() if t.error else t.plan) for t in planned]
     errors = sum(1 for t in planned if t.error is not None)
     notes = [_note(t.markers, t.links_ignored) for t in planned]
     lines = [
-        *header_lines(prog, "dry run", track_count(len(rows)), album),
+        *header_lines(prog, what, track_count(len(rows)), album),
         *table(("#", "track", "plan"), rows, notes),
         counts_line(("errors", errors), ("genius:", genius)),
-        "dry run: nothing was written",
+        closing,
     ]
     return report_text(lines)
 

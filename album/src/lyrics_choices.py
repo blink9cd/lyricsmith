@@ -69,7 +69,7 @@ def bandcamp_choice(args: argparse.Namespace) -> BandcampChoice:
     if args.offline:
         return BandcampChoice(False, BandcampState.OFF, "off (offline)")
     leaving = leaving_option(
-        args, Source.BANDCAMP, off=args.no_bandcamp, flag="--no-bandcamp"
+        args, Source.BANDCAMP, off=bool(args.no_bandcamp), flag="--no-bandcamp"
     )
     if leaving is not None:
         return BandcampChoice(False, BandcampState.OFF, f"off ({leaving})")
@@ -266,16 +266,19 @@ def optional_providers(
     contact = musicbrainz_contact(args.config, environ, notice)
     bandcamp = bandcamp_choice(args)
     youtube_off = leaving_option(
-        args, Source.YOUTUBE_MUSIC, off=args.no_youtube_music, flag="--no-youtube-music"
+        args,
+        Source.YOUTUBE_MUSIC,
+        off=bool(args.no_youtube_music),
+        flag="--no-youtube-music",
     )
     tekstowo_off = leaving_option(
-        args, Source.TEKSTOWO, off=args.no_tekstowo, flag="--no-tekstowo"
+        args, Source.TEKSTOWO, off=bool(args.no_tekstowo), flag="--no-tekstowo"
     )
     youtube = cooling_choice(
         Source.YOUTUBE_MUSIC,
         flag=youtube_off or "--no-youtube-music",
         off=youtube_off is not None,
-        offline=args.offline,
+        offline=bool(args.offline),
         environ=environ,
         now=clock(),
         notice=notice,
@@ -285,14 +288,16 @@ def optional_providers(
         Source.TEKSTOWO,
         flag=tekstowo_off or "--no-tekstowo",
         off=tekstowo_off is not None,
-        offline=args.offline,
+        offline=bool(args.offline),
         environ=environ,
         now=clock(),
         notice=notice,
         clock=clock,
     )
     netease = (
-        leaving_option(args, Source.NETEASE, off=args.no_netease, flag="--no-netease")
+        leaving_option(
+            args, Source.NETEASE, off=bool(args.no_netease), flag="--no-netease"
+        )
         is None
     )
     settings = ProviderSettings(

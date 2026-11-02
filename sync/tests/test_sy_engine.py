@@ -15,14 +15,20 @@ import sy_engine  # noqa: E402 - import follows the sys.path bootstrap above
 import sy_request as rq  # noqa: E402 - import follows the sys.path bootstrap above
 from sy_cases import fake_child  # noqa: E402 - import follows the sys.path bootstrap above
 from sy_types import MAX_TRACK_S  # noqa: E402 - import follows the sys.path bootstrap above
+from lyrics_heard import Heard  # noqa: E402 - import follows the sys.path bootstrap above
 from sy_lines import Span  # noqa: E402 - import follows the sys.path bootstrap above
 
-REQUEST = rq.Request(Path("a.mp3"), (2, 3), Path("models"))
+REQUEST = rq.Request(
+    Path("a.mp3"), (2, 3), Path("models"), (0, 0), Path("whisper-cli"), Path("w")
+)
+HEARD = Heard(30, 0.9)
 
 
 class EngineTest(sy_cases.IsolatedCase):
     def test_a_good_reply_comes_back(self) -> None:
-        good = rq.Reply(rq.STATUS_OK, 9, 0.02, (Span(0, 1, 0.5), Span(2, 3, 0.5)))
+        good = rq.Reply(
+            rq.STATUS_OK, 9, 0.02, (Span(0, 1, 0.5), Span(2, 3, 0.5)), HEARD
+        )
         aligned = sy_engine.align(
             REQUEST, self.tmp, fake_child(rq.dump_reply(good)), 10.0
         )
@@ -57,12 +63,23 @@ class EngineTest(sy_cases.IsolatedCase):
                 self.assertTrue(aligned.detail[0].startswith("unreadable reply"))
                 (self.tmp / sy_engine.REPLY_NAME).unlink(missing_ok=True)
 
-    def test_the_timeout_is_a_minute_plus_twice_the_length(self) -> None:
-        self.assertEqual(sy_engine.child_timeout(100.0), 260.0)
-        self.assertEqual(sy_engine.child_timeout(None), 60.0 + 2 * MAX_TRACK_S)
+    def test_a_not_sung_reply_comes_back(self) -> None:
+        not_sung = rq.NotSung(Heard(30, 0.1), "what was heard")
+        aligned = sy_engine.align(
+            REQUEST, self.tmp, fake_child(rq.dump_reply(not_sung)), 10.0
+        )
+        self.assertEqual((aligned.reply, aligned.detail), (not_sung, ()))
+
+    def test_the_timeout_is_two_minutes_plus_two_and_a_half_times_the_length(
+        self,
+    ) -> None:
+        # A minute and twice the length to time it, as before the sung check, and
+        # whisper-cli's own bound on top: a minute and half the length.
+        self.assertEqual(sy_engine.child_timeout(100.0), 370.0)
+        self.assertEqual(sy_engine.child_timeout(None), 120.0 + 2.5 * MAX_TRACK_S)
 
     def test_the_timeout_never_trusts_a_length_past_the_longest_track(self) -> None:
-        self.assertEqual(sy_engine.child_timeout(1e9), 60.0 + 2 * MAX_TRACK_S)
+        self.assertEqual(sy_engine.child_timeout(1e9), 120.0 + 2.5 * MAX_TRACK_S)
         self.assertEqual(MAX_TRACK_S, 3600)
 
     def test_the_argv_runs_the_child_with_this_interpreter(self) -> None:

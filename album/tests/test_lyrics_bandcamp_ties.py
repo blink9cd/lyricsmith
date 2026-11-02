@@ -172,6 +172,16 @@ class TiedEntriesTest(SiteCase):
         # A timeout is the call's own, so nothing is kept and the next track asks again.
         self.assertEqual(self.provider._albums, {})
 
+    def test_a_gone_first_page_past_the_deadline_asks_no_further_page(self) -> None:
+        # The deadline counts pages asked, not opened: a gone first page still spends it.
+        server = ClockJumpServer(
+            tied_site(3, {(HOST, PATHS[0]): 404}), self.clock, PATHS[0]
+        )
+        with http_fakes.transport(server), self.assertRaises(lp.ProviderTimeout):
+            self.provider(query("The Ford"))
+        self.assertEqual(self.bandcamp_paths(server), ["/music", PATHS[0]])
+        self.assertEqual(self.provider._albums, {})
+
     def test_a_clock_exactly_at_the_deadline_asks_no_further_page(self) -> None:
         # The call's deadline is its start plus the step bound; the jump lands on it.
         give_up_at = self.clock() + lb.BANDCAMP_STEP_DEADLINE_S
@@ -199,8 +209,27 @@ class TiedEntriesTest(SiteCase):
         (kept,) = self.provider._albums.values()
         self.assertIs(kept, raised.exception)
 
-    def test_a_later_tied_page_not_found_is_the_albums_error(self) -> None:
-        self.assert_second_page_error_kept(404)
+    def test_a_later_tied_page_forbidden_is_the_albums_error(self) -> None:
+        self.assert_second_page_error_kept(403)
+
+    def test_a_tied_page_gone_is_passed_over_for_the_next(self) -> None:
+        # The first holds the track without lyrics, the second is gone: the third is
+        # still opened, and the first is kept as the album holding the track.
+        table = tied_site(3, {(HOST, PATHS[1]): 404})
+        table[(HOST, PATHS[0])] = bp.album_page(
+            [bp.track("The Ford", lyrics=None)], name=ALBUM
+        )
+        server = bf.BandcampServer(table, clock=self.clock)
+        self.assertEqual(self.ask(server, query("The Ford")), [None])
+        self.assertEqual(self.bandcamp_paths(server), ["/music", *PATHS[:3]])
+        self.assertEqual(self.kept_titles(), ["The Ford"])
+
+    def test_every_tied_page_gone_is_no_match(self) -> None:
+        gone = {(HOST, path): 410 for path in PATHS[:2]}
+        server = bf.BandcampServer(tied_site(2, gone), clock=self.clock)
+        self.assertEqual(self.ask(server, query("The Ford")), [None])
+        self.assertEqual(self.bandcamp_paths(server), ["/music", *PATHS[:2]])
+        self.assertEqual(list(self.provider._albums.values()), [lmb.Miss.PAGE_GONE])
 
     def test_a_later_tied_page_without_tracks_is_the_albums_error(self) -> None:
         self.assert_second_page_error_kept(bp.album_page([], name=ALBUM))

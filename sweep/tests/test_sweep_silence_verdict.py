@@ -4,7 +4,7 @@ A silent track is judged from its title, its length and how many silent tracks i
 holds, first matching rule winning: a placeholder title on a short track in an album of
 several silent tracks is a spacer run, on a short track alone a gap track (both likely
 meant); a real title on a longer track is likely a ripping mistake; anything else,
-an unknown length included, is unsure. Every title here is INVENTED.
+an unknown length included, is unsure. Every title here is invented.
 """
 
 from __future__ import annotations

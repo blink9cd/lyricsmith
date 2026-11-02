@@ -4,7 +4,7 @@ Finished, stopped by --limit, interrupted by Ctrl-C, or a --resume with nothing 
 each ends by writing ``silent-<stamp>.html`` beside the list from the whole list, and
 the summary names it under the list. A page that cannot be written is named on stderr,
 the list kept, and the exit is 1. ffmpeg is `silence_fixtures.FakeFfmpeg`, so nothing
-here starts a process. Every album and title here is INVENTED.
+here starts a process. Every album and title here is invented.
 """
 
 from __future__ import annotations

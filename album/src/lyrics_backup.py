@@ -28,7 +28,9 @@ state `RunState.BACKED_UP`. Only after that may a run change any track.
   the LRC reader takes minutes of any width.
 - **A failed track is excluded.** Any error while backing a track up (an unreadable
   tag, an I/O error, a second track whose export stem an earlier one took, as
-  ``Song.MP3`` after ``Song.mp3``, a sidecar past the lyrics cap, refused unread) is
+  ``Song.MP3`` after ``Song.mp3``, a sidecar past the lyrics cap, refused unread, a
+  frame whose export or exact copy would pass `lyrics_manifest.MAX_MANIFEST_BYTES`,
+  which undo reads no further, refused unwritten) is
   recorded as that track's ``backup`` error with no ``before`` block, and a run never
   writes such a track. The other tracks proceed.
 
@@ -52,6 +54,7 @@ from lyrics_model import (
     SYLT_MILLISECONDS,
     FrameKind,
     FrameRecord,
+    FrameTooLargeError,
     Lyrics,
     ManifestSchemaError,
     PlainLyrics,
@@ -199,10 +202,26 @@ def _read_capped(path: Path, name: str) -> bytes:
     return data
 
 
+def _within_manifest_cap(data: bytes, frame: FrameRecord) -> bytes:
+    """*data*, a copy of *frame* to write; refused past the cap undo reads it under.
+
+    Undo reads every export and exact copy under `lyrics_manifest.MAX_MANIFEST_BYTES`
+    (`_read_capped`), so a larger one would back up a frame undo could never restore:
+    `FrameTooLargeError` instead, the track's backup error, so it is never written.
+    """
+    cap = lyrics_manifest.MAX_MANIFEST_BYTES
+    if len(data) > cap:
+        raise FrameTooLargeError(
+            f"a {frame.kind} frame is too large to back up: over {cap} bytes"
+        )
+    return data
+
+
 def _write_exact(run_dir: Path, name: str, frame: FrameRecord) -> str:
     """Write *frame*'s exact JSON copy as *name*, proving it reads back; return *name*."""
     target = run_dir / name
-    lyrics_files.write_confirmed(target, lyrics_manifest.frame_bytes(frame))
+    data = _within_manifest_cap(lyrics_manifest.frame_bytes(frame), frame)
+    lyrics_files.write_confirmed(target, data)
     # A link under the name since the write is refused, as `_read_text` refuses one.
     data = lyrics_files.read_regular(target, follow=False)
     if lyrics_manifest.parse_frame(data) != frame:
@@ -219,9 +238,8 @@ def _export_frame(run_dir: Path, stem: str, frame: FrameRecord, k: int) -> Frame
     name = f"{_FRAMES_DIR}/{stem}.{frame.kind.value.lower()}.{k}"
     file = name + _EXPORT_SUFFIX[frame.kind]
     target = run_dir / file
-    lyrics_files.write_confirmed(
-        target, _export_text(frame).encode(_ENCODING, "replace")
-    )
+    data = _export_text(frame).encode(_ENCODING, "replace")
+    lyrics_files.write_confirmed(target, _within_manifest_cap(data, frame))
     exact = None
     if not _reads_back(frame, _read_text(target)):
         exact = _write_exact(run_dir, name + _EXACT_SUFFIX, frame)

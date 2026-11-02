@@ -6,17 +6,21 @@ upper-cased, with a typographic apostrophe read as the apostrophe. One separator
 each two words, across lines too, and belongs to no line. So a line's start is its own
 first letter: CTC may place the separator before a line anywhere in the pause ahead of it,
 and counting that separator as the line's start would stamp a line after a pause where
-the pause began. A bracketed section header such as ``[Chorus]`` has nothing to align. Pure.
+the pause began. A bracketed section header such as ``[Chorus]``, like a blank line, has
+nothing to align. A line's words are read by album's `lyrics_heard.line_words`, the one
+reading the sung check and the transcript store's fingerprint share; its letters are
+these labels' (`lyrics_heard.WORD_LETTERS`, held equal by the tests). Pure.
 """
 
 from __future__ import annotations
 
-import re
-import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
+
+import sy_located  # noqa: F401 - puts album's modules on sys.path
+from lyrics_heard import line_words
 
 #: The model's labels in index order; the child process checks the loaded model's
 #: labels against these before aligning.
@@ -32,9 +36,6 @@ NO_LINE: Final = -1
 _INDEX: Final[Mapping[str, int]] = MappingProxyType(
     {label: index for index, label in enumerate(LABELS) if index > SEPARATOR}
 )
-#: Typographic apostrophes, read as the one the model knows.
-_APOSTROPHES: Final = str.maketrans({"’": "'", "‘": "'"})
-_SECTION_HEADER: Final = re.compile(r"\[[^\]]*\]")
 
 
 @dataclass(frozen=True)
@@ -46,28 +47,16 @@ class Tokens:
 
 
 def text_lines(text: str) -> tuple[str, ...]:
-    """The lines of *text* that get a stamp: each stripped, blank ones dropped."""
-    return tuple(stripped for raw in text.splitlines() if (stripped := raw.strip()))
+    """The lines of *text* that get a stamp, each stripped: line 0 is never blank.
 
-
-def line_words(line: str) -> list[str]:
-    """*line*'s words as the capital letters the model aligns; none for a section header."""
-    if _SECTION_HEADER.fullmatch(line.strip()):
-        return []
-    folded = _fold_accents(line.translate(_APOSTROPHES)).upper()
-    words = ("".join(c for c in word if c in _INDEX) for word in folded.split())
-    return [word for word in words if word]
-
-
-def _fold_accents(text: str) -> str:
-    """*text* with each accented letter as its base letter: café is cafe.
-
-    Decomposed, an accented letter is its base letter and combining marks, and the
-    marks are dropped; a letter with no decomposition into the model's letters, as ø,
-    is left for the letter filter to drop.
+    A blank line between two non-blank lines is kept as an empty line, each one of a run,
+    because album embeds the untimed lyrics from the .lrc's lines and would otherwise
+    lose the breaks between verses. Blank lines before the first and after the last
+    non-blank line are dropped.
     """
-    decomposed = unicodedata.normalize("NFKD", text)
-    return "".join(char for char in decomposed if not unicodedata.combining(char))
+    stripped = [raw.strip() for raw in text.splitlines()]
+    sung = [index for index, line in enumerate(stripped) if line]
+    return tuple(stripped[sung[0] : sung[-1] + 1]) if sung else ()
 
 
 # fuzz-target

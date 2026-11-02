@@ -19,11 +19,11 @@ import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 from lyrics_model import Source
 from stdio_utf8 import spell_unsafe
 
-from sweep_child import IMPLAUSIBLE_OPTION, REFETCH_OPTION
+from sweep_child import HEARD_DIR_OPTION, IMPLAUSIBLE_OPTION, REFETCH_OPTION
 from sweep_ledger import LedgerEntry, Outcome
 from sweep_run import StopReason, SweepOptions, SweepReport
 from sweep_survey import AlbumSurvey, VisitPlan
-from sweep_totals import total_lines
+from sweep_totals import fix_lines, total_lines
 from sweep_waiting import PassedOver, waiting_lines
 
 #: Said after every survey, so the uploads a first sweep can cause are expected.
@@ -139,8 +139,9 @@ def format_survey(
 ) -> str:
     """The survey: a row per album, the totals, the tracks named, the albums to visit.
 
-    The tracks named are those unreadable, and those serving implausible lyrics when
-    the survey judged that (``--refetch-implausible``), each with why.
+    The tracks named are those unreadable, those serving implausible lyrics when
+    the survey judged that (``--refetch-implausible``), and those whose machine-made
+    timed sidecar is not embedded, each with why.
 
     The table describes every album's tracks; *plan* says which albums a run visits
     and which it passes over as done. *refetch_untimed* says the plan is the refetch
@@ -171,6 +172,11 @@ def format_survey(
         f"implausible: {_name(s.album, library)}/{track}"
         for s in albums
         for track in s.implausible
+    ]
+    lines += [
+        f"unembedded: {_name(s.album, library)}/{track}"
+        for s in albums
+        for track in s.unembedded
     ]
     empty = len(surveys) - len(albums)
     if empty:
@@ -277,6 +283,7 @@ def format_sweep(
         entries = [v.entry for v in report.visited]
         lines += _table(_SWEEP_HEADER, [_sweep_row(entry) for entry in entries])
         lines += total_lines(entries)
+        lines += fix_lines(entries) if options.heard_dir is not None else []
         lines += [
             _owes(entry.album, entry.owed_providers)
             for entry in entries
@@ -306,6 +313,26 @@ def format_sweep(
     return _text(lines)
 
 
+def _sweep_mode(options: SweepOptions) -> str:
+    """The sweep's own mode a resume runs: the fix with a transcript store, else run."""
+    return "run" if options.heard_dir is None else "fix-text"
+
+
+def resume_line(
+    prog: Sequence[str],
+    library: Path,
+    options: SweepOptions,
+    changed_list: Path | None,
+) -> str:
+    """The ``resume:`` line printed when a sweep stops early (`resume_command`).
+
+    Escaped like the report: a library named with a control character prints as
+    visible escapes, so a pasted command then holds them as text.
+    """
+    command = resume_command(prog, library, options, changed_list=changed_list)
+    return spell_unsafe(f"resume: {command}")
+
+
 def resume_command(
     prog: Sequence[str],
     library: Path,
@@ -317,8 +344,11 @@ def resume_command(
 
     It carries *changed_list* when there is one, so the next leg adds to the same list,
     and ``--owe-earlier-runs`` when given, so it still owes what it has not revisited.
+    A fix pass's resumes the fix, on the same ``--heard-dir``.
     """
-    parts = [*prog, "--mode", "run", "--library", str(library)]
+    parts = [*prog, "--mode", _sweep_mode(options), "--library", str(library)]
+    if options.heard_dir is not None:
+        parts += [HEARD_DIR_OPTION, str(options.heard_dir)]
     if options.lang is not None:
         parts += ["--lang", options.lang]
     if options.offline:

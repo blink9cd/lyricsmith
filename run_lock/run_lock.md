@@ -10,8 +10,6 @@ the same primitive. With a kernel-released lock, "the record says in progress an
 free" means the holder died, with no process-ID guesswork. A recorded process ID proves little: IDs
 recycle fast on a busy machine.
 
-`gate_tree_sweep` holds one for each `--mode run` and probes it from `--mode session-check`.
-
 ## Public surface
 
 | Name | What it does |

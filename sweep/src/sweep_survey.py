@@ -15,10 +15,28 @@ during a long sweep. Each track is classified by the album tool's classifier
 ``--refetch-implausible``, each track is also judged by the album tool's own rule for
 lyrics serving it that are implausible (`lyrics_refetch.serving_implausible`), and a
 track they are, named with the check's FLAG, makes its album one to visit, however
-synced: that option exists to ask such a track again. The survey writes
-nothing and contacts nothing. `plan_visits` splits the albums that need a visit into
-those a run visits and those it passes over as done, for the survey and the run alike,
-and puts those it is told to visit last (a challenged owed album,
+synced: that option exists to ask such a track again. Under it or ``--refetch-untimed``,
+a track holding a lyrics frame over the album tool's lyrics cap
+(`lyrics_cap.oversized_reason`), which either run judges junk and asks again, is named
+implausible with the album tool's reason and counted by what it holds beside that frame
+(`_oversized`); without either option the run ends such a track as its error, so it
+counts as unreadable.
+
+A track whose timed ``.lrc`` a machine labeled (`lyrics_sidecar.MACHINE_LABELS`:
+``sync``'s ``[by:machine timed]``, the transcribe tool's ``[by:machine transcript]``)
+is synced by the classifier, yet the tool that made it left the track's frames as they
+were: a run is what embeds it. So the survey reads the frames too, the state that
+matters, and a track whose frames hold no timed lyrics, or the file's lines at other
+times (the file timed again since its embed), is named unembedded, with its label
+(`_unembedded`), and makes its album one to visit: by the album tool's own rule, a run
+embeds the file then. A visit settles it, offline or not: offline the album tool
+embeds the file, and online it embeds the file unless a synced step answers, whose
+answer it embeds instead. Frames holding the file itself, or other timed lines, owe
+nothing, since they serve the track as they are.
+
+The survey writes nothing and contacts nothing. `plan_visits` splits the albums that
+need a visit into those a run visits and those it passes over as done, for the survey
+and the run alike, and puts those it is told to visit last (a challenged owed album,
 `sweep_challenged`) after the others.
 
 A track whose classification raises, a sidecar that is not UTF-8 for one, is counted as
@@ -38,9 +56,17 @@ from pathlib import Path
 import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 from library_walk import album_dirs, ignore_skipped
 from lyrics_album import AlbumUnusableError, discover_tracks
-from lyrics_inventory import TrackLyricsKind, classify_track
+from lyrics_cap import oversized_reason, within_cap
+from lyrics_inventory import (
+    TrackLyricsKind,
+    classify_track,
+    embedded_lyrics,
+    lyrics_kind,
+)
+from lyrics_model import SyncedLyrics
+from lyrics_placeholder import unless_placeholder
 from lyrics_refetch import serving_implausible
-from lyrics_sidecar import plan_sidecars
+from lyrics_sidecar import UNREADABLE, plan_sidecars
 from lyrics_tags import read_tags
 
 
@@ -66,7 +92,12 @@ class AlbumSurvey:
     path and its error's type: ``Disc 2/02.mp3 (SidecarDecodeError)``. *implausible*
     names each track serving implausible lyrics, by its path and the check's FLAG,
     ``01.mp3 (past end: last line ...)``; only a ``--refetch-implausible`` survey judges
-    that. *has_mp3* is False for a folder holding no MP3, which is no album to run.
+    that, and either refetch option a lyrics frame over the cap, named by its reason.
+    *unembedded* names each track whose machine-labeled timed sidecar its frames have
+    not taken, by its path and the label's source: ``02.mp3 (machine timed)``.
+    *has_mp3* is False for a folder holding no MP3, which is no album to run.
+    *records_digest* is, for the fix pass alone, the digest of the album's records in
+    the transcript store now (`sweep_fix_text.records_digest`); None otherwise.
     """
 
     album: Path
@@ -76,11 +107,19 @@ class AlbumSurvey:
     unreadable: tuple[str, ...] = ()
     has_mp3: bool = True
     implausible: tuple[str, ...] = ()
+    records_digest: str | None = None
+    unembedded: tuple[str, ...] = ()
 
     @property
     def needs_visit(self) -> bool:
-        """True when a track lacks synced lyrics, is implausible, or is unclassified."""
-        return bool(self.untimed or self.none or self.unreadable or self.implausible)
+        """True when a track is unsynced, unreadable, implausible, or owes an embed."""
+        return bool(
+            self.untimed
+            or self.none
+            or self.unreadable
+            or self.implausible
+            or self.unembedded
+        )
 
 
 def _implausible(mp3: Path, album: Path, lang: str) -> str | None:
@@ -93,12 +132,88 @@ def _implausible(mp3: Path, album: Path, lang: str) -> str | None:
     return None if flag is None else f"{flag.rule}: {flag.detail}"
 
 
+def _unembedded(mp3: Path, album: Path, lang: str) -> str | None:
+    """The source a machine labeled *mp3*'s timed sidecar with, while its frames lack it.
+
+    The frames lack it, by the album tool's own rule for a labeled file
+    (`EmbeddedLyrics.synced_besides`, `EmbeddedLyrics.held_by`), when they hold no
+    timed lyrics, or its lines at other times: a run embeds the file then. None when
+    the sidecar is unlabeled or untimed, and when the frames hold the file itself or
+    other timed lines, which serve the track as they are. Placeholders, by the album
+    tool's rule (`lyrics_placeholder.is_placeholder_lyrics`: an instrumental notice or
+    note glyphs alone, LRC header tags alone, or time stamps with no word), are set
+    aside on both sides first: a placeholder sidecar is no timed lyrics, so it owes
+    nothing, as the album tool's fetch never embeds one (`unless_placeholder`), and a
+    placeholder frame serves nothing, so it holds no sidecar
+    (`EmbeddedLyrics.without_placeholders`). Only a labeled track has its frames read
+    here, so the rest cost no second tag read. Raises what classifying it raises.
+    """
+    state = plan_sidecars(mp3, album)
+    timed = unless_placeholder(state.lyrics)
+    if state.label is None or not isinstance(timed, SyncedLyrics):
+        return None
+    frames = embedded_lyrics(read_tags(mp3).frames, lang).without_placeholders()
+    if frames.held_by(timed) is not None or frames.synced_besides(timed):
+        return None
+    return str(state.label)
+
+
+def _oversized(mp3: Path, album: Path, lang: str) -> tuple[TrackLyricsKind, str] | None:
+    """What *mp3* holds beside a lyrics frame over the cap, and why it is junk; else None.
+
+    As a ``--refetch-implausible`` run reads the track: the frames over the cap set
+    aside (`within_cap`), and a sidecar it cannot read holding nothing, since the run
+    asks the track again either way. Raises what reading its tag raises.
+    """
+    frames = read_tags(mp3).frames
+    why = oversized_reason(frames)
+    if why is None:
+        return None
+    try:
+        sidecar = plan_sidecars(mp3, album).lyrics
+    except UNREADABLE:
+        sidecar = None
+    held = embedded_lyrics(within_cap(frames), lang)
+    return lyrics_kind(sidecar, held.synced, held.untimed), why
+
+
+def _classified(
+    mp3: Path,
+    album: Path,
+    lang: str,
+    *,
+    refetch_untimed: bool,
+    refetch_implausible: bool,
+) -> tuple[TrackLyricsKind, str | None, str | None]:
+    """*mp3*'s kind, why its lyrics are implausible when judged, and why it owes an embed.
+
+    Either option judges a frame over the cap (`_oversized`), as either makes the run
+    ask such a track again; only *refetch_implausible* judges the serving lyrics
+    (`_implausible`). A synced track is judged for an embed it owes (`_unembedded`);
+    a track over the cap is not, since it is asked again whatever it holds. Raises
+    what classifying it raises.
+    """
+    if refetch_untimed or refetch_implausible:
+        junk = _oversized(mp3, album, lang)
+        if junk is not None:
+            return (*junk, None)
+    kind = classify_track(mp3, album=album, lang=lang)
+    why = _implausible(mp3, album, lang) if refetch_implausible else None
+    synced = kind is TrackLyricsKind.SYNCED
+    return kind, why, _unembedded(mp3, album, lang) if synced else None
+
+
 def survey_album(
-    album: Path, *, lang: str, refetch_implausible: bool = False
+    album: Path,
+    *,
+    lang: str,
+    refetch_untimed: bool = False,
+    refetch_implausible: bool = False,
 ) -> AlbumSurvey:
     """Classify every track of *album*; *lang* ranks a track's frames as a run would.
 
-    With *refetch_implausible*, each track serving implausible lyrics is named too.
+    With *refetch_implausible*, each track serving implausible lyrics is named too;
+    with either option, each holding a lyrics frame over the cap.
     """
     try:
         tracks = discover_tracks(album).tracks
@@ -107,11 +222,17 @@ def survey_album(
     kinds: list[TrackLyricsKind] = []
     unreadable: list[str] = []
     implausible: list[str] = []
+    unembedded: list[str] = []
     for mp3 in tracks:
         name = mp3.relative_to(album).as_posix()
         try:
-            kind = classify_track(mp3, album=album, lang=lang)
-            why = _implausible(mp3, album, lang) if refetch_implausible else None
+            kind, why, label = _classified(
+                mp3,
+                album,
+                lang,
+                refetch_untimed=refetch_untimed,
+                refetch_implausible=refetch_implausible,
+            )
         # The per-track boundary: a sidecar or tag the album tool cannot read, a file
         # that cannot be opened, a tag mutagen cannot parse, or anything a malformed
         # file raises that no reader names, is this track's, and the survey moves on.
@@ -121,6 +242,8 @@ def survey_album(
         kinds.append(kind)
         if why is not None:
             implausible.append(f"{name} ({why})")
+        if label is not None:
+            unembedded.append(f"{name} ({label})")
     return AlbumSurvey(
         album,
         synced=kinds.count(TrackLyricsKind.SYNCED),
@@ -128,6 +251,7 @@ def survey_album(
         none=kinds.count(TrackLyricsKind.NONE),
         unreadable=tuple(unreadable),
         implausible=tuple(implausible),
+        unembedded=tuple(unembedded),
     )
 
 
@@ -203,17 +327,23 @@ def survey_library(
     lang: str,
     on_skip: Callable[[str], None] = ignore_skipped,
     on_linked: Callable[[str], None] = ignore_skipped,
+    refetch_untimed: bool = False,
     refetch_implausible: bool = False,
 ) -> list[AlbumSurvey]:
     """Survey every album of *library* not reached through a link, in the walk's order.
 
     *on_skip* and *on_linked* are as `contained_albums` takes them, and a root that
-    cannot be listed raises `LibraryUnlistableError` as it does. *refetch_implausible*
-    is as `survey_album` takes it.
+    cannot be listed raises `LibraryUnlistableError` as it does. *refetch_untimed* and
+    *refetch_implausible* are as `survey_album` takes them.
     """
     albums = contained_albums(library, on_skip=on_skip, on_linked=on_linked)
     return [
-        survey_album(album, lang=lang, refetch_implausible=refetch_implausible)
+        survey_album(
+            album,
+            lang=lang,
+            refetch_untimed=refetch_untimed,
+            refetch_implausible=refetch_implausible,
+        )
         for album in albums
     ]
 
@@ -241,7 +371,8 @@ def plan_visits(
     them as well. The survey and the run both plan
     with this, so the list a survey prints is the list a run visits. An album whose
     every track is synced needs no visit, done or not, so it is in neither list, unless
-    a ``--refetch-implausible`` survey found a track serving implausible lyrics.
+    a track's machine-made timed sidecar is not embedded, or a ``--refetch-implausible``
+    survey found a track serving implausible lyrics.
     The albums *last* names come after the others to visit, each group in walk order.
     """
     first: list[Path] = []

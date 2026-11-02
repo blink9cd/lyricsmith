@@ -68,6 +68,12 @@ Output:
   puts the album back from there. --mode compare writes nothing into the album
   and takes no lock; after its table it prints one one-track strip command per
   FLAG row, numbered by that row.
+  --mode fix-text reads the transcripts sync --heard-dir kept and, for each such
+  track, writes the first text its transcript sings, the album's other untimed
+  texts tried before the providers'; with none it removes the wrong text,
+  backed up, as 'wrong text removed'. Every provider failing removes nothing,
+  and nor does an album that looks spoken (a Comedy or Spoken Word genre, or
+  most tracks not sung): its tracks read 'removal withheld'.
   --mode prune removes the run folders nothing needs: a run whose every track is
   undone, with nothing set aside, and a backup that never finished; --dry-run first
   shows which.
@@ -85,11 +91,13 @@ Exit codes:
        in a prune, a run folder whose rename or removal failed; or, in an
        accept, the removal of .lyricsmith or of an earlier accept's leftover;
        or a compare with an ERROR row (a tag or sidecar it cannot read, or every
-       provider asked failing)
+       provider asked failing); or a fix-text track whose wrong text a guard
+       kept (a provider that failed or was cooling down, an unread track)
   2    could not run: bad options, no album or no MP3, the album lock held by
        another run, no run to check or undo, a chosen run whose manifest could
        not be read, a --track outside the album, not one of its tracks or not in
-       the run, an unusable --config, or a prune or an accept on a Python whose
+       the run, a --heard-dir that is not a folder, an unusable --config, or a
+       prune or an accept on a Python whose
        shutil.rmtree does not protect against links (any on Windows); an accept
        refused (an unfinished run, an unreadable manifest or run folder, an entry
        lyricsmith did not write, a link), nothing removed, or whose records could

@@ -70,11 +70,10 @@ def _fill(firsts: Sequence[int | None], tail: int) -> list[int]:
     return [tail if frame is None else frame for frame in nexts]
 
 
-# fuzz-target
-def line_starts(
-    line_of: Sequence[int], spans: Sequence[Span], line_count: int, frame_seconds: float
-) -> tuple[float, ...]:
-    """Each line's start in seconds: its own first letter's first frame.
+def line_start_frames(
+    line_of: Sequence[int], spans: Sequence[Span], line_count: int
+) -> tuple[int, ...]:
+    """Each line's start frame: its own first letter's first frame.
 
     A line with no letter takes the next aligned line's start, or, when no line after
     it has a letter, the frame the last aligned line's last letter ends on; with no
@@ -85,13 +84,31 @@ def line_starts(
     letters = _letters(line_of, spans, line_count)
     firsts = [line[0].start if line else None for line in letters]
     tail = next((line[-1].end for line in reversed(letters) if line), 0)
-    return tuple(frame * frame_seconds for frame in _fill(firsts, tail))
+    return tuple(_fill(firsts, tail))
+
+
+# fuzz-target
+def line_starts(
+    line_of: Sequence[int], spans: Sequence[Span], line_count: int, frame_seconds: float
+) -> tuple[float, ...]:
+    """Each line's start in seconds, from `line_start_frames`."""
+    frames = line_start_frames(line_of, spans, line_count)
+    return tuple(frame * frame_seconds for frame in frames)
 
 
 def measure(
-    line_of: Sequence[int], spans: Sequence[Span], line_count: int, frame_seconds: float
+    line_of: Sequence[int],
+    spans: Sequence[Span],
+    line_count: int,
+    frame_seconds: float,
+    *,
+    blank: int = 0,
 ) -> Timing:
-    """The starts, the median line confidence and the line spans the checks read."""
+    """The starts, the median line confidence and the line spans the checks read.
+
+    *blank* of the *line_count* lines are blank lines between verses: they have no
+    letter either, but are not counted as lines with nothing to align.
+    """
     aligned = [line for line in _letters(line_of, spans, line_count) if line]
     scores = [statistics.fmean(span.score for span in line) for line in aligned]
     widths = [(line[-1].end - line[0].start) * frame_seconds for line in aligned]
@@ -100,7 +117,7 @@ def measure(
         confidence=statistics.median(scores) if scores else 0.0,
         first_span=widths[0] if widths else 0.0,
         median_span=statistics.median(widths) if widths else 0.0,
-        unaligned=line_count - len(aligned),
+        unaligned=line_count - blank - len(aligned),
     )
 
 

@@ -14,6 +14,9 @@ run of refused albums; a done or owed album, one where a provider answered, ends
 run (`sweep_outcome.next_streak`). Every other outcome neither adds to the run nor ends it: it says
 nothing about the providers.
 
+**A done fix** (`sweep_fix_text`) is passed over only while its album's records in the
+transcript store are as its visit left them; any change makes it an album to visit.
+
 **An owed album** (`sweep_owed`) is visited again by the next sweep of its pass and
 language, naming only the providers it owes; that visit's outcome replaces the last.
 One whose last visit was challenged by a provider it still owes is visited after every
@@ -54,13 +57,16 @@ from sweep_ledger import (
     LedgerRecord,
     Outcome,
     RestartMark,
+    SweepPass,
     append_record,
     append_unless_last,
+    newest_entries,
     read_records,
 )
 from sweep_earlier import LedgerPlan, plan_ledger
 from lyrics_model import ReadBackError, Source
 from sweep_challenged import last_notices
+from sweep_fix_text import unchanged_done
 from sweep_ctrl_c import finished_despite_ctrl_c
 from sweep_owed import turned_off
 from sweep_survey import AlbumSurvey, VisitPlan, linked_now, needing_visit, plan_visits
@@ -134,6 +140,8 @@ def ledger_plan(
 
     In the language and pass of *options*, by `sweep_earlier.plan_ledger`. A provider
     the sweep turns off challenges nothing: an album it alone challenged keeps its place.
+    In the fix pass a done album stays done only while its records are as its last
+    visit left them (`sweep_fix_text.unchanged_done`).
     """
     read = plan_ledger(
         records,
@@ -149,7 +157,15 @@ def ledger_plan(
         n: tuple(p for p in by if p not in off) for n, by in read.challenged_by.items()
     }
     challenged_by = {name: by for name, by in kept.items() if by}
-    return dataclasses.replace(read, challenged_by=challenged_by)
+    read = dataclasses.replace(read, challenged_by=challenged_by)
+    if pass_of(options) is not SweepPass.FIX_TEXT:
+        return read
+    digests = {
+        survey.album.relative_to(library).as_posix(): survey.records_digest
+        for survey in surveys
+    }
+    newest = newest_entries(records, lang_of(options), SweepPass.FIX_TEXT)
+    return dataclasses.replace(read, done=unchanged_done(read.done, newest, digests))
 
 
 def _plan(

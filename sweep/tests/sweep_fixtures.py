@@ -11,7 +11,7 @@ library, the real ledger, the network or a real config file, even by mistake.
 sweep built, it writes a run folder and a manifest through the album tool's own records
 and writer, so the sweep's reader round-trips what the album tool really writes.
 `SweepCase` sweeps five needy albums with it, and `manifest_of` and `status_outcome`
-build the manifests the tally reads. Every lyric here is INVENTED for these tests.
+build the manifests the tally reads. Every lyric here is invented for these tests.
 
 Not discovered as a suite (no ``test_`` prefix). Suites import it by bare name with this
 directory on ``sys.path``, after importing the entry point, which puts the album tool's
@@ -76,7 +76,7 @@ def _tripwire(*args: object, **kwargs: object) -> NoReturn:
 class IsolatedCase(unittest.TestCase):
     """The base of every sweep test case: each test runs isolated.
 
-    ``self.tmp`` is the test's own temporary directory, removed afterwards,
+    ``self.tmp`` is the test's own temporary directory, removed when it ends,
     ``self.home`` the redirected HOME inside it, ``self.state`` the redirected
     ``XDG_STATE_HOME``, and ``self.library`` an empty library folder.
     """

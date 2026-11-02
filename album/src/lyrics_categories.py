@@ -1,7 +1,7 @@
-"""Outcome categories: what a written track held and got, and why removed lyrics went.
+"""Outcome categories: what a written track held and got, why removed lyrics went.
 
-The album summary's ``written:`` and ``removed:`` lines, and the sweep's totals, count
-the same way from a `ManifestTrack` alone:
+The album summary's ``written:``, ``removed:`` and ``removal withheld:`` lines, and the
+sweep's totals, count the same way from a `ManifestTrack` alone:
 
 - What a track held is the run's own record of it, ``after.held`` (`lyrics_held`),
   read from the files before anything changed. Where it is unknown (a sidecar that
@@ -17,7 +17,9 @@ the same way from a `ManifestTrack` alone:
   recorded as a link was never copied and is never read, so it holds nothing.
 - `written_category` names a written track's category. The track's own files (a
   sidecar, its frames, a machine-labeled ``.lrc``) are `WrittenCategory.EMBEDDED`
-  whatever the kinds; otherwise the held kind and the kind written decide. A
+  whatever the kinds; otherwise the held kind and the kind written decide, another
+  track's text a fix wrote (`Source.ALBUM_TEXT`) included: it is no file of the
+  track's own, so over an untimed text it is `WrittenCategory.UNTIMED_REPLACED`. A
   ``--refetch-untimed`` track held untimed lyrics, whatever its backup records. A track
   whose only lyrics were placeholders, which a run records as ``placeholder lyrics``
   on its outcome outside a ``--refetch-implausible`` pick, held untimed lyrics: a
@@ -25,8 +27,12 @@ the same way from a `ManifestTrack` alone:
   record with no kind, which no run writes, is `WrittenCategory.BEFORE_UNKNOWN`.
 - `removed_reason` reads why a removed track's old lyrics went from its recorded
   ``implausible`` text: the refetch's placeholder words, or the check's past-end or
-  too-many-words detail, recognized by the stable words those details are built from.
+  too-many-words detail, recognized by the stable words those details are built from,
+  or a fix's ``wrong text removed``, counted as ``wrong text``.
   With both sides removed apart, the first reason that names a rule decides.
+- A fix's kept track whose removal it withheld, the album looking spoken
+  (`TrackOutcome.withheld`), counts on the ``removal withheld:`` line as
+  ``spoken word``, so it is never read as a plain ``kept existing``.
 
 Pure: no I/O, nothing printed. The runtime floor is Python 3.12.
 """
@@ -47,9 +53,12 @@ from lyrics_records import (
     TrackBefore,
     TrackOutcome,
 )
+from lyrics_outcomes import REMOVAL_WITHHELD
+from lyrics_outcomes import WRONG_TEXT as WRONG_TEXT_REMOVED
 from lyrics_refetch import PLACEHOLDER, REASON_JOINER
 from lyrics_sidecar import MACHINE_LABELS
 from lyrics_slots import LRC_SUFFIX, TXT_SUFFIX
+from lyrics_spoken import SPOKEN_WORD
 
 # The held kind is a record's field; re-exported, so the categories' readers name it here.
 from lyrics_records import HeldBefore as HeldBefore
@@ -74,6 +83,9 @@ class RemovedReason(StrEnum):
     PLACEHOLDER = "placeholder"
     PAST_END = CheckRule.PAST_END.value
     TOO_MANY_WORDS = CheckRule.TOO_MANY_WORDS.value
+    #: A fix's removal: the transcript sang no text tried (`lyrics_fix_step`). The
+    #: summary's word drops the recorded reason's ``removed``, which the line says.
+    WRONG_TEXT = "wrong text"
     OTHER = "other"
 
 
@@ -94,14 +106,16 @@ _BY_KINDS: Mapping[tuple[HeldBefore, LyricsKind], WrittenCategory] = {
 }
 #: How each line opens, and what parts its entries.
 _WRITTEN_LABEL, _REMOVED_LABEL, _GAP = "written:", "removed:", ", "
+_WITHHELD_LABEL = f"{REMOVAL_WITHHELD}:"
 
 
 @dataclass(frozen=True)
 class OutcomeCategories:
-    """Written tracks by category, and removed tracks by reason."""
+    """Written tracks by category, removed tracks by reason, and removals withheld."""
 
     written: dict[WrittenCategory, int] = field(default_factory=dict)
     removed: dict[RemovedReason, int] = field(default_factory=dict)
+    withheld: int = 0
 
 
 def _copied(before: TrackBefore, suffix: str) -> bool:
@@ -168,6 +182,8 @@ def _named_reason(part: str) -> RemovedReason | None:
     """The rule one recorded reason names, or None when it names none."""
     if part == PLACEHOLDER:
         return RemovedReason.PLACEHOLDER
+    if part == WRONG_TEXT_REMOVED:
+        return RemovedReason.WRONG_TEXT
     if part.startswith(LAST_LINE_DETAIL):
         return RemovedReason.PAST_END
     if WORD_RATE_DETAIL in part:
@@ -183,16 +199,20 @@ def removed_reason(outcome: TrackOutcome) -> RemovedReason:
 
 
 def count_categories(tracks: Iterable[ManifestTrack]) -> OutcomeCategories:
-    """Written tracks by category and removed tracks by reason, over *tracks*."""
-    counts = OutcomeCategories()
+    """Written tracks by category, removed tracks by reason, removals withheld."""
+    written: dict[WrittenCategory, int] = {}
+    removed: dict[RemovedReason, int] = {}
+    withheld = 0
     for track in tracks:
         category = written_category(track)
         if category is not None:
-            counts.written[category] = counts.written.get(category, 0) + 1
+            written[category] = written.get(category, 0) + 1
         if track.after is not None and track.after.status is OutcomeStatus.REMOVED:
             reason = removed_reason(track.after)
-            counts.removed[reason] = counts.removed.get(reason, 0) + 1
-    return counts
+            removed[reason] = removed.get(reason, 0) + 1
+        if track.after is not None and track.after.withheld is not None:
+            withheld += 1
+    return OutcomeCategories(written, removed, withheld)
 
 
 def _line[Key: StrEnum](
@@ -211,3 +231,10 @@ def format_written(counts: OutcomeCategories) -> str | None:
 def format_removed(counts: OutcomeCategories) -> str | None:
     """The summary's ``removed:`` line, or None when no track was removed."""
     return _line(_REMOVED_LABEL, REMOVED_ORDER, counts.removed)
+
+
+def format_withheld(counts: OutcomeCategories) -> str | None:
+    """The ``removal withheld: spoken word <n>`` line, or None when none was withheld."""
+    if not counts.withheld:
+        return None
+    return f"{_WITHHELD_LABEL} {SPOKEN_WORD} {counts.withheld}"

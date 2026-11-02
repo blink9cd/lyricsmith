@@ -25,6 +25,13 @@ class TypesTest(sy_cases.IsolatedCase):
         self.assertIn(st.Outcome.ERROR_TEXT, st.FAILED)
         self.assertNotIn(st.Outcome.LOW_CONFIDENCE, st.FAILED)
 
+    def test_a_text_not_sung_is_planned_and_writes_nothing(self) -> None:
+        self.assertNotIn(st.Outcome.NOT_SUNG, st.FAILED | st.WRITTEN)
+        self.assertEqual(st.Outcome.NOT_SUNG.value, "not sung: left untimed")
+        listed = st.UNTIMED_OUTCOMES[st.Action.SKIP_NOT_SUNG]
+        self.assertEqual(listed.value, "skip: listed as not sung")
+        self.assertNotIn(listed, st.FAILED)
+
     def test_every_default_extension_has_a_demuxer(self) -> None:
         defaults = set(st.DEFAULT_EXTENSIONS.split(","))
         self.assertLessEqual(defaults, set(st.DEMUXERS))

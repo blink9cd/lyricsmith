@@ -5,8 +5,10 @@ every later decision reads the class rather than the detail text (`classify`). T
 classes (`Refusal`) are a rate limit, an overloaded server, a server never reached, a
 block, and an answer this tool does not recognize. The facts kept beside the class
 (`RefusalFacts`) are the refusing status, the retries a retried request made, the wait
-the reply's ``Retry-After`` asked for before any cap, and the reply's ``Server`` header,
-so a CDN's ``503`` can be told from the origin's, and whether the step's request went
+the reply's ``Retry-After`` asked for before any cap, the reply's ``Server`` header,
+so a CDN's ``503`` can be told from the origin's, the refusing reply's host where the
+provider asks more than one (Genius: its keyed API or its unkeyed site, by
+`lyrics_genius.genius_host`), and whether the step's request went
 unsent because the provider's breaker was open (`lyrics_breakers`), so a count can tell
 a skipped lookup from a refusal heard. Never a reply body.
 
@@ -128,11 +130,13 @@ class RefusalFacts:
 
     *status* is the refusing HTTP status, *retries* the retries made before the last
     failure, *retry_after_s* the wait the reply's ``Retry-After`` asked for, before
-    any cap a retry holds it to, and *server* its ``Server`` header. Each is None, or
-    no retries, where the error does not know it. *unsent* is True only for a step an
-    open breaker skipped: no request went out, and *reason* is the class that opened
-    the breaker, so the reports count it apart from a refusal heard. `classify` never
-    sets it, since every error it reads came from a request sent.
+    any cap a retry holds it to, *server* its ``Server`` header, and *host* the
+    refusing reply's hostname, kept only by a provider asking more than one host
+    (Genius). Each is None, or no retries, where the error does not know it. *unsent*
+    is True only for a step an open breaker skipped: no request went out, and *reason*
+    is the class that opened the breaker, so the reports count it apart from a refusal
+    heard. `classify` never sets it, since every error it reads came from a request
+    sent.
     """
 
     reason: Refusal
@@ -141,6 +145,7 @@ class RefusalFacts:
     retry_after_s: float | None = None
     server: str | None = None
     unsent: bool = False
+    host: str | None = None
 
 
 class ClassedError(ProviderError):
@@ -159,7 +164,11 @@ def _status_facts(error: HttpStatusError) -> RefusalFacts:
     else:
         reason = status_refusal(error.status)
     return RefusalFacts(
-        reason, error.status, retry_after_s=error.retry_after_s, server=error.server
+        reason,
+        error.status,
+        retry_after_s=error.retry_after_s,
+        server=error.server,
+        host=error.host,
     )
 
 
@@ -185,6 +194,11 @@ def one_capped_line(text: str) -> str:
     return " ".join(text.split())[:MAX_REFUSAL_DETAIL_CHARS].rstrip()
 
 
+def _capped_or_none(text: str | None) -> str | None:
+    """*text* as one capped line (`one_capped_line`), or None when absent or blank."""
+    return None if text is None else one_capped_line(text) or None
+
+
 @dataclass(frozen=True)
 class ProviderRefusal:
     """One provider call that refused or failed instead of answering.
@@ -194,8 +208,8 @@ class ProviderRefusal:
     as ``HTTP 503``, ``timeout`` or a provider's refusal code. It is held to one line,
     whitespace runs collapsed to single spaces, and cut to `MAX_REFUSAL_DETAIL_CHARS`,
     so a reply body passed by mistake cannot fill the manifest. *reason* and the rest
-    are the refusal's facts (`RefusalFacts`); *server* is held as *detail* is, and a
-    blank one is None.
+    are the refusal's facts (`RefusalFacts`); *server* and *host* are each held as
+    *detail* is, and a blank one is None.
     """
 
     provider: Source
@@ -207,13 +221,14 @@ class ProviderRefusal:
     retry_after_s: float | None = None
     server: str | None = None
     unsent: bool = False
+    host: str | None = None
 
     def __post_init__(self) -> None:
-        """Collapse the detail and server to capped lines; idempotent, so a reread is equal."""
+        """Collapse the detail, server and host to capped lines; idempotent on a reread."""
         # Frozen, so each normalized value is set the one way a frozen dataclass allows.
         object.__setattr__(self, "detail", one_capped_line(self.detail))
-        server = None if self.server is None else one_capped_line(self.server)
-        object.__setattr__(self, "server", server or None)
+        object.__setattr__(self, "server", _capped_or_none(self.server))
+        object.__setattr__(self, "host", _capped_or_none(self.host))
 
     @classmethod
     def of(
@@ -230,4 +245,5 @@ class ProviderRefusal:
             facts.retry_after_s,
             facts.server,
             facts.unsent,
+            facts.host,
         )

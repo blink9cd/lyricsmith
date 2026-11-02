@@ -11,12 +11,13 @@ the statuses a caller falls back on rather than fails (`absent`): LRCLIB's exact
 names its 404, no record matched, and any server error, and goes on to its search.
 Every other error status raises. Their requests follow no redirect, so the hook raises
 on a redirect status (300 to 399) too, whatever *absent* names: an unfollowed redirect
-is never a reply. lyricsgenius answers a non-OK API status with a bare ``AssertionError`` whose
-only record of the status is its message text, so `lyrics_genius` puts the hook on that
-client's session instead (`hook_status_errors`); the error is not an exception type the
-library catches, so it reaches the adapter unchanged. That hook leaves redirects alone:
-the library follows them, and the hook sees each response on the way, so refusing a
-redirect there would fail a Genius page that has merely moved. Which redirects that
+is never a reply. lyricsgenius answers a non-OK API status with a bare
+``AssertionError`` whose only record of the status is its message text, so
+`lyrics_genius` puts the hook on that client's session instead (`hook_status_errors`),
+naming the refusing host; the error is not an exception type the library catches, so it
+reaches the adapter unchanged. That hook leaves redirects alone: the library follows
+them, and the hook sees each response on the way, so refusing a redirect there would
+fail a Genius page that has merely moved. Which redirects that
 client may follow is `lyrics_genius`'s own hook's to decide.
 
 A failure keeps a short detail for the run's record of refusals (`error_detail`):
@@ -68,7 +69,10 @@ class HttpStatusError(ProviderError):
     *retry_after_s* is the wait the reply's ``Retry-After`` header asked for, in
     seconds, or None when it gave none in that form (`retry_after_s`): as asked, before
     any cap a retry holds it to. *server* is the reply's ``Server`` header, None when
-    it sent none, so a refusal can tell a CDN's from the origin's.
+    it sent none, so a refusal can tell a CDN's from the origin's. *host* is the
+    refusing reply's hostname, for a provider that asks more than one host and knows
+    which answered (Genius, `lyrics_genius.genius_host`); None otherwise. Never more
+    than a hostname: a URL's path and query hold the track's words.
     """
 
     def __init__(
@@ -78,6 +82,7 @@ class HttpStatusError(ProviderError):
         retry_after_s: float | None = None,
         *,
         server: str | None = None,
+        host: str | None = None,
     ) -> None:
         """Name *source* and *status*; the detail is ``HTTP <status>``."""
         super().__init__(f"{source} answered HTTP {status}", detail=f"HTTP {status}")
@@ -85,6 +90,7 @@ class HttpStatusError(ProviderError):
         self.status = status
         self.retry_after_s = retry_after_s
         self.server = server
+        self.host = host
 
 
 def retries_phrase(count: int) -> str:
@@ -204,9 +210,40 @@ def status_hook(
     return raise_on_error_status
 
 
-def hook_status_errors(session: HookedSession, source: Source) -> None:
+class UrlResponse(HttpResponse, Protocol):
+    """A ``requests`` response, as far as a hook naming its host reads it."""
+
+    @property
+    def url(self) -> str:
+        """The URL the reply answered, after any redirect followed."""
+
+
+def _no_host(url: str) -> str | None:
+    """Name no host for any *url*: the default for a session that asks one host."""
+    return None
+
+
+def hook_status_errors(
+    session: HookedSession,
+    source: Source,
+    *,
+    host_of: Callable[[str], str | None] = _no_host,
+) -> None:
     """Make every request *session* sends raise `HttpStatusError` on an error status.
 
     Redirects pass: the session's library follows them, and the hook sees each one.
+    The error's host is *host_of* the refusing reply's URL, which must return a
+    hostname at most (Genius's `lyrics_genius.genius_host`); none by default.
     """
-    session.hooks["response"].append(status_hook(source, refuse_redirects=False))
+    raise_on_error = status_hook(source, refuse_redirects=False)
+
+    def raise_naming_host(
+        response: UrlResponse, *args: object, **kwargs: object
+    ) -> None:
+        try:
+            raise_on_error(response, *args, **kwargs)
+        except HttpStatusError as error:
+            error.host = host_of(response.url)
+            raise
+
+    session.hooks["response"].append(raise_naming_host)

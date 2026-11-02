@@ -4,7 +4,7 @@ The list is a TSV file under the state directory: a header, a row per silent or
 unmeasured track, and after each album's rows a marker naming the album as done. A
 resumed pass reads the markers back to skip those albums, so the reader is a parser of
 untrusted input: anything it does not expect raises `SilenceListError` and nothing else.
-Every album and title here is INVENTED.
+Every album and title here is invented.
 """
 
 from __future__ import annotations

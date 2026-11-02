@@ -4,7 +4,7 @@
 of the count per verdict, then a section per verdict in a fixed order, each row's
 album, track number, title, length, peak and reason. Every value from the list is
 text the tool did not choose, so each is escaped, and the page fetches and runs
-nothing. Every album and title here is INVENTED.
+nothing. Every album and title here is invented.
 """
 
 from __future__ import annotations

@@ -366,6 +366,18 @@ class NormalizeWordsTest(fixtures.IsolatedCase):
         text = "[00:01.00]<00:01.00>Lanterns <00:01.80>drift <00:02.40>home"
         self.assertEqual(lc.normalize_words(text), ["lanterns", "drift", "home"])
 
+    def test_the_shared_pattern_decides_what_a_word_stamp_is(self) -> None:
+        # The check and the LRC reader read one pattern: a stamp the reader removes is
+        # dropped here, and one it keeps as text (seconds past 59) is read as words.
+        for stamp in ("<00:01>", "<00:01.5>", "<00:01.50>", "<00:01.500>", "<0:01:50>"):
+            with self.subTest(stamp=stamp):
+                self.assertIsNotNone(lm.WORD_STAMP.fullmatch(stamp))
+                self.assertEqual(lc.normalize_words(f"one{stamp}two"), ["one", "two"])
+        self.assertIsNone(lm.WORD_STAMP.fullmatch("<00:60.00>"))
+        self.assertEqual(
+            lc.normalize_words("one<00:60.00>two"), ["one", "00", "60", "00", "two"]
+        )
+
     def test_a_combining_mark_stays_inside_its_word(self) -> None:
         self.assertEqual(lc.normalize_words("nai\u0308ve"), ["naive"])
 

@@ -10,7 +10,7 @@ fails if one is still running or one reached the tripwire (`unsettled`): a provi
 abandoned at its deadline must finish while the fakes it was given still stand.
 
 Albums are built from silent MP3s at test time: no audio binary is committed. Every
-lyric here is INVENTED for these tests; no real song's words appear anywhere.
+lyric here is invented for these tests; no real song's words appear anywhere.
 
 Not discovered as a suite (no ``test_`` prefix). Suites import it by bare name with this
 directory on ``sys.path``.
@@ -137,7 +137,7 @@ def unsettled(
 class IsolatedCase(unittest.TestCase):
     """The base of every album test case: each test runs isolated.
 
-    ``self.tmp`` is the test's own temporary directory, removed afterwards,
+    ``self.tmp`` is the test's own temporary directory, removed when it ends,
     ``self.home`` the redirected HOME inside it, and ``self.xdg`` each redirected XDG
     base directory by variable name.
     """

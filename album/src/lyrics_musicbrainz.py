@@ -80,10 +80,15 @@ class BandcampLink:
 
 
 class Miss(StrEnum):
-    """Why no link was found: no release matched, or none of the matches linked one."""
+    """Why no album was found: no release matched, none linked one, or its page is gone.
+
+    `PAGE_GONE` is the Bandcamp provider's, never this client's: the page a link led to
+    answered 404 or 410 (`lyrics_bandcamp.GONE_STATUSES`).
+    """
 
     NO_ALBUM_MATCH = "no album match"
     NO_LINK = "no link"
+    PAGE_GONE = "page gone"
 
 
 @dataclass(frozen=True)

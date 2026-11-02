@@ -51,6 +51,17 @@ MAX_STAMP_MINUTE_DIGITS = 9
 _STAMP = re.compile(
     rf"\s*\[(\d{{1,{MAX_STAMP_MINUTE_DIGITS}}}):([0-5]?\d)(?:[.:](\d{{1,3}}))?\]"
 )
+#: One enhanced-LRC inline word stamp, such as ``<00:01.50>``: `_STAMP`'s bounds in
+#: angle brackets. The LRC reader removes each from a timed line's text, and the check
+#: (`lyrics_check`) builds its stamp-and-tag pattern from this one, so the two never
+#: disagree about what a word stamp is.
+WORD_STAMP = re.compile(
+    rf"<\d{{1,{MAX_STAMP_MINUTE_DIGITS}}}:[0-5]?\d(?:[.:]\d{{1,3}})?>"
+)
+#: A word stamp at a line's start, among its line stamps: skipped, as whitespace is.
+_LEADING_WORD_STAMP = re.compile(r"\s*" + WORD_STAMP.pattern)
+#: A run of whitespace, collapsed to one space where a word stamp was removed.
+_WHITESPACE_RUN = re.compile(r"\s+")
 #: Milliseconds per unit of a fraction, by its digit count: tenths, hundredths, ms.
 _FRACTION_SCALE = {0: 0, 1: 100, 2: 10, 3: 1}
 
@@ -125,14 +136,34 @@ def _stamp_ms(match: re.Match[str]) -> int:
     return int(minutes) * _MS_PER_MINUTE + int(seconds) * _MS_PER_SECOND + scaled
 
 
+def remove_word_stamps(text: str) -> str:
+    """*text* without its `WORD_STAMP` runs; a text holding none comes back as it is.
+
+    Each stamp becomes a space, so one glued between two words never joins them, then
+    every whitespace run collapses to one space and the ends are stripped.
+    """
+    if not WORD_STAMP.search(text):
+        return text
+    return _WHITESPACE_RUN.sub(" ", WORD_STAMP.sub(" ", text)).strip()
+
+
 def _parse_lrc_line(line: str) -> list[SyncedLine]:
-    """Every timed line one LRC text line holds: one per leading stamp, else none."""
+    """Every timed line one LRC text line holds: one per leading stamp, else none.
+
+    Line and word stamps may interleave at the start; only the line stamps time it, so
+    no text opens with a line stamp a word stamp hid.
+    """
     stamps: list[int] = []
     position = 0
-    while match := _STAMP.match(line, position):
-        stamps.append(_stamp_ms(match))
+    while match := _STAMP.match(line, position) or _LEADING_WORD_STAMP.match(
+        line, position
+    ):
+        if match.re is _STAMP:
+            stamps.append(_stamp_ms(match))
         position = match.end()
-    text = line[position:].strip()
+    if not stamps:
+        return []
+    text = remove_word_stamps(line[position:]).strip()
     return [SyncedLine(ms, text) for ms in stamps]
 
 
@@ -147,6 +178,14 @@ def parse_lrc(text: str) -> Lyrics:
     `MAX_STAMP_MINUTE_DIGITS` digits) are skipped; an ``[offset:]``
     tag is too, so it never shifts the timing. The result is in time order, ties in file
     order. A text with no timed line comes back verbatim as `PlainLyrics`.
+
+    Enhanced LRC's inline word stamps (`WORD_STAMP`: ``<mm:ss>`` and the same fraction
+    forms) may sit among a line's leading stamps, and are removed from a timed line's
+    text (`remove_word_stamps`), keeping the line's own timing: each
+    becomes a space and the line's whitespace collapses to single spaces, so
+    ``[00:01.00]<00:01.00>One <00:01.50>two`` reads as ``One two`` at 1000 ms. A
+    malformed one (seconds past 59, a 4-digit fraction) is text. A line holding none
+    keeps its text as written, stripped at both ends.
     """
     lines = [timed for raw in text.splitlines() for timed in _parse_lrc_line(raw)]
     if not lines:
@@ -166,7 +205,8 @@ def format_lrc(lines: Sequence[SyncedLine]) -> str:
 
     `parse_lrc` reads the result back unchanged when the lines are in time order and
     each text is a single line with no surrounding whitespace that does not open with
-    ``[``, and each time's minutes fit in `MAX_STAMP_MINUTE_DIGITS` digits.
+    ``[`` and holds no `WORD_STAMP` (which the read removes), and each time's minutes
+    fit in `MAX_STAMP_MINUTE_DIGITS` digits.
     A line outside that shape (a frame entry holding a newline, say) does not
     survive the trip, which is why a caller that must be lossless compares the two.
     """

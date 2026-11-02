@@ -78,7 +78,11 @@ EPILOG = """\
 Prerequisites:
   the sync install: pip install -r requirements-sync.txt (beside this file), into the
   interpreter that runs this tool; ffmpeg on PATH; and the models, fetched once with
-  --mode fetch-models. A run never downloads.
+  --mode fetch-models. whisper.cpp's whisper-cli on PATH (brew install whisper.cpp)
+  and the transcribe tool's two models, fetched once with its own --mode
+  fetch-models: each track's vocals are heard before its text is timed. A text the
+  check finds not sung is not timed; a track with too few word pairs heard to judge
+  is timed, and listed little heard under --by-hand-list. A run never downloads.
 
 Output:
   <track>.lrc beside each timed track, headed by a [re:] line naming the versions and
@@ -87,18 +91,24 @@ Output:
   stays a sidecar. Without --embed, the summary prints that command.
 
 Exit codes:
-  0  every track timed, re-timed, skipped, or left low-confidence for timing by
-     hand; under fetch-models, every model present or downloaded
-  1  a track's text, alignment or write failed, a folder could not be read, or an
-     --embed album run failed, was refused or did not finish, or a written track
-     could not be embedded; under fetch-models, any model failed
-  2  a setup problem, found before any track was touched
+  0  every track timed, re-timed, skipped, left low-confidence for timing by hand,
+     or left untimed as not sung; under fetch-models, every model present or
+     downloaded
+  1  a track's text, alignment or write failed, a --by-hand-list row or a
+     --heard-dir record could not be written or removed, a folder could not be
+     read, or an --embed album run failed, was
+     refused or did not finish, or a written track could not be embedded; under
+     fetch-models, any model failed
+  2  a setup problem, found before any track was touched, an unreadable or
+     malformed --by-hand-list or a --heard-dir that is no folder among them
   130 Ctrl-C while timing: the tracks timed so far keep their .lrc, the footer
      names the album command for each, and --embed is not run
 """
 
 
-def build_parser(model_dir: Path, prog: str | None = None) -> argparse.ArgumentParser:
+def build_parser(
+    model_dir: Path, whisper_model_dir: Path, prog: str | None = None
+) -> argparse.ArgumentParser:
     """The command line, every argument a named option."""
     parser = transcribe.TerminalSafeArgumentParser(
         prog=os.path.basename(sys.argv[0]) if prog is None else prog,
@@ -126,16 +136,38 @@ def build_parser(model_dir: Path, prog: str | None = None) -> argparse.ArgumentP
     parser.add_argument(
         "--embed",
         action="store_true",
+        # None, not False, when omitted, here and on every on/off flag below: the
+        # formatter hides a None default, and a flag's help already says what giving
+        # it does. Each reader that keeps the value makes it a bool first.
+        default=None,
         help="then run lyricsmith album --offline on each album that gained a .lrc [run]",
     )
     parser.add_argument(
         "--overwrite",
         action="store_true",
+        default=None,
         help="re-time a track whose .lrc this tool wrote [run]",
+    )
+    parser.add_argument(
+        "--by-hand-list",
+        type=Path,
+        help="a list file: each low-confidence or not-sung track, each flagged first "
+        "line and each written track too little heard to check is added as its track "
+        "ends, and a listed low-confidence or not-sung track is skipped, --overwrite "
+        "or not; remove its row to time it again [run]",
+    )
+    parser.add_argument(
+        "--heard-dir",
+        type=Path,
+        help="a folder keeping what whisper-cli heard of each track found not sung, "
+        "so a track with a record, its text changed or its row removed, is judged "
+        "again without hearing it again, and album can replace the text; needs "
+        "--by-hand-list [run]",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
+        default=None,
         help="print the setup check and each track's plan; time nothing [run]",
     )
     parser.add_argument(
@@ -143,6 +175,13 @@ def build_parser(model_dir: Path, prog: str | None = None) -> argparse.ArgumentP
         type=Path,
         default=model_dir,
         help="where fetch-models writes and a run reads [all modes]",
+    )
+    parser.add_argument(
+        "--whisper-model-dir",
+        type=Path,
+        default=whisper_model_dir,
+        help="the transcribe tool's model folder, where a run reads the two whisper "
+        "models that hear each track's vocals [run]",
     )
     return parser
 
@@ -177,20 +216,33 @@ def _parse_extensions(text: str) -> frozenset[str]:
 def resolve_options(namespace: argparse.Namespace) -> Options:
     """The parsed options; --path is required in run mode.
 
-    --path and --model-dir are made absolute against the working folder, links and dots
-    kept, as the transcribe tool makes its own, so a relative name such as
-    ``http:x.mp3`` or ``pipe:0`` never reaches ffmpeg, which would read it as a protocol.
+    --path, both model folders, --by-hand-list and --heard-dir are made absolute
+    against the working folder, links and dots kept, as the transcribe tool makes its
+    own, so a relative name such as ``http:x.mp3`` or ``pipe:0`` never reaches ffmpeg,
+    which would read it as a protocol.
     """
     if namespace.mode == MODE_RUN and namespace.path is None:
         raise SetupError("--path is required in run mode")
+    by_hand = namespace.by_hand_list
+    if namespace.mode != MODE_RUN and by_hand is not None:
+        raise SetupError("--by-hand-list is for --mode run only")
+    heard = namespace.heard_dir
+    if namespace.mode != MODE_RUN and heard is not None:
+        raise SetupError("--heard-dir is for --mode run only")
+    if heard is not None and by_hand is None:
+        # A not-sung row and its record go together: the row is what skips the track.
+        raise SetupError("--heard-dir needs --by-hand-list")
     return Options(
         mode=namespace.mode,
         path=None if namespace.path is None else namespace.path.absolute(),
         extensions=_parse_extensions(namespace.extensions),
-        embed=namespace.embed,
-        overwrite=namespace.overwrite,
-        dry_run=namespace.dry_run,
+        embed=bool(namespace.embed),
+        overwrite=bool(namespace.overwrite),
+        dry_run=bool(namespace.dry_run),
         model_dir=namespace.model_dir.absolute(),
+        whisper_model_dir=namespace.whisper_model_dir.absolute(),
+        by_hand_list=None if by_hand is None else by_hand.absolute(),
+        heard_dir=None if heard is None else heard.absolute(),
     )
 
 
@@ -216,7 +268,8 @@ def main(
     """Run the command line; the exit code."""
     stdio_utf8.force_utf8_streams(sys.stdout, sys.stderr)
     default_dir = sy_models.default_model_dir(sys.platform, os.environ, Path.home())
-    parser = build_parser(default_dir, prog)
+    whisper_dir = at_models.default_model_dir(sys.platform, os.environ, Path.home())
+    parser = build_parser(default_dir, whisper_dir, prog)
     try:
         options = resolve_options(parser.parse_args(argv))
         if options.mode == MODE_FETCH:

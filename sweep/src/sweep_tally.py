@@ -6,9 +6,10 @@ removed), no lyrics expected (a track whose genre expects none, which nothing wa
 for), silent
 (a track whose audio measured as silence, which nothing was found for), kept
 (nothing new found, the old lyrics kept), errors, and those whose check flagged; and
-the written tracks by category and the removed ones by reason, counted as the album
-summary counts them (`lyrics_categories`). A track the run never reached has no end
-state and is counted nowhere.
+the written tracks by category, the removed ones by reason, and the kept ones whose
+removal a fix withheld on an album that looks spoken (``withheld``, counted among the
+kept too), counted as the album summary counts them (`lyrics_categories`). A track
+the run never reached has no end state and is counted nowhere.
 
 Refusals are counted by TRACK and by PROVIDER, never refusal by refusal: one failed call
 to a provider can leave a refusal at the synced step and another at the untimed step,
@@ -24,8 +25,8 @@ track whose every provider failed as the track's fetch error, so any other end a
 lookup heard from some provider, whatever else refused beside it. A track shows an
 answer when a provider's lyrics were taken for it, whatever happened after; when it
 ended with nothing new found (not found, no lyrics expected, silent, its old lyrics
-kept, or its old lyrics removed as implausible or a placeholder: the providers
-answered, emptily); or when it was served its
+kept, a fix's withheld removal among them, or its old lyrics removed as implausible
+or a placeholder: the providers answered, emptily); or when it was served its
 own untimed lyrics or a machine-labeled .lrc and not every LRC provider's synced step
 refused (such a track is looked up for synced lyrics only, so a synced step that did
 not refuse answered, emptily). Only the synced steps the run asked count: a run given
@@ -166,6 +167,9 @@ class Counts:
     #: Counted apart from not found since the ledger first recorded it; an older
     #: ledger line's not found still includes its removals.
     removed: int = 0
+    #: The kept tracks whose removal a fix withheld, the album looking spoken; each
+    #: counts among the kept too. An older ledger line holds none.
+    withheld: int = 0
     written_by: Mapping[WrittenCategory, int] = field(default_factory=dict)
     removed_by: Mapping[RemovedReason, int] = field(default_factory=dict)
 
@@ -207,6 +211,7 @@ def _count(tracks: tuple[ManifestTrack, ...]) -> Counts:
         silent=statuses.count(OutcomeStatus.SILENT),
         kept=statuses.count(OutcomeStatus.KEPT_EXISTING),
         errors=statuses.count(OutcomeStatus.ERROR),
+        withheld=categories.withheld,
         flagged=sum(
             1
             for outcome in outcomes

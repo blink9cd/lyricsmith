@@ -141,6 +141,18 @@ class NormalizeTableTest(_AlbumCase):
         self.assertNotIn("01 Track.txt", after)
         self.assertEqual(after["01 Track.lrc"], fixtures.LIGHTHOUSE_LRC.encode())
 
+    def test_a_timed_lrc_with_word_stamps_is_kept_and_read_clean(self) -> None:
+        # The file keeps its word times on disk; only the lyrics read from it, and so
+        # the frames written from them, lose the inline stamps.
+        enhanced = "[00:01.00]<00:01.00>Lanterns <00:01.80>drift\n[00:04.50]home\n"
+        mp3 = self._track(lrc=enhanced)
+        clean = lm.SyncedLyrics(
+            (lm.SyncedLine(1000, "Lanterns drift"), lm.SyncedLine(4500, "home"))
+        )
+        before, after = self._both_modes(mp3, lm.SidecarState(clean))
+        self.assertEqual(after, before)
+        self.assertEqual(after["01 Track.lrc"], enhanced.encode())
+
     def test_no_sidecar_means_no_lyrics(self) -> None:
         mp3 = self._track()
         before, after = self._both_modes(mp3, lm.SidecarState(None))
@@ -342,6 +354,11 @@ class SidecarKeepsTest(fixtures.IsolatedCase):
 
     def test_an_entry_opening_with_a_stamp_does_not_keep(self) -> None:
         lyrics = self.synced((1000, "[00:05.00]A lamp swings"))
+        self.assertFalse(lyrics_sidecar.sidecar_keeps(lyrics))
+
+    def test_an_entry_holding_a_word_stamp_does_not_keep(self) -> None:
+        # The .lrc would read back without it, so the frames stay the only copy.
+        lyrics = self.synced((1000, "A lamp <00:01.50>swings"))
         self.assertFalse(lyrics_sidecar.sidecar_keeps(lyrics))
 
 

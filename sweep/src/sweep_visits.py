@@ -21,9 +21,11 @@ import sweep_child
 from sweep_changed import ChangedUnion
 from sweep_ledger import DEFAULT_LANG, LedgerEntry, Outcome, SweepPass
 from lyrics_model import Source
+from lyrics_options import MODE_FIX_TEXT, MODE_RUN
 from sweep_ctrl_c import finished_despite_ctrl_c
 from sweep_owed import dropped_debt, dropped_notice, revisit_only
 from sweep_owed import synced_asked, without_turned_off
+from sweep_fix_text import album_digest
 from sweep_made_run import MadeRun, tally_made_run
 from sweep_outcome import outcome_of
 from sweep_waiting import HoldsRead, no_holds
@@ -37,6 +39,8 @@ class SweepOptions:
     *refetch_implausible* is handed to every child in either pass. *skip* is the
     `sweep_child.SKIP_OPTIONS` each child is given, in their order.
     *owe_earlier_runs* owes the debts of earlier runs too (`sweep_earlier`).
+    *heard_dir*, the transcript store, makes the sweep its fix pass (`pass_of`):
+    each child runs the album tool's ``--mode fix-text`` on it.
     """
 
     lang: str | None
@@ -50,6 +54,7 @@ class SweepOptions:
     refetch_implausible: bool = False
     skip: tuple[str, ...] = ()
     owe_earlier_runs: bool = False
+    heard_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -89,20 +94,41 @@ def lang_of(options: SweepOptions) -> str:
 
 
 def pass_of(options: SweepOptions) -> SweepPass:
-    """The sweep's pass: the refetch pass with ``--refetch-untimed``, else the normal."""
+    """The sweep's pass: the fix with a store, the refetch with its option, or normal."""
+    if options.heard_dir is not None:
+        return SweepPass.FIX_TEXT
     return SweepPass.REFETCH_UNTIMED if options.refetch_untimed else SweepPass.NORMAL
 
 
+def album_mode(options: SweepOptions) -> str:
+    """The album tool's mode each child runs: the fix in the fix pass, else a run."""
+    return MODE_RUN if options.heard_dir is None else MODE_FIX_TEXT
+
+
+def _digest_of(album: Path, outcome: Outcome, options: SweepOptions) -> str | None:
+    """A done fix's digest of *album*'s records as it left them; None for any other."""
+    if options.heard_dir is None or outcome is not Outcome.DONE:
+        return None
+    return album_digest(album, options.heard_dir)
+
+
 def _entry_of(
-    name: str, made: MadeRun, options: SweepOptions, seams: SweepSeams
+    album: Path, name: str, made: MadeRun, options: SweepOptions, seams: SweepSeams
 ) -> LedgerEntry:
-    """The ledger entry of album *name*, from the run its child made."""
+    """The ledger entry of *album*, named *name*, from the run its child made."""
     tally = made.tally
+    outcome = outcome_of(
+        made.result,
+        tally,
+        offline=options.offline,
+        fix_text=options.heard_dir is not None,
+        no_run=made.no_run,
+    )
     return LedgerEntry(
         album=name,
         run_id=made.run_id,
         exit_code=made.result.exit_code,
-        outcome=outcome_of(made.result, tally, offline=options.offline),
+        outcome=outcome,
         time=seams.now().isoformat(),
         counts=None if tally is None else tally.counts,
         refusing_tracks=0 if tally is None else tally.refusing_tracks,
@@ -113,6 +139,7 @@ def _entry_of(
         challenged_providers=() if tally is None else tally.challenged,
         refusals={} if tally is None else tally.refusals,
         retried={} if tally is None else tally.retried,
+        records_digest=_digest_of(album, outcome, options),
     )
 
 
@@ -152,6 +179,8 @@ def _set_up(
         changed_list=None if changed is None else changed.child_list(album, name),
         only=only,
         skip=options.skip,
+        mode=album_mode(options),
+        heard_dir=options.heard_dir,
     )
     return before, only, argv
 
@@ -205,7 +234,7 @@ def visit_album(
             made, tally=without_turned_off(made.tally, options.skip)
         )
     entry, interrupted = finished_despite_ctrl_c(
-        lambda: _entry_of(name, made, options, seams)
+        lambda: _entry_of(album, name, made, options, seams)
     )
     if interrupted:
         return entry, dataclasses.replace(made.result, interrupted=True)

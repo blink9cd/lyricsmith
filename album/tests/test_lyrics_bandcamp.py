@@ -235,6 +235,47 @@ class RefusalTest(_Case):
         self.assertTrue(tried.detail.startswith("HTTP 429"))
 
 
+class GoneTest(_Case):
+    """A Bandcamp page MusicBrainz links that answers 404 or 410 is gone: no match."""
+
+    def ask_through_fetch(self, server: bf.BandcampServer) -> lm.ProviderAttempt:
+        """The one attempt `fetch_lyrics` records for `QUERY` through *server*."""
+        with http_fakes.transport(server):
+            result = lf.fetch_lyrics(
+                QUERY, lm.SidecarState(None), {KEY: self.provider}, deadline_s=30.0
+            )
+        (tried,) = result.attempts
+        return tried
+
+    def test_a_linked_album_page_gone_is_no_match_kept_for_the_album(self) -> None:
+        for status in (404, 410):
+            with self.subTest(status=status):
+                self.provider = self.build()
+                server = self.server(routes(SEARCH, LINKED, page=status))
+                answers = self.ask(server, QUERY, query("Lantern Light"))
+                self.assertEqual(answers, [None, None])
+                self.assertEqual(server.paths()[-1], ALBUM_PATH)
+                self.assertEqual(len(server.requests), 3)
+                self.assertEqual(
+                    list(self.provider._albums.values()), [lmb.Miss.PAGE_GONE]
+                )
+
+    def test_a_gone_album_page_is_recorded_as_empty_not_refused(self) -> None:
+        tried = self.ask_through_fetch(self.server(routes(SEARCH, LINKED, page=404)))
+        self.assertIs(tried.outcome, lm.AttemptOutcome.EMPTY)
+        self.assertNotIn(tried.outcome, lm.REFUSED_OUTCOMES)
+
+    def test_a_gone_artist_site_is_no_match(self) -> None:
+        site = routes(SEARCH, UNLINKED, ARTIST_SITE, ((HOST, "/music"), 404))
+        self.assertEqual(self.ask(self.server(site), QUERY), [None])
+        self.assertEqual(list(self.provider._albums.values()), [lmb.Miss.PAGE_GONE])
+
+    def test_a_forbidden_album_page_is_still_a_refusal(self) -> None:
+        tried = self.ask_through_fetch(self.server(routes(SEARCH, LINKED, page=403)))
+        self.assertIn(tried.outcome, lm.REFUSED_OUTCOMES)
+        self.assertTrue(tried.detail.startswith("HTTP 403"))
+
+
 class ArtistRouteTest(_Case):
     """No release link: the artist's Bandcamp site, its /music page, then the album."""
 

@@ -44,6 +44,7 @@ _MIN_GROUPED_TESTS_BY_FILE = {
     "test_cli_robustness.py": 13,
     "test_cli_prog.py": 2,
     "test_cli_hardening.py": 13,
+    "test_cli_flag_defaults.py": 4,
     "test_live_whisper.py": 1,
     "test_at_located.py": 2,
 }
@@ -57,8 +58,8 @@ def _grouped_suite() -> unittest.TestSuite:
 def _iter_cases(suite: unittest.TestSuite) -> Iterator[unittest.TestCase]:
     """Yield every actual TestCase leaf out of a nested suite tree.
 
-    unittest.TestLoader().discover() nests three deep -- top, per-module,
-    per-class -- not the flat two levels a fixed-depth loop would assume; a
+    unittest.TestLoader().discover() nests three deep (top, per-module,
+    per-class), not the flat two levels a fixed-depth loop would assume; a
     module with more than one test class makes a two-level walk land on inner
     TestSuite objects instead of TestCase instances, miscounting every file.
     Recursing keeps this correct regardless of how many classes a grouped file
@@ -92,7 +93,7 @@ class TestSuiteDiscovery(unittest.TestCase):
                 found.get(filename, 0),
                 floor,
                 f"tests/{filename} yielded {found.get(filename, 0)} tests, expected "
-                f"at least {floor} -- a test may have been removed from it",
+                f"at least {floor}; a test may have been removed from it",
             )
 
 

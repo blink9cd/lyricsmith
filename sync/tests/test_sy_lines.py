@@ -67,6 +67,11 @@ class LineStartsTest(sy_cases.IsolatedCase):
     def test_no_letters_at_all_start_at_zero(self) -> None:
         self.assertEqual(sl.line_starts((), (), 2, 0.5), (0.0, 0.0))
 
+    def test_each_lines_start_frame_is_the_frame_its_start_is_read_from(self) -> None:
+        line_of = (0, 0, NO_LINE, 2, 2)
+        spans = (S(2, 3, 0.5), S(4, 5, 0.5), S(5, 6, 0.5), S(8, 9, 0.5), S(10, 12, 0.5))
+        self.assertEqual(sl.line_start_frames(line_of, spans, 4), (2, 8, 8, 12))
+
     @given(_alignment(), hs.floats(0.001, 1.0))
     def test_fuzz_line_starts(
         self,
@@ -112,6 +117,14 @@ class MeasureTest(sy_cases.IsolatedCase):
         timing = sl.measure(line_of, spans, 3, 0.02)
         self.assertAlmostEqual(timing.confidence, 0.3)
         self.assertEqual(timing.unaligned, 0)
+
+    def test_a_blank_line_is_not_counted_as_a_line_with_nothing_to_align(self) -> None:
+        # Lines 1 and 3 are blank lines between verses, line 4 a section header.
+        line_of = (0, NO_LINE, 2, NO_LINE, 5)
+        spans = (S(0, 1, 0.9), S(1, 2, 0.9), S(4, 5, 0.9), S(5, 6, 0.9), S(9, 10, 0.9))
+        timing = sl.measure(line_of, spans, 6, 0.5, blank=2)
+        self.assertEqual(timing.unaligned, 1)
+        self.assertEqual(timing.starts, (0.0, 2.0, 2.0, 4.5, 4.5, 4.5))
 
     def test_a_low_median_is_low_confidence(self) -> None:
         low = sl.measure((0,), (S(0, 1, 0.1),), 1, 0.02)

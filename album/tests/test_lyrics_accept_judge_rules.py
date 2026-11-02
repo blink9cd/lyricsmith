@@ -111,6 +111,7 @@ class ReasonsTest(fixtures.IsolatedCase):
             lc.RemovedReason.PLACEHOLDER: "placeholder lyrics",
             lc.RemovedReason.PAST_END: "last line 4:10, track 3:55",
             lc.RemovedReason.TOO_MANY_WORDS: "lyrics: 9.1 words per second: 4 max",
+            lc.RemovedReason.WRONG_TEXT: "wrong text removed",
             lc.RemovedReason.OTHER: "an invented odd reason",
         }
         for reason, text in texts.items():

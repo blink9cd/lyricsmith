@@ -40,6 +40,7 @@ from lyrics_model import (
     Source,
     SyncedLyrics,
     parse_lrc,
+    remove_word_stamps,
 )
 from lyrics_placeholder import is_header_line, is_placeholder_lyrics
 from lyrics_records import MAX_LYRICS_CHARS
@@ -57,7 +58,7 @@ DETAIL_SAME_SONG = f"{DETAIL_IMPLAUSIBLE}: same song as a declined timed answer"
 DETAIL_TOO_LARGE = f"too large: over {MAX_LYRICS_CHARS} characters"
 
 #: Genius's "<n> Contributors ... <title> Lyrics" header, on the text's first line. Greedy
-#: to the line's LAST "Lyrics", since a title may hold the word itself. The trade-off,
+#: to the line's last "Lyrics", since a title may hold the word itself. The trade-off,
 #: accepted: were Genius to put the first lyric line on the header's line, and that line
 #: held "Lyrics", it would be stripped with the header.
 _GENIUS_HEADER = re.compile(r"\A\s*[\d,]+\s*Contributors?[^\n]*Lyrics")
@@ -87,7 +88,9 @@ def _partly_timed_words(text: str) -> str | None:
     """Every line's words, in file order, when only some lines of *text* are timed.
 
     None when every line holding words is timed, so the parsed lyrics serve. Header
-    tag lines are dropped; blank lines stay, so stanza breaks survive.
+    tag lines are dropped; blank lines stay, so stanza breaks survive. Holding a timed
+    line makes the text LRC, so an untimed line loses its word stamps as a timed one
+    does (`remove_word_stamps`); one holding none is kept as it is.
     """
     kept: list[str] = []
     partly = False
@@ -97,7 +100,7 @@ def _partly_timed_words(text: str) -> str | None:
         words = _line_words(line)
         if words is None and line.strip():
             partly = True
-        kept.append(line if words is None else words)
+        kept.append(remove_word_stamps(line) if words is None else words)
     return "\n".join(kept) if partly else None
 
 

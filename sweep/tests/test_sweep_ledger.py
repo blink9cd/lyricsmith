@@ -323,10 +323,10 @@ class DoneAlbumsTest(sf.IsolatedCase):
 
 _OUTCOMES = st.sampled_from(list(sl.Outcome))
 _TALLY = st.integers(0, 999)
-#: Counts, every field drawn: the nine whole counts, then the two breakdowns.
+#: Counts, every field drawn: the ten whole counts, then the two breakdowns.
 _COUNTS_DRAWN = st.builds(
     Counts,
-    *[_TALLY] * 9,
+    *[_TALLY] * 10,
     written_by=st.dictionaries(st.sampled_from(list(lc.WrittenCategory)), _TALLY),
     removed_by=st.dictionaries(st.sampled_from(list(lc.RemovedReason)), _TALLY),
 )
@@ -364,6 +364,7 @@ _ENTRIES = st.builds(
     challenged_providers=st.lists(st.sampled_from(PROVIDERS), unique=True).map(tuple),
     refusals=_BY_KEY,
     retried=_BY_REASON,
+    records_digest=st.none() | st.text("0123456789abcdef", min_size=64, max_size=64),
 )
 #: Any JSON value, plausible or not, for a field the parser validates.
 _JSON_VALUES = st.recursive(
@@ -397,6 +398,7 @@ _FIELDS = st.sampled_from(
         "challenged_providers",
         "refusals",
         "retried",
+        "records_digest",
         "elsewhere",
     ]
 )

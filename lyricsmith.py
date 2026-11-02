@@ -1,4 +1,4 @@
-"""lyricsmith: one command for the lyrics tools -- album, sweep, transcribe and sync.
+"""lyricsmith: one command for the lyrics tools: album, sweep, transcribe and sync.
 
 A thin dispatcher. Its parser knows only the command name and --version. Everything after
 the command goes untouched to that tool's main(), whose own parser and companion doc stay

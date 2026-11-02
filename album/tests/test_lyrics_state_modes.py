@@ -46,7 +46,7 @@ def mode_of(path: Path) -> int:
 
 
 class UmaskCase(fixtures.IsolatedCase):
-    """Runs each test under `_UMASK`, restoring the process's own afterwards."""
+    """Runs each test under `_UMASK`, restoring the process's own after it."""
 
     def setUp(self) -> None:
         """Set the umask, and put the old one back when the test ends."""

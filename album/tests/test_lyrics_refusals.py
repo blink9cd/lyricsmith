@@ -2,7 +2,7 @@
 
 A refusal names the provider, the chain step it was asked at and a short detail,
 never a reply body, so the detail is held to one line and capped, and its facts: its
-class, status, retries, asked wait and server. A manifest written before the field
+class, status, retries, asked wait, server and host. A manifest written before the field
 existed reads as no refusal, and an entry written before its facts reads its class from
 its detail; a malformed entry is refused as every other malformed field is. Every value
 here is invented.
@@ -28,7 +28,7 @@ import manifest_builders as mb  # noqa: E402 - import follows the sys.path boots
 _REFUSALS = "refusals"
 R = lrf.Refusal
 #: The facts a refusal gained after its first manifests: absent from an older entry.
-_FACTS = ("reason", "status", "retries", "retry_after_s", "server")
+_FACTS = ("reason", "status", "retries", "retry_after_s", "server", "host")
 
 
 def _after(document: dict[str, object]) -> dict[str, object]:
@@ -110,6 +110,7 @@ class RefusalManifestTest(fixtures.IsolatedCase):
                 "retry_after_s": first.retry_after_s,
                 "server": first.server,
                 "unsent": first.unsent,
+                "host": first.host,
             },
         )
         self.assertEqual(
@@ -202,7 +203,8 @@ class RefusalFactsManifestTest(fixtures.IsolatedCase):
         document = mb.document()
         stored = cast(list[dict[str, object]], _after(document)[_REFUSALS])
         self.assertEqual(
-            [stored[-1][key] for key in _FACTS], ["unreachable", None, 0, None, None]
+            [stored[-1][key] for key in _FACTS],
+            ["unreachable", None, 0, None, None, None],
         )
         lmf.write_manifest(self.tmp, mb.FULL)
         after = lmf.read_manifest(self.tmp).tracks[0].after

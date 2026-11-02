@@ -22,8 +22,9 @@ re-check judge the frame a run would serve now.
 A track whose backed-up frames hold no word, its old lyrics in a sidecar alone, is
 compared with the untimed sidecar the backup copied: its ``.txt``, else a ``.lrc`` with no
 time stamp. A copy that cannot be read (not UTF-8, or past the lyrics cap) makes the
-unlike-backup row a SKIP naming why. A fresh run's own guard compares with the frames
-alone and never comes here.
+unlike-backup row a SKIP naming why, as does a backed-up frame over the lyrics cap,
+the junk a refetch replaced (`lyrics_cap.oversized_reason`). A fresh run's own guard
+compares with the frames alone and never comes here.
 
 Nothing here prints. The helpers `judged_lyrics` and `frames_served` are pure.
 """
@@ -33,6 +34,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+from lyrics_cap import oversized_reason
 from lyrics_inventory import embedded_lyrics
 from lyrics_model import FrameRecord, Lyrics, TrackTags, lyrics_from_frames
 from lyrics_placeholder import unless_placeholder, without_placeholder_frames
@@ -79,9 +81,14 @@ def _backup_lyrics(
     (`Stages.load_before_sidecar`). A placeholder is no lyrics to compare with, so
     placeholder frames are set aside first and a placeholder copy is None
     (`lyrics_placeholder`). A copy the sidecar stage could not read is the
-    unlike-backup row's SKIP, naming why, never a FLAG.
+    unlike-backup row's SKIP, naming why, never a FLAG; so is a backed-up frame over
+    the lyrics cap, which holds no lyrics to compare with.
     """
-    frames = without_placeholder_frames(stages.load_before(run_dir, before))
+    held = stages.load_before(run_dir, before)
+    oversized = oversized_reason(held)
+    if oversized is not None:
+        return None, CheckReason(CheckRule.UNLIKE_BACKUP, f"backed-up {oversized}")
+    frames = without_placeholder_frames(held)
     if embedded_lyrics(frames, lang).best is not None:
         return judged_lyrics(frames, lang, served), None
     try:

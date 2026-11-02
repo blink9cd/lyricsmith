@@ -13,6 +13,9 @@ import at_models
 import at_place
 import at_plan
 import transcribe
+
+# Importable once transcribe has put the project's folders on sys.path.
+import lyricsmith_project
 from at_types import (
     EXIT_FILE_FAILED,
     EXIT_OK,
@@ -24,7 +27,12 @@ from at_types import (
 from tests._cli import CliCase
 from tests._isolation import write_fake_whisper
 
-RE_LINE = "[re:lyricsmith transcribe 0.2.0; whisper.cpp 1.9.5; ggml-large-v3-turbo]"
+#: The label line, naming the project version the label reads from pyproject.toml, so
+#: a release's version bump needs no edit here.
+RE_LINE = (
+    f"[re:lyricsmith transcribe {lyricsmith_project.project_version()}; "
+    "whisper.cpp 1.9.5; ggml-large-v3-turbo]"
+)
 HAND = "[ar:someone]\n[00:01.00] An invented hand-made line.\n"
 #: A name that would clear the screen if it reached the terminal raw.
 HOSTILE = "bad\x1b[2Jname.mp3"

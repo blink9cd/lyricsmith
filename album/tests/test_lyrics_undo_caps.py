@@ -2,9 +2,10 @@
 
 A sidecar beside a track is read under the lyrics cap the run itself reads one under,
 and so is a sidecar copy in the run folder; a frame's export or exact copy is read under
-the manifest's cap. A file past its cap is that track's undo error, refused unread past
-the cap: nothing over it is copied or written back, and the other tracks are still
-undone. Each oversized file here is sparse (`os.truncate`), so it costs no disk. Every
+the manifest's cap, so the backup refuses to write one past it: a frame undo could not
+read back is that track's backup error, and the track is never written. A file past
+its cap is that track's undo error, refused unread past the cap: nothing over it is
+copied or written back, and the other tracks are still undone. Each oversized file here is sparse (`os.truncate`), so it costs no disk. Every
 lyric here is invented.
 """
 
@@ -15,11 +16,13 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
 import lyrics_manifest  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import run_builders as rb  # noqa: E402 - import follows the sys.path bootstrap above
 import tag_builders as tb  # noqa: E402 - import follows the sys.path bootstrap above
@@ -117,6 +120,34 @@ class OversizedUndoTest(rb.UndoCase):
         report = self.undo()
         self.assert_refused(report, second)
         self.assertEqual(rb.snapshot(first), untouched)
+
+
+class BackupFrameCapTest(rb.UndoCase):
+    """A frame whose export or exact copy undo could not read back is not backed up."""
+
+    def assert_backup_error(self, frames: tuple[lm.FrameRecord, ...], cap: int) -> None:
+        """Back up a track of *frames* under *cap*: its backup error, the other's kept."""
+        first = self.track("01.mp3", frames)
+        second = self.track("02.mp3", txt=_TXT)
+        with mock.patch.object(lyrics_manifest, "MAX_MANIFEST_BYTES", cap):
+            manifest = self.back_up(first, second)
+        refused, kept = manifest.tracks
+        assert refused.after is not None and refused.after.error is not None
+        self.assertIsNone(refused.before)
+        self.assertEqual(refused.after.error.exc_type, "FrameTooLargeError")
+        self.assertIn(
+            f"too large to back up: over {cap} bytes", refused.after.error.message
+        )
+        self.assertIsNotNone(kept.before)
+
+    def test_a_frame_export_past_the_cap_is_the_tracks_backup_error(self) -> None:
+        self.assert_backup_error((tb.uslt("a lamp in the boathouse " * 8),), 64)
+
+    def test_an_exact_copy_past_the_cap_is_the_tracks_backup_error(self) -> None:
+        # Timed in MPEG frames, so its LRC export cannot carry it and an exact copy is
+        # written; the cap passes the export and refuses the far larger JSON copy.
+        frames = (tb.sylt((40, "counted"), time_format=tb.MPEG_FRAMES),)
+        self.assert_backup_error(frames, 64)
 
 
 if __name__ == "__main__":

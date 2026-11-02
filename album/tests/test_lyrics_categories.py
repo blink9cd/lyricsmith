@@ -22,6 +22,7 @@ import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_categories as lc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_check as lcheck  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_outcomes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_refetch as lrefetch  # noqa: E402 - import follows the sys.path bootstrap above
 
@@ -116,6 +117,11 @@ class HeldBeforeTest(fixtures.IsolatedCase):
 
 class WrittenCategoryTest(fixtures.IsolatedCase):
     """Each written track's category, from what it held and what it got."""
+
+    def test_another_track_s_text_replaces_an_untimed_one(self) -> None:
+        # A fix's sibling text is no file of the track's own: it is not embedded.
+        written = track(UNTIMED, U, lm.Source.ALBUM_TEXT, origin="02.mp3")
+        self.assertIs(lc.written_category(written), W.UNTIMED_REPLACED)
 
     def test_the_table(self) -> None:
         cases = [
@@ -230,6 +236,12 @@ class RemovedReasonTest(fixtures.IsolatedCase):
         reason = lc.removed_reason(removed(too_many_words_text()))
         self.assertIs(reason, R.TOO_MANY_WORDS)
 
+    def test_a_wrong_text_from_the_fix_s_own_words(self) -> None:
+        reason = lc.removed_reason(removed(lyrics_outcomes.WRONG_TEXT))
+        self.assertIs(reason, R.WRONG_TEXT)
+        # The summary's word is shorter than the recorded one: ``wrong text 2``.
+        self.assertEqual(str(R.WRONG_TEXT), "wrong text")
+
     def test_anything_else_is_other(self) -> None:
         for implausible in ("an invented reason", "", None):
             with self.subTest(implausible=implausible):
@@ -268,14 +280,15 @@ class CountTest(fixtures.IsolatedCase):
     def test_the_lines_in_the_documented_order(self) -> None:
         counts = lc.OutcomeCategories(
             {W.BEFORE_UNKNOWN: 1, W.EMBEDDED: 2, W.NEW_SYNCED: 1, W.UPGRADED: 3},
-            {R.OTHER: 1, R.PAST_END: 1, R.PLACEHOLDER: 1},
+            {R.OTHER: 1, R.WRONG_TEXT: 2, R.PAST_END: 1, R.PLACEHOLDER: 1},
         )
         self.assertEqual(
             lc.format_written(counts),
             "written: upgraded 3, new synced 1, embedded 2, before unknown 1",
         )
         self.assertEqual(
-            lc.format_removed(counts), "removed: placeholder 1, past end 1, other 1"
+            lc.format_removed(counts),
+            "removed: placeholder 1, past end 1, wrong text 2, other 1",
         )
 
     def test_every_category_has_its_place(self) -> None:

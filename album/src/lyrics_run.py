@@ -11,7 +11,8 @@ copying it.
 Discovery, the lock and the deferred interrupt are `lyrics_album`'s; a track's state
 and the outcome built from it are `lyrics_outcomes`'; the manifest written as each
 track finishes is `lyrics_recorder`'s; which frame the check judges is
-`lyrics_judge`'s; the dry run, the check of a finished run and undo are `lyrics_modes`'.
+`lyrics_judge`'s; the dry run, the check of a finished run and undo are `lyrics_modes`';
+the write of an accepted answer is `lyrics_write_answer`'s, which a fix shares.
 
 A run serves a track from what it already holds, its sidecars and then its lyrics
 frames, each kind in its place in the fetch's order (`lyrics_fetch`); an unlabeled
@@ -67,7 +68,6 @@ from functools import partial
 from pathlib import Path
 
 from lyrics_album import AcquireLock, album_lock
-from lyrics_decline import declines
 from lyrics_genre import NO_LYRICS_GENRES, no_lyrics_genre
 from lyrics_held import read_held
 from lyrics_inventory import (
@@ -102,11 +102,12 @@ from lyrics_records import (
     run_folder,
 )
 from lyrics_recorder import RunRecorder
-from lyrics_refetch import afresh_target, remove_implausible, strip_if_changing
+from lyrics_refetch import afresh_target, remove_implausible
 from lyrics_retried import RetriedCounts, no_retries
 from lyrics_sidecar import MACHINE_LABELS, sidecar_keeps
 from lyrics_stages import Stages
 from lyrics_tally import ProviderCount, TrackFetch, tally_providers, track_count
+from lyrics_write_answer import write_answer
 
 #: The sources that are the track's own sidecar, never rewritten when they serve: a
 #: plain sidecar, and each machine-labeled one, whose header lines must survive.
@@ -335,28 +336,12 @@ def _process(
         return not_found(state, tags, lang, kept_sidecar=kept, measure=measure)
     if source is Source.FRAMES:
         return _serve_from_frames(ctx, path, before, lyrics, state, sidecar.lyrics)
-    # Refused before anything changes, labeled as the embed would label it, so an
-    # answer the embed cannot encode leaves the old lyrics whole.
-    state.stage = ErrorStage.EMBED
-    stages.check_encodable(lyrics, lang)
-    duration_s = tags.duration_s
-    if ctx.options.fresh and declines(ctx, path, before, lyrics, duration_s, state):
-        return state.outcome(OutcomeStatus.KEPT_EXISTING)
-    with state.held():
-        if afresh:
-            # Likewise a track the embed foreseeably cannot save, before the strip.
-            state.stage = ErrorStage.EMBED
-            stages.check_writable(path)
-            strip_if_changing(stages, path, tags, lyrics, lang, state)
-        state.stage = ErrorStage.EMBED
-        state.frames_written = stages.write_lyrics(path, lyrics, lang)
-        # A sidecar that served the lyrics stays exactly as it was, a machine label's
-        # header lines included.
-        if source not in _SERVED_FROM_SIDECAR:
-            state.written = stages.write_sidecar(path, lyrics)
-    state.stage = ErrorStage.CHECK
-    state.check = check_written(stages, path, ctx.run_dir, before, lang)
-    return state.accepted()
+    # A sidecar that served the lyrics stays exactly as it was, a machine label's
+    # header lines included.
+    keeps = source in _SERVED_FROM_SIDECAR
+    return write_answer(
+        ctx, path, before, tags, lyrics, state, afresh=afresh, sidecar=not keeps
+    )
 
 
 def _run_track(

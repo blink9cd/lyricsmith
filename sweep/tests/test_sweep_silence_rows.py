@@ -4,7 +4,7 @@ The page is built from the whole list, so its rows are read back by a reader wit
 resume reader's rules: the same header, the same line checks, and the same cut tail
 (rows after the last marker, a last line with no line feed) ignored. Each row's album
 is the one its marker names, its key undone; every other field comes back as written.
-Every album and title here is INVENTED.
+Every album and title here is invented.
 """
 
 from __future__ import annotations

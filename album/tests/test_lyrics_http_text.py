@@ -92,6 +92,50 @@ class TextReplyTest(fixtures.IsolatedCase):
         self.assertEqual(server.requests, [])
 
 
+class AbsentTest(fixtures.IsolatedCase):
+    """A status the caller names in *absent* is None, not a failure; others still raise."""
+
+    GONE = frozenset({404, 410})
+
+    def _get_absent(self, server: bf.BandcampServer) -> lh.TextReply | None:
+        """`get_text` of `START` through *server*, 404 and 410 named absent."""
+        with http_fakes.transport(server):
+            return lh.get_text(
+                lh.cookie_free_session(),
+                START,
+                lm.Source.BANDCAMP,
+                allowed=lmb.is_bandcamp_url,
+                absent=self.GONE,
+            )
+
+    def test_an_absent_status_is_none(self) -> None:
+        for status in sorted(self.GONE):
+            with self.subTest(status=status):
+                server = bf.BandcampServer({(HOST, "/album/x"): status})
+                self.assertIsNone(self._get_absent(server))
+                self.assertEqual(len(server.requests), 1)
+
+    def test_an_absent_status_after_a_redirect_is_none(self) -> None:
+        moved = bf.Redirect(f"https://{OTHER}/album/x")
+        server = bf.BandcampServer(
+            {(HOST, "/album/x"): moved, (OTHER, "/album/x"): 404}
+        )
+        self.assertIsNone(self._get_absent(server))
+        self.assertEqual(len(server.requests), 2)
+
+    def test_a_status_not_absent_still_raises(self) -> None:
+        for status in (403, 503):
+            with self.subTest(status=status):
+                server = bf.BandcampServer({(HOST, "/album/x"): status})
+                with self.assertRaises(lp.HttpStatusError) as caught:
+                    self._get_absent(server)
+                self.assertEqual(caught.exception.status, status)
+
+    def test_a_page_is_still_text(self) -> None:
+        server = bf.BandcampServer({(HOST, "/album/x"): PAGE})
+        self.assertEqual(self._get_absent(server), lh.TextReply(START, PAGE))
+
+
 class RedirectTest(fixtures.IsolatedCase):
     """At most two redirects, each to an https Bandcamp URL."""
 

@@ -23,9 +23,10 @@ and the time. An entry written before the language was recorded reads as the alb
 tool's default language, one written before the pass was recorded as the normal pass,
 and one written before a later field (`sweep_ledger_fields`) as that field's default:
 nothing owed (its `owed_recorded` False, so `sweep_earlier` can tell), no challenge, no
-refusals or retries, no removals or categories counted. Providers are kept by the
-manifest's own values (``Lrclib``), reasons and categories by their words. A restart mark
-(``"kind": "restart"``) records a ``--restart`` and its pass: entries of that pass
+refusals or retries, no removals or categories counted, no records digest. A fix
+entry's ``records_digest`` (`sweep_fix_text`) is written only when it holds one.
+Providers are kept by the manifest's own values (``Lrclib``), reasons and categories by
+their words. A restart mark (``"kind": "restart"``) records a ``--restart`` and its pass: entries of that pass
 before it, in every language, no longer count as done (`done_albums`).
 
 **Rewritten whole, atomically.** An append reads the file, adds one line, and replaces
@@ -78,7 +79,9 @@ from sweep_ledger_fields import (
     member,
     optional,
     owed,
+    records_digest,
 )
+from sweep_ledger_fields import DIGEST_KEY
 from sweep_ledger_fields import field as _field
 from sweep_tally import Counts
 
@@ -107,6 +110,8 @@ class SweepPass(StrEnum):
     NORMAL = "normal"
     #: The album tool run with ``--refetch-untimed``, re-asking untimed-only tracks.
     REFETCH_UNTIMED = "refetch-untimed"
+    #: The album tool's ``--mode fix-text``, fixing the texts a transcript refused.
+    FIX_TEXT = "fix-text"
 
 
 class Outcome(StrEnum):
@@ -141,6 +146,9 @@ class Outcome(StrEnum):
     OFFLINE = "offline"
     #: The album tool would not stop even when killed, so it was left, never reaped.
     ABANDONED = "abandoned"
+    #: The fix pass only: the album tool finished with a track's error (exit 1), a
+    #: wrong text kept rather than removed, so a later fix pass visits it again.
+    TRACK_ERRORS = "track errors"
 
 
 @dataclass(frozen=True)
@@ -155,6 +163,8 @@ class LedgerEntry:
     *owed_recorded* is False for an entry read from a line written before
     ``owed_providers`` was recorded, which says nothing of what it owes
     (`sweep_earlier`); it is never written, since every line written now holds it.
+    *records_digest* is a fix entry's digest of its album's records as the visit left
+    them (`sweep_fix_text.records_digest`); None, and left out of the line, otherwise.
     """
 
     album: str
@@ -172,6 +182,7 @@ class LedgerEntry:
     refusals: ByKey = field(default_factory=dict)
     retried: ByReason = field(default_factory=dict)
     owed_recorded: bool = True
+    records_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -216,6 +227,8 @@ def encode_record(record: LedgerRecord) -> str:
         document = {"kind": _KIND_ALBUM, **asdict(record)}
         del document[_PASS_FIELD]
         del document[_RECORDED_FIELD]
+        if record.records_digest is None:
+            del document[DIGEST_KEY]
         document["outcome"] = record.outcome.value
         document["refusing_providers"] = list(record.refusing_providers)
         document["owed_providers"] = list(record.owed_providers)
@@ -334,6 +347,7 @@ def _entry(document: dict[str, object]) -> LedgerEntry:
         challenged_providers=challenged(document),
         refusals=by_key(document, "refusals"),
         retried=by_reason(document, "retried"),
+        records_digest=records_digest(document),
     )
 
 

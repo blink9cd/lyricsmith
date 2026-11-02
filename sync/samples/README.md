@@ -20,6 +20,10 @@ diff "$OUT/jfk.lrc" samples/jfk.lrc
 | `jfk.txt` | The input: the clip's three lines, untimed |
 | `jfk.lrc` | The expected output: the two label lines, then each line at its start |
 
+The run also needs `whisper-cli` and the transcribe tool's two models, for the sung check.
+The clip holds too few words for that check to judge, so it is timed as before and its row
+says so.
+
 The `.lrc`'s `[re:]` line names the tool's, demucs's and torchaudio's versions, so the `diff`
 reports that line whenever an installed version differs. A stamp may also move by a few
 milliseconds across machines.

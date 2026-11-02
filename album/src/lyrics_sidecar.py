@@ -424,10 +424,11 @@ def sidecar_keeps(lyrics: Lyrics) -> bool:
 
     Untimed lyrics go to ``.txt`` verbatim, so always. Synced lyrics go to ``.lrc``
     one line each, each line's text stripped at both ends, and come back in time
-    order, so only a line holding a line break inside it, or opening with what reads
-    as a time stamp, does not survive. A provider's answer was read from LRC and
-    always does; a SYLT frame's entries may not, so a run asks before writing a
-    sidecar from them.
+    order, so only a line holding a line break inside it or an inline word stamp
+    (which the read removes), or opening with what reads as a time stamp, does not
+    survive. A provider's answer was read from LRC, which leaves no line holding one
+    of those, so it always does; a SYLT frame's entries may not, so a run asks before
+    writing a sidecar from them.
     """
     if isinstance(lyrics, PlainLyrics):
         return True

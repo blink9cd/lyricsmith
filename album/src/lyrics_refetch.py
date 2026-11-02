@@ -36,6 +36,12 @@ refetch options together ask the union of their tracks (`afresh_target`).
 `serving_implausible` is the one rule for whether the serving lyrics are implausible,
 which ``sweep``'s survey asks too, to visit an album whose every track is synced.
 
+Under either refetch option a track holding a lyrics frame over the lyrics cap
+(`oversized_target`, by `lyrics_cap.oversized_reason`) is junk, as a ``.txt`` too large
+to read is: it is asked again as though it held nothing, and when nothing answers every
+lyrics frame goes, its sidecars judged apart as above. Without either option such a
+frame stays the track's error, as reading its lyrics raises.
+
 Every run, not only a refetch, asks again a track whose only lyrics are placeholders
 (`placeholder_target`), in its sidecars, its worded frames or both: such a track holds
 no lyrics, so it is asked as one holding nothing, and when nothing answers each side
@@ -50,6 +56,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from lyrics_cap import oversized_reason
 from lyrics_check import implausible_flag
 from lyrics_frames import new_frames, same_frames
 from lyrics_inventory import TrackLyricsKind, embedded_lyrics, lyrics_kind
@@ -154,20 +161,28 @@ def served_untimed_frames(frames: Sequence[FrameRecord], lang: str) -> Lyrics | 
     return best if best is not None else embedded_lyrics(frames, lang).untimed
 
 
-def _unreadable_target(
-    path: Path, album: Path, frames_implausible: str | None
-) -> RefetchTarget | None:
-    """The untimed-only track whose ``.txt`` cannot be read; None for an unreadable ``.lrc``.
+def _unreadable_side(path: Path, album: Path) -> tuple[str, str | None] | None:
+    """Why the track's ``.txt`` cannot be read, and why it goes if it does; else None.
 
-    One too large to read is implausible; one that is not UTF-8 may hold a song. Its
-    frames are judged alone: *frames_implausible* says why they go, if they do.
+    None when it is the ``.lrc`` that cannot be read. A ``.txt`` too large to read is
+    implausible; one that is not UTF-8 may hold a song, so it stays.
     """
     error = unreadable_txt(path, album)
     if error is None:
         return None
     too_large = isinstance(error, SidecarTooLargeError)
-    sidecar_implausible = str(error) if too_large else None
-    return RefetchTarget(str(error), sidecar_implausible, frames_implausible)
+    return str(error), str(error) if too_large else None
+
+
+def _unreadable_target(
+    path: Path, album: Path, frames_implausible: str | None
+) -> RefetchTarget | None:
+    """The untimed-only track whose ``.txt`` cannot be read; None for an unreadable ``.lrc``.
+
+    Its frames are judged alone: *frames_implausible* says why they go, if they do.
+    """
+    side = _unreadable_side(path, album)
+    return None if side is None else RefetchTarget(*side, frames_implausible)
 
 
 def refetch_target(
@@ -287,6 +302,49 @@ def implausible_target(
     )
 
 
+def _sidecar_side(
+    stages: Stages, album: Path, path: Path, duration_s: float | None
+) -> tuple[str | None, str | None]:
+    """Why the track's ``.txt`` cannot be read, and why its sidecars go, each if so.
+
+    Planned, never normalized: a worded sidecar is judged by `_implausible_reason`
+    over *duration_s*, a ``.txt`` that cannot be read by `_unreadable_side`, and an
+    ``.lrc`` that cannot be read is no evidence, so it stays.
+    """
+    try:
+        sidecar = stages.normalize_sidecars(path, album=album, apply=False).lyrics
+    except UNREADABLE:
+        return _unreadable_side(path, album) or (None, None)
+    worded = sidecar if lyrics_kind(sidecar) is not TrackLyricsKind.NONE else None
+    return None, _implausible_reason(worded, duration_s)
+
+
+def oversized_target(
+    stages: Stages, album: Path, path: Path, tags: TrackTags
+) -> RefetchTarget | None:
+    """The track at *path* when a lyrics frame of its *tags* is over the cap; else None.
+
+    Such a frame is junk to a refetch, as a ``.txt`` too large to read is: every frame
+    goes when nothing answers, its sidecars judged apart (`_sidecar_side`). Whichever
+    option asked, the target is marked an implausible pick, never an untimed-only one:
+    the frame may be a SYLT, and a track marked untimed-only is read as having held no
+    synced lyrics (`lyrics_categories`).
+    """
+    frames_implausible = oversized_reason(tags.frames)
+    if frames_implausible is None:
+        return None
+    unreadable, sidecar_implausible = _sidecar_side(
+        stages, album, path, tags.duration_s
+    )
+    return RefetchTarget(
+        unreadable,
+        sidecar_implausible,
+        frames_implausible,
+        refetch=False,
+        refetch_implausible=True,
+    )
+
+
 def _all_placeholders(held: Sequence[Lyrics]) -> bool:
     """True when *held* is not empty and every one of them is a placeholder."""
     return bool(held) and all(is_placeholder_lyrics(lyrics) for lyrics in held)
@@ -330,12 +388,18 @@ def afresh_target(
 ) -> RefetchTarget | None:
     """The track at *path* as a run asks it afresh, or None when it runs as in any run.
 
-    A stored placeholder first, in every run (`placeholder_target`); then, under
-    *refetch_untimed*, an untimed-only track (`refetch_target`); then, under
-    *refetch_implausible*, one serving implausible lyrics (`implausible_target`). The
-    two options together ask the union of their tracks.
+    Under either option, first a track holding a frame over the lyrics cap
+    (`oversized_target`), which every later rule would refuse to read; then a stored
+    placeholder, in every run (`placeholder_target`); then, under *refetch_untimed*, an
+    untimed-only track (`refetch_target`); then, under *refetch_implausible*, one
+    serving implausible lyrics (`implausible_target`). The two options together ask
+    the union of their tracks.
     """
-    target = placeholder_target(stages, album, path, tags, lang)
+    target = None
+    if refetch_untimed or refetch_implausible:
+        target = oversized_target(stages, album, path, tags)
+    if target is None:
+        target = placeholder_target(stages, album, path, tags, lang)
     if target is None and refetch_untimed:
         target = refetch_target(stages, album, path, tags, lang)
     if target is None and refetch_implausible:

@@ -17,7 +17,7 @@ way, as separate shell words: an album run's or strip's undo line and a compare'
 lines start `lyricsmith album`, a sweep's undo lines `lyricsmith album` and its resume
 line `lyricsmith sweep`, a sync run's embed lines `lyricsmith album` and its model fetch
 line `lyricsmith sync`. lyricsmith installs no `lyricsmith` command yet (see
-"Installing"), so the `lyricsmith album`, `lyricsmith sweep` and `lyricsmith sync` in
+"Install"), so the `lyricsmith album`, `lyricsmith sweep`, and `lyricsmith sync` in
 those notices and hints stand for the `python lyricsmith.py album`, `python lyricsmith.py
 sweep` and `python lyricsmith.py sync` invocations. Run alone, each tool names its entry
 file, as one shell word whatever its name holds.
@@ -34,15 +34,23 @@ file, as one shell word whatever its name holds.
 `python lyricsmith.py COMMAND --help` prints that tool's own help: the same text its entry file
 prints, apart from the program name.
 
-## Installing
+## Install
 
-lyricsmith needs Python 3.12 or later. From a clone of this repository:
+Needs Python 3.12 or newer. Install into a virtual
+environment, because Homebrew and Debian Python refuse a
+system-wide `pip install`:
 
 ```bash
+python3 -m venv .venv
+# shellcheck source=/dev/null # the activate script exists only once the line above has run
+source .venv/bin/activate
 pip install .
 ```
 
-installs the pinned dependencies `album` and `sweep` need, listed under
+The commands below assume the venv is active, so `python`
+is the venv's interpreter.
+
+`pip install .` installs the pinned dependencies `album` and `sweep` need, listed under
 `[project].dependencies` in `pyproject.toml`. To run the test suites as well, install the
 `test` extra, which adds the one test-only library:
 
@@ -51,20 +59,34 @@ pip install ".[test]"
 ```
 
 Either way, installing puts no code anywhere and installs no `lyricsmith` command: run
-`python lyricsmith.py COMMAND` from the clone's root folder, with the interpreter you
-installed into.
+`python lyricsmith.py COMMAND` from the clone's root folder.
 
 - **`transcribe`** needs none of those dependencies, but it needs whisper.cpp's
-  `whisper-cli` program and its two models, fetched once with
+  `whisper-cli` program and its two models, about 1.6 GB together, fetched once with
   `python transcribe/transcribe.py --mode fetch-models`, as `transcribe/transcribe.md`
   ("Prerequisites") describes.
-- **`sync`** needs its PyTorch stack, its whole resolved set pinned in
+- **`sync`** needs PyTorch and the rest of its stack, the whole resolved set pinned in
   `sync/requirements-sync.txt`, so that installing the other tools never pulls PyTorch in:
-  `pip install -r sync/requirements-sync.txt`. The `sync` extra in `pyproject.toml` names
-  only sync's five direct imports, at that file's versions, and is not the install route.
-  It needs ffmpeg on `PATH` too, and its three
-  models, fetched once with `python sync/sync.py --mode fetch-models`, as `sync/sync.md`
-  ("Prerequisites") describes.
+  `pip install -r sync/requirements-sync.txt`. PyTorch is a large download, and its size
+  depends on the platform. The `sync` extra in `pyproject.toml` names only sync's five
+  direct imports, at that file's versions, and is not the install route. sync also needs
+  ffmpeg on `PATH` and its three models, about 460 MB together, fetched once with
+  `python sync/sync.py --mode fetch-models`. It checks each track's words against its
+  vocals before timing them, so it needs `transcribe`'s `whisper-cli` and two models as
+  well. `sync/sync.md` ("Prerequisites") describes each.
+
+### A Genius key
+
+The Genius step needs an access token of your own. Without one, that step is skipped with
+a notice and every other source is still asked. To get one, sign in to Genius, create an
+API client at <https://genius.com/api-clients>, and generate its client access token.
+Then set it in the `GENIUS_ACCESS_TOKEN` environment variable, or put it in a config file
+readable by you alone, as `album/album.md` ("The config file") describes:
+
+```toml
+[genius]
+access_token = "<your Genius client access token>"
+```
 
 The tools import seven shared libraries, each a folder at the top of this repository:
 `stdio_utf8`, `help_formatter`, `run_lock`, `bounded_run`, `library_walk`, `html_page`

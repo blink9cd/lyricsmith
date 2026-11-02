@@ -84,7 +84,7 @@ def prune_mode(args: argparse.Namespace, wiring: Wiring, prog: str) -> int:
     album = lyrics_album.resolve_album(args.album)
     refuse_unsafe_delete()
     report = lyrics_prune.prune_album(
-        album, dry_run=args.dry_run, acquire_lock=wiring.acquire_lock
+        album, dry_run=bool(args.dry_run), acquire_lock=wiring.acquire_lock
     )
     with lyrics_exit.report_writes():
         print(format_prune(report, album=album, prog=prog), end="", file=sys.stdout)

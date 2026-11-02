@@ -2,7 +2,7 @@
 
 The key's sources, where the first hit wins:
 
-1. ``--config <file>``, when given, and then it is the ONLY source: a file that is
+1. ``--config <file>``, when given, and then it is the only source: a file that is
    missing, unreadable, malformed or holds none of a key, a ``[no_lyrics]`` table and a
    ``[musicbrainz]`` table raises `ConfigError` rather than falling back to another key
    the operator did not name.

@@ -13,6 +13,7 @@ reads a file or prints.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import fields
 from typing import TypeVar
@@ -33,11 +34,15 @@ ByReason = dict[Source, dict[Refusal, int]]
 ByKey = RefusalCounts
 #: The ``counts`` numbers added after the ledger was first written, each read as 0
 #: from a line that predates it.
-_LATER_COUNTS = frozenset({"no_lyrics_expected", "silent", "removed"})
+_LATER_COUNTS = frozenset({"no_lyrics_expected", "silent", "removed", "withheld"})
 #: The ``counts`` maps added later, each read as empty from a line that predates it.
 _LATER_MAPS = frozenset({"written_by", "removed_by"})
 #: The providers an owed album may name: those ``--only-providers`` can.
 _ASKABLE = frozenset(PROVIDERS)
+#: A fix entry's records digest: a SHA-256 in lower-case hex.
+_DIGEST = re.compile(r"[0-9a-f]{64}")
+#: The records digest's key in a line.
+DIGEST_KEY = "records_digest"
 
 
 class LedgerLineError(ValueError):
@@ -163,3 +168,17 @@ def owed(document: Mapping[str, object]) -> tuple[Source, ...]:
 def challenged(document: Mapping[str, object]) -> tuple[Source, ...]:
     """The ``challenged_providers`` list; none from a line written before it was recorded."""
     return _askable(document, "challenged_providers")
+
+
+def records_digest(document: Mapping[str, object]) -> str | None:
+    """The ``records_digest`` field; none from a line without it, a fix's before it.
+
+    Present, it must be a SHA-256 in lower-case hex, never null: only a fix entry
+    holds one (`sweep_fix_text.records_digest`).
+    """
+    if DIGEST_KEY not in document:
+        return None
+    value = field(document, DIGEST_KEY, str)
+    if not _DIGEST.fullmatch(value):
+        raise LedgerLineError(f"{DIGEST_KEY} is not a SHA-256")
+    return value

@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import sy_cases  # noqa: E402 - puts the tool, src/ and album's fixtures on the path
 import sy_text as tx  # noqa: E402 - import follows the sys.path bootstrap above
+from lyrics_heard import WORD_LETTERS  # noqa: E402 - follows the bootstrap above
 
 settings.register_profile(
     "fuzz_gate_deterministic",
@@ -49,12 +50,32 @@ class TokenizeTest(sy_cases.IsolatedCase):
         self.assertNotIn(0, tokens.line_of)
         self.assertEqual(list(tokens.ids), _ids("LA"))
 
+    def test_the_words_letters_are_the_models_letters(self) -> None:
+        # album reads a line's words; each of their letters must have a label here.
+        self.assertEqual(WORD_LETTERS, frozenset(tx.LABELS[tx.SEPARATOR + 1 :]))
+
     def test_the_separator_between_lines_belongs_to_no_line(self) -> None:
         tokens = tx.tokenize(["a", "b"])
         self.assertEqual(list(tokens.line_of), [0, tx.NO_LINE, 1])
 
-    def test_text_lines_strip_and_drop_blank_lines(self) -> None:
-        self.assertEqual(tx.text_lines(" one \n\n  \ntwo\r\n"), ("one", "two"))
+    def test_text_lines_strip_and_keep_interior_blank_lines_as_empty(self) -> None:
+        # A run of two blank lines between verses stays two; one of whitespace is empty.
+        self.assertEqual(tx.text_lines(" one \n\n  \ntwo\r\n"), ("one", "", "", "two"))
+
+    def test_text_lines_drop_leading_and_trailing_blank_lines(self) -> None:
+        self.assertEqual(tx.text_lines("\n \t\none\n\ntwo\n\n  \n"), ("one", "", "two"))
+        self.assertEqual(tx.text_lines(" \n\n"), ())
+
+    @given(hs.lists(hs.sampled_from(["", " ", "\t", "la", " lo "]), max_size=10))
+    def test_text_lines_keep_every_line_between_the_first_and_last_sung(
+        self, raw: list[str]
+    ) -> None:
+        lines = tx.text_lines("\n".join(raw))
+        stripped = [line.strip() for line in raw]
+        self.assertEqual([line for line in lines if line], [s for s in stripped if s])
+        sung = [index for index, line in enumerate(stripped) if line]
+        expected = stripped[sung[0] : sung[-1] + 1] if sung else []
+        self.assertEqual(list(lines), expected)
 
     @given(hs.lists(hs.text(), max_size=12))
     def test_fuzz_tokenize(self, lines: list[str]) -> None:

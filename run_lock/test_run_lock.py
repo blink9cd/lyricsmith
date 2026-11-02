@@ -124,7 +124,9 @@ def _load_as_windows(locking: Callable[[int, int, int], None]) -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     with (
-        mock.patch.dict(sys.modules, {"msvcrt": fake}),
+        # The module itself joins too, for the import only: a dataclass in it would read
+        # sys.modules[cls.__module__] while its body runs. patch.dict removes both after.
+        mock.patch.dict(sys.modules, {"msvcrt": fake, spec.name: module}),
         mock.patch.object(sys, "platform", "win32"),
     ):
         spec.loader.exec_module(module)

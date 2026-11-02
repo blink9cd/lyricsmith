@@ -4,7 +4,7 @@ A resumed pass appends to the list it is given, skipping the albums it marks don
 cutting off an unfinished album's lines. Ctrl-C keeps every finished album and prints
 the command that resumes. Silence takes only --library, --limit and --resume, and every
 other mode refuses --resume. ffmpeg is `silence_fixtures.FakeFfmpeg`, so nothing here
-starts a process. Every album and title here is INVENTED.
+starts a process. Every album and title here is invented.
 """
 
 from __future__ import annotations

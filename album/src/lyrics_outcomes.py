@@ -184,6 +184,10 @@ class TrackState:
     silence_failed: str | None = None
     #: What the track held before anything changed (`lyrics_held`), once read.
     held_kind: HeldBefore | None = None
+    #: The album-relative track a fix took the accepted text from, when it did.
+    origin: str | None = None
+    #: Why a fix kept the wrong text it would have removed, when it did.
+    withheld: str | None = None
 
     @contextmanager
     def held(self) -> Iterator[None]:
@@ -288,6 +292,8 @@ class TrackState:
             peak_dbfs=self.peak_dbfs,
             silence_failed=self.silence_failed,
             held=self.held_kind,
+            origin=self.origin,
+            withheld=self.withheld,
         )
 
     def _check_at(self, status: OutcomeStatus) -> CheckResult | None:
@@ -381,6 +387,11 @@ _DECLINED = "new answer"
 NO_REFETCH_ANSWER = "no answer to the refetch"
 #: Why a track a run found nothing for lost its old lyrics, after ``removed``.
 IMPLAUSIBLE = "implausible old lyrics"
+#: What a fix records, and shows as the row, for a track whose wrong untimed text it
+#: removed, no sung text found (`lyrics_fix_step`): the words its reason is read by.
+WRONG_TEXT = "wrong text removed"
+#: How a fix's kept track whose removal it withheld names it, after ``kept existing``.
+REMOVAL_WITHHELD = "removal withheld"
 
 
 def _split_genre(
@@ -407,8 +418,15 @@ def describe_status(outcome: TrackOutcome) -> str:
     removal left named after it as a kept track names it. A kept track's genre FLAG
     shows in brackets last, after a declined answer or a refetch's note
     (``kept existing (FLAG: lyrics on a no-lyrics genre (<genre>))``). A silent track
-    names its peak, and a miss whose silence check failed names why.
+    names its peak, and a miss whose silence check failed names why. A fix's removal
+    of a wrong text says so alone (``wrong text removed``): it was not implausible.
+    One a fix withheld on an album that looks spoken says why
+    (``kept existing: removal withheld, spoken word (genre Comedy)``).
     """
+    if outcome.status is OutcomeStatus.REMOVED and outcome.implausible == WRONG_TEXT:
+        return WRONG_TEXT
+    if outcome.status is OutcomeStatus.KEPT_EXISTING and outcome.withheld is not None:
+        return f"{outcome.status}: {REMOVAL_WITHHELD}, {outcome.withheld}"
     if outcome.status is OutcomeStatus.REMOVED:
         why = f" ({outcome.implausible})" if outcome.implausible is not None else ""
         # A .txt left in place because it is not UTF-8 is named as a kept row names
@@ -436,6 +454,17 @@ def describe_status(outcome: TrackOutcome) -> str:
     return f"{outcome.status}: {_DECLINED} {reasons}{marked}"
 
 
+def shown_source(outcome: TrackOutcome) -> str:
+    """*outcome*'s source as a row or a progress line shows it.
+
+    A fix's text taken from another track names that track after it
+    (``another track's text from 02 Song.mp3``).
+    """
+    if outcome.origin is not None:
+        return f"{outcome.source} from {outcome.origin}"
+    return str(outcome.source)
+
+
 def describe_outcome(outcome: TrackOutcome) -> str:
     """One progress line's verdict: the kind and source, or what happened instead.
 
@@ -444,9 +473,9 @@ def describe_outcome(outcome: TrackOutcome) -> str:
     if outcome.error is not None:
         return outcome.error.summary()
     if outcome.status is OutcomeStatus.WRITTEN:
-        return f"{outcome.kind} ({outcome.source})"
+        return f"{outcome.kind} ({shown_source(outcome)})"
     if outcome.status is OutcomeStatus.UNCHANGED:
-        return f"{outcome.status} {outcome.kind} ({outcome.source})"
+        return f"{outcome.status} {outcome.kind} ({shown_source(outcome)})"
     if outcome.status is OutcomeStatus.STRIPPED:
         return f"{outcome.status} ({describe_removed(outcome)})"
     return describe_status(outcome)

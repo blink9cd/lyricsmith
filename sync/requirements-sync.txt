@@ -1,6 +1,6 @@
 # The sync tool's child-process stack, every package exact. Install into the interpreter
-# that runs lyricsmith: pip install -r requirements-sync.txt. Kept out of lyricsmith's
-# pyproject extras so the gate's interpreter and CI never install PyTorch.
+# that runs lyricsmith: pip install -r requirements-sync.txt. Pinned here rather than
+# among lyricsmith's dependencies, so installing the other tools never pulls PyTorch in.
 anyio==4.15.1
 click==8.5.0
 demucs==4.1.0

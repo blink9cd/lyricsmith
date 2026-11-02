@@ -122,6 +122,14 @@ class RecordedSourceTests(fixtures.IsolatedCase):
         write_run(self.album, _NEW, entry(_TRACK, _ST.WRITTEN, _SRC.FRAMES))
         self.assertEqual(self.source(), _SRC.LRCLIB)
 
+    def test_another_track_s_text_makes_it_unrecorded(self) -> None:
+        # The provider that wrote the wrong text no longer decides the track.
+        write_run(self.album, _OLD, entry(_TRACK, _ST.WRITTEN, _SRC.LRCLIB))
+        write_run(self.album, _NEW, entry(_TRACK, _ST.WRITTEN, _SRC.ALBUM_TEXT))
+        records = lp.recorded_sources(self.album, lmf.read_manifest)
+        self.assertIsNone(records.source_of(_TRACK))
+        self.assertIn(_TRACK, records.decided)
+
     def test_stripped_and_removed_make_it_unrecorded(self) -> None:
         for status in (_ST.STRIPPED, _ST.REMOVED):
             with self.subTest(status=status):

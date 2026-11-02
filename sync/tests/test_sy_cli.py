@@ -71,10 +71,8 @@ class CliTest(sy_cases.IsolatedCase):
     def setUp(self) -> None:
         super().setUp()
         self.enterContext(mock.patch.object(sy_models, "MANIFEST", TINY))
-        self.models = self.tmp / "models"
-        self.models.mkdir()
-        for model in TINY:
-            (self.models / model.name).write_bytes(DATA)
+        self.models = sy_cases.model_folder(self.tmp / "models", TINY)
+        self.whisper = sy_cases.invented_whisper_models(self, self.tmp / "whisper")
         self.album = self.tmp / "Album"
         track = fixtures.TrackSpec("01 A.mp3", seconds=1.0, txt="\n".join(LINES))
         (self.audio,) = fixtures.build_album(self.album, (track,))
@@ -97,9 +95,10 @@ class CliTest(sy_cases.IsolatedCase):
         seams: sy_modes.Seams | None = None,
         prog: str | None = DISPATCHED,
     ) -> tuple[int, str, str]:
-        """main() on *argv* plus the model folder, named *prog*; its code and output."""
+        """main() on *argv* plus the model folders, named *prog*; its code and output."""
         out, err = io.StringIO(), io.StringIO()
         full = [*argv, "--model-dir", str(self.models)]
+        full += ["--whisper-model-dir", str(self.whisper)]
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = sync.main(
                 full, seams=seams or self.seams(), opener=fake_opener(DATA), prog=prog
@@ -112,7 +111,7 @@ class CliTest(sy_cases.IsolatedCase):
 
     def test_the_parser_uses_the_shared_formatter(self) -> None:
         self.assertIs(
-            sync.build_parser(self.models).formatter_class,
+            sync.build_parser(self.models, self.whisper).formatter_class,
             help_formatter.RawNoneHidingFormatter,
         )
 
@@ -322,7 +321,7 @@ class CliTest(sy_cases.IsolatedCase):
         self.assertRegex(out, r"time +01 A\.mp3")
 
     def test_the_parser_defaults_to_the_shared_extensions(self) -> None:
-        default = sync.build_parser(self.models).get_default("extensions")
+        default = sync.build_parser(self.models, self.whisper).get_default("extensions")
         self.assertEqual(default, DEFAULT_EXTENSIONS)
 
     def test_a_dry_run_with_a_setup_problem_exits_2(self) -> None:
@@ -442,7 +441,7 @@ class CliTest(sy_cases.IsolatedCase):
 
     def test_run_mode_refuses_a_missing_path_itself(self) -> None:
         options = Options(
-            "run", None, frozenset({"mp3"}), False, False, False, self.models
+            "run", None, frozenset({"mp3"}), False, False, False, self.models, self.tmp
         )
         with self.assertRaises(SetupError):
             sy_modes.run_mode(

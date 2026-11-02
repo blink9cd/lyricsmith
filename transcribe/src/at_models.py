@@ -175,7 +175,7 @@ HTTPS_OPENER = urllib.request.build_opener(HttpsOnlyRedirectHandler)
 def https_open(
     url: str, *, timeout: float
 ) -> Response:  # pragma: no cover - the real network seam; tests inject an opener
-    """Open *url* through `HTTPS_OPENER`; the final URL is checked again afterwards."""
+    """Open *url* through `HTTPS_OPENER`; the final URL is checked again once it opens."""
     return cast(Response, HTTPS_OPENER.open(url, timeout=timeout))
 
 

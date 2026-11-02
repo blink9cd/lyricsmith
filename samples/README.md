@@ -19,7 +19,7 @@ there.
 
 A check that the dispatcher reaches each tool, which changes nothing. Run it from this
 project's root folder with Python 3.12 or later and the project's dependencies installed
-(`README.md`, "Installing"):
+(`README.md`, "Install"):
 
 ```bash
 python lyricsmith.py --version

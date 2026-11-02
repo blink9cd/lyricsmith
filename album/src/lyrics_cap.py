@@ -5,7 +5,9 @@ and, here, a lyrics frame the track already holds. A frame over it is no lyrics 
 `refuse_oversized_frames` raises `FrameTooLargeError` naming its kind, as reading a
 sidecar over the cap raises, so a run records the track's error and takes nothing from
 it, and no sidecar is written from it. The frame is still read and backed up verbatim,
-so a strip or an undo handles it as any other.
+so a strip or an undo handles it as any other. A refetch judges such a frame junk
+instead (`lyrics_refetch`), by `oversized_reason`, and ``sweep``'s survey counts the
+track by what it holds beside the frame (`within_cap`).
 
 A leaf below `lyrics_model`, which calls it from its one frame conversion, so it imports
 nothing of the tool's at run time but the error. Pure: no I/O, no printing.
@@ -39,10 +41,23 @@ def frame_chars(frame: FrameRecord) -> int:
     return sum(len(entry.text) + 1 for entry in payload)
 
 
-def refuse_oversized_frames(frames: Iterable[FrameRecord]) -> None:
-    """Raise `FrameTooLargeError` when any of *frames* is over `MAX_LYRICS_CHARS`."""
+def oversized_reason(frames: Iterable[FrameRecord]) -> str | None:
+    """Why the first of *frames* over `MAX_LYRICS_CHARS` is refused; None when none is."""
     for frame in frames:
         if frame_chars(frame) > MAX_LYRICS_CHARS:
-            raise FrameTooLargeError(
+            return (
                 f"a {frame.kind} frame is too large: over {MAX_LYRICS_CHARS} characters"
             )
+    return None
+
+
+def within_cap(frames: Iterable[FrameRecord]) -> tuple[FrameRecord, ...]:
+    """Those of *frames* at or under `MAX_LYRICS_CHARS`, in their stored order."""
+    return tuple(frame for frame in frames if frame_chars(frame) <= MAX_LYRICS_CHARS)
+
+
+def refuse_oversized_frames(frames: Iterable[FrameRecord]) -> None:
+    """Raise `FrameTooLargeError` when any of *frames* is over `MAX_LYRICS_CHARS`."""
+    reason = oversized_reason(frames)
+    if reason is not None:
+        raise FrameTooLargeError(reason)

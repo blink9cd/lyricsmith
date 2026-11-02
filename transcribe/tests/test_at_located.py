@@ -7,6 +7,7 @@ put on the path: that folder is a package named `tests`, the name this folder an
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -21,10 +22,17 @@ _CHECKS = Path(__file__).resolve().parents[2] / "album" / "tests" / "located_che
 
 def _load_checks() -> ModuleType:
     """The album tool's import checks, loaded from their file."""
-    found = importlib.util.spec_from_file_location(_CHECKS.stem, _CHECKS)
+    # A name of its own, registered for the import only: a dataclass in the file reads
+    # sys.modules[cls.__module__] while its body runs, and its bare stem could be a real one.
+    unique = f"_at_{_CHECKS.stem}"
+    found = importlib.util.spec_from_file_location(unique, _CHECKS)
     assert found is not None and found.loader is not None  # a .py file always has one
     module = importlib.util.module_from_spec(found)
-    found.loader.exec_module(module)
+    sys.modules[unique] = module
+    try:
+        found.loader.exec_module(module)
+    finally:
+        del sys.modules[unique]
     return module
 
 

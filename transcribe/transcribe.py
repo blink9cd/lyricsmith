@@ -159,11 +159,16 @@ def build_parser(model_dir: Path, prog: str | None = None) -> argparse.ArgumentP
     parser.add_argument(
         "--overwrite",
         action="store_true",
+        # None, not False, when omitted, here and on every on/off flag below: the
+        # formatter hides a None default, and a flag's help already says what giving
+        # it does. Each reader that keeps the value makes it a bool first.
+        default=None,
         help="replace a .lrc this tool wrote; never a hand-made or provider one [transcribe]",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
+        default=None,
         help="print the setup check and each file's planned action; run nothing [transcribe]",
     )
     parser.add_argument(
@@ -271,8 +276,8 @@ def resolve_options(namespace: argparse.Namespace) -> Options:
         path=path,
         extensions=extensions,
         output_dir=_absolute(namespace.output_dir),
-        overwrite=namespace.overwrite,
-        dry_run=namespace.dry_run,
+        overwrite=bool(namespace.overwrite),
+        dry_run=bool(namespace.dry_run),
         language=namespace.language,
         model=(namespace.model or model_dir / at_models.WHISPER_MODEL_NAME).absolute(),
         vad_model=(

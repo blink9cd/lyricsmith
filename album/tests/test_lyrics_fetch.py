@@ -172,6 +172,17 @@ class PlainStepsTest(fixtures.IsolatedCase):
         )
         self.assertEqual(result.lyrics, lm.PlainLyrics("The tide turns\nand waits"))
 
+    def test_a_partly_stamped_answer_drops_word_stamps_from_every_line(self) -> None:
+        # Holding a timed line makes the answer LRC, so its untimed lines lose their
+        # word stamps too; a line holding none keeps its spacing exactly.
+        answer = "[00:01]The tide\n<00:02>and  <00:03>waits\nby  the wall\n"
+        table = fixtures.chain_table({step_key(LRCLIB, U): fixtures.answering(answer)})
+        result = lf.fetch_lyrics(
+            PLAIN_TITLE_QUERY, NO_SIDECAR, table, deadline_s=DEADLINE_S
+        )
+        expected = "The tide\nand waits\nby  the wall"
+        self.assertEqual(result.lyrics, lm.PlainLyrics(expected))
+
     def test_genius_is_used_before_tekstowo_and_its_text_cleaned(self) -> None:
         raw = (
             "12 ContributorsThe Keeper Counts Lyrics"

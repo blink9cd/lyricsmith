@@ -9,6 +9,7 @@ wins, and older entries for it are ignored:
 | --- | --- |
 | ``undone``, or no ``after`` block | nothing |
 | ``written`` / ``unchanged`` from a provider | that provider |
+| ``written`` / ``unchanged`` from another track's text (a fix's) | unrecorded |
 | ``stripped`` / ``removed`` | unrecorded: whatever the track holds came later |
 | anything else (kept existing, not found, error, a sidecar or frames write) | nothing |
 
@@ -70,6 +71,8 @@ def _decision(entry: ManifestTrack) -> tuple[bool, Source | None]:
         return False, None
     if after.status in _PROVIDER_WRITES and after.source in PROVIDER_SOURCES:
         return True, after.source
+    if after.status in _PROVIDER_WRITES and after.source is Source.ALBUM_TEXT:
+        return True, None
     return after.status in _REMOVALS, None
 
 

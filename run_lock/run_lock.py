@@ -32,8 +32,8 @@ import sys
 from pathlib import Path
 from types import TracebackType
 
-# An ``if``, not a module-level assert: python_gate type-checks this file as win32, linux and
-# darwin, and an assert would hide every name below it from the other platforms' passes.
+# An ``if``, not a module-level assert: mypy can check this file once per platform (win32,
+# linux and darwin), and an assert would hide every name below it from the other passes.
 if sys.platform == "win32":
     import msvcrt  # pragma: only-on win32
 

@@ -4,27 +4,27 @@
 without changing one file. The gate's verdict cache folds in only the variables
 that `[tool.gate_cache] env` in this project's pyproject.toml declares. An undeclared one
 lets a verdict recorded with it unset be replayed into a run with it set, and the
-reverse -- an online sweep replaying an offline PASS never runs the live tests at all.
+reverse: an online sweep replaying an offline PASS never runs the live tests at all.
 
 So this test fails on a read nothing declares, or one whose name it cannot resolve, which
 stops a new switch landing without its declaration, and on a declaration nothing reads,
 which stops a renamed switch leaving a stale name behind. It sits under album only because
 a test must live under one tool; it scans the whole project, sweep and transcribe too.
 
-One narrow class is held apart: a CREDENTIAL. Folding a token's value into a persisted
+One narrow class is held apart: a credential. Folding a token's value into a persisted
 cache key would write a secret's fingerprint to disk, and a credential never changes which
 tests run, since every suite that could reach one clears it first. So `_CREDENTIAL_READS`
 names each such variable with its reason. The read stays visible to this scan rather than
-hidden from it: an exempted name must still be read somewhere OUTSIDE the tests, so a
+hidden from it: an exempted name must still be read somewhere outside the tests, so a
 stale exemption fails just as a stale declaration does, and a test's own read cannot keep
 one alive. An exempted name may never be declared as well.
 
 A second narrow class is held apart for the same two checks: a variable every suite that
-could read it REDIRECTS (a config, state or model directory pointed under a temporary
+could read it redirects (a config, state or model directory pointed under a temporary
 HOME), so its value never reaches a verdict, while declaring it would only split the cache
 by machine layout.
 
-A third class is the inverse of the first two: a variable only a TEST reads, to confirm
+A third class is the inverse of the first two: a variable only a test reads, to confirm
 the isolation it set itself. Its value is the test's own, so it reaches no verdict, and
 `PATH` is one the gate cache's own documentation rejects declaring. So `_ISOLATION_READS`
 names each with its reason, and holds it to the opposite check: it must be read in the
@@ -57,10 +57,10 @@ _MAPPINGS = frozenset({"os.environ", "environ"})
 # by finding nothing on either side.
 _KNOWN_SWITCH = "LYRICSMITH_OFFLINE"
 # The vendored shared libraries, skipped by the scan below. Their environment use is
-# test-fixture plumbing -- a pid-file path a test exports for one child and reads back --
+# test-fixture plumbing (a pid-file path a test exports for one child and reads back),
 # not a switch that changes which tests run, so declaring it would say something untrue.
 # Excluded by name rather than by listing the tool folders, so a tool folder added later
-# is scanned by default -- the safe direction.
+# is scanned by default, which is the safe direction.
 _VENDORED = frozenset(
     {
         "stdio_utf8",

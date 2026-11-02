@@ -1,7 +1,7 @@
 """The project's own manifest, read once for every tool: its version and its libraries.
 
 Every entry file reaches this module at one fixed place, its own folder directly under
-the project root, by putting that folder FIRST on ``sys.path`` from the entry file's
+the project root, by putting that folder first on ``sys.path`` from the entry file's
 own location (a single ``parents`` index, never a walk), so no same-named module can
 stand in for this one; it then calls `add_shared_libraries`.
 That appends each folder the project's ``pyproject.toml`` names under

@@ -23,13 +23,14 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from functools import partial
 from enum import StrEnum
 from pathlib import Path
 
 from lyrics_check import MIN_SIMILARITY, normalize_words, shown, word_similarity
-from lyrics_fetch import CHAIN, Heard, attempt, skips
+from lyrics_fetch import CHAIN, Heard, SameSong, attempt, skips
 from lyrics_inventory import TrackLyricsKind, lyrics_kind
 from lyrics_model import (
     REFUSED_OUTCOMES,
@@ -137,21 +138,39 @@ def ask_each(
     (an LRC provider for a query by file name), is left out. One that found nothing is
     asked once more with the title's trailing groups stripped, as the chain retries.
     """
+    return tuple(answers_in_turn(query, providers, deadline_s))
+
+
+def answers_in_turn(
+    query: TrackQuery,
+    providers: ProviderTable,
+    deadline_s: float,
+    *,
+    duration_s: float | None = None,
+) -> Iterator[Asked]:
+    """`ask_each`'s answers one at a time, each provider asked only when it is drawn.
+
+    So a caller that stops at the first answer it takes, as a fix does
+    (`lyrics_fix_step`), asks no provider after it. Each answer is judged against the
+    track's *duration_s* as a run judges one, and against the songs declined far past
+    the end earlier in the same draw (`lyrics_fetch.SameSong`); compare passes no
+    duration, so it judges by neither.
+    """
     heard: Heard = {}
-    asked: list[Asked] = []
+    songs = SameSong()
     for source in COMPARED:
         provider = providers.get(_key(source))
         if provider is None or skips(provider, query):
             continue
-        lyrics, tried = attempt(_key(source), provider, query, deadline_s, heard)
+        asked = partial(attempt, heard=heard, duration_s=duration_s, same_song=songs)
+        lyrics, tried = asked(_key(source), provider, query, deadline_s)
         again = stripped_retry(query, (tried.outcome,), found=lyrics is not None)
         if again is not None:
-            lyrics, tried = attempt(_key(source), provider, again, deadline_s, heard)
-        asked.append((source, lyrics, tried))
-    return tuple(asked)
+            lyrics, tried = asked(_key(source), provider, again, deadline_s)
+        yield source, lyrics, tried
 
 
-def _judged_lyrics(
+def judged_lyrics(
     stages: Stages, album: Path, path: Path, tags: TrackTags, lang: str
 ) -> Lyrics | None:
     """The untimed lyrics a run would serve the track from; None when it is not judged.
@@ -161,7 +180,8 @@ def _judged_lyrics(
     placeholder. The sidecars are planned first, as a run's sidecar stage reads them
     before anything else: one that cannot be read, ``.lrc`` or ``.txt``, raises that
     stage's own error, which the caller records at the sidecar stage. The refetch's
-    test would call an unreadable ``.lrc`` not untimed-only and so not judged.
+    test would call an unreadable ``.lrc`` not untimed-only and so not judged. A fix
+    reads a track's stored untimed text by the same rule (`lyrics_fix_text`).
     """
     sidecar = stages.normalize_sidecars(path, album=album, apply=False).lyrics
     if refetch_target(stages, album, path, tags, lang) is None:
@@ -269,7 +289,7 @@ def compare_track(
     try:
         tags = stages.read_tags(path)
         stage = ErrorStage.SIDECAR
-        lyrics = _judged_lyrics(stages, album, path, tags, lang)
+        lyrics = judged_lyrics(stages, album, path, tags, lang)
         if lyrics is None:
             return ComparedTrack(rel, CompareVerdict.NOT_JUDGED)
         stage = ErrorStage.FETCH

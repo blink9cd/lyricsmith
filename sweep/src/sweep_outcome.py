@@ -29,13 +29,20 @@ def _finished_codes() -> frozenset[int]:
 
 
 def outcome_of(
-    result: sweep_child.ChildResult, tally: AlbumTally | None, *, offline: bool
+    result: sweep_child.ChildResult,
+    tally: AlbumTally | None,
+    *,
+    offline: bool,
+    fix_text: bool = False,
+    no_run: bool = False,
 ) -> Outcome:
     """How a visit ended, from the child's result and its run's tally, if read.
 
     A run made *offline* asked no provider, so it is never done. Of a finished run,
     one whose providers only refused is refused, one still owing a provider answers
-    is owed, and only one owing none is done.
+    is owed, and only one owing none is done. A *fix_text* visit ends past its
+    refusals by its fix's own rule (`_fix_outcome`); *no_run* says its child made
+    no run at all.
     """
     if result.exit_code is None:
         return Outcome.ABANDONED
@@ -52,6 +59,8 @@ def outcome_of(
         return Outcome.RECORD_NOT_WRITTEN
     if result.exit_code not in _finished_codes():
         return Outcome.FAILED
+    if fix_text:
+        return _fix_outcome(result, tally, no_run=no_run)
     if tally is None:
         return Outcome.NO_RECORD
     if offline:
@@ -59,6 +68,31 @@ def outcome_of(
     if tally.refused:
         return Outcome.REFUSED
     return Outcome.OWED if tally.owed else Outcome.DONE
+
+
+def _fix_outcome(
+    result: sweep_child.ChildResult, tally: AlbumTally | None, *, no_run: bool
+) -> Outcome:
+    """How a fix that finished ended: done only when no guard kept a wrong text.
+
+    A fix exiting 0 that made no run had nothing to fix, and is done. A fix whose
+    providers only refused is refused, as a run is. A fix is never owed: an owed
+    album is revisited naming only its debt, which would leave every other provider
+    out on purpose, and the album tool removes a wrong text when no provider it meant
+    to ask failed, so such a revisit could remove a text those others never answered
+    for. A fix exiting 1 kept a wrong text, so it is retried whole; one exiting 0 is
+    done, whatever its tally owes, since each of its texts was written or removed, or
+    its removal withheld on an album that looks spoken, which no retry would change.
+    """
+    if tally is None:
+        if no_run and result.exit_code == lyrics_exit.EXIT_OK:
+            return Outcome.DONE
+        return Outcome.NO_RECORD
+    if tally.refused:
+        return Outcome.REFUSED
+    if result.exit_code == lyrics_exit.EXIT_OK:
+        return Outcome.DONE
+    return Outcome.TRACK_ERRORS
 
 
 def next_streak(streak: int, outcome: Outcome) -> int:
