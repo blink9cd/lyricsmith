@@ -79,6 +79,18 @@ class OptionsTest(IsolatedCase):
         self.assertIsNone(options.path)
         self.assertEqual(options.extensions, frozenset())
 
+    def test_the_whisper_model_to_fetch_is_for_fetch_models_only(self) -> None:
+        large = at_models.LARGE_MODEL_NAME
+        options = self.resolve("--mode", "fetch-models", "--whisper-model", large)
+        self.assertEqual(options.whisper_model, large)
+        default = self.resolve("--mode", "fetch-models").whisper_model
+        self.assertEqual(default, at_models.WHISPER_MODEL_NAME)
+        with self.assertRaises(at_types.SetupError) as caught:
+            self.resolve("--path", str(self.audio), "--whisper-model", large)
+        self.assertIn(
+            "--whisper-model is for --mode fetch-models", str(caught.exception)
+        )
+
     def test_the_parser_uses_the_shared_formatter(self) -> None:
         self.assertIs(
             transcribe.build_parser(self.model_dir).formatter_class,

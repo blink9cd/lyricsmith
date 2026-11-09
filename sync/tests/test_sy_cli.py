@@ -10,7 +10,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import unittest
 from collections.abc import Sequence
 from pathlib import Path
 from unittest import mock
@@ -74,6 +73,9 @@ class CliTest(sy_cases.IsolatedCase):
         self.models = sy_cases.model_folder(self.tmp / "models", TINY)
         self.whisper = sy_cases.invented_whisper_models(self, self.tmp / "whisper")
         self.album = self.tmp / "Album"
+        # The album folder as a printed command names it: quoted as a POSIX shell
+        # reads it on every host, which a temporary folder on Windows needs.
+        self.shown_album = shlex.quote(str(self.album))
         track = fixtures.TrackSpec("01 A.mp3", seconds=1.0, txt="\n".join(LINES))
         (self.audio,) = fixtures.build_album(self.album, (track,))
         self.embed = RecordingAlbum()
@@ -171,7 +173,7 @@ class CliTest(sy_cases.IsolatedCase):
         self.assertRegex(out, r"timed +01 A\.mp3")
         self.assertIn("interrupted: timing stopped with 1 track(s) left", out)
         self.assertIn(
-            f"embed them: lyricsmith album --offline --album {self.album}", out
+            f"embed them: lyricsmith album --offline --album {self.shown_album}", out
         )
         self.assertFalse(second.with_suffix(".lrc").exists())
 
@@ -195,7 +197,7 @@ class CliTest(sy_cases.IsolatedCase):
         self.assertEqual(self.embed.calls, [])
         self.assertIn("interrupted: timing stopped with 0 track(s) left", out)
         self.assertIn(
-            f"embed them: lyricsmith album --offline --album {self.album}", out
+            f"embed them: lyricsmith album --offline --album {self.shown_album}", out
         )
 
     def test_ctrl_c_once_a_tracks_lrc_is_in_place_keeps_its_album_command(
@@ -216,7 +218,7 @@ class CliTest(sy_cases.IsolatedCase):
         self.assertIn("interrupted: timing stopped with 0 track(s) left", out)
         self.assertIn("\ntimed 1\n", out)
         self.assertIn(
-            f"embed them: lyricsmith album --offline --album {self.album}", out
+            f"embed them: lyricsmith album --offline --album {self.shown_album}", out
         )
 
     def test_ctrl_c_once_a_retimed_lrc_is_in_place_keeps_its_album_command(
@@ -238,7 +240,7 @@ class CliTest(sy_cases.IsolatedCase):
         self.assertIn("interrupted: timing stopped with 0 track(s) left", out)
         self.assertIn("\nre-timed 1\n", out)
         self.assertIn(
-            f"embed them: lyricsmith album --offline --album {self.album}", out
+            f"embed them: lyricsmith album --offline --album {self.shown_album}", out
         )
 
     def test_ctrl_c_beside_an_old_stamps_only_lrc_names_no_album_command(
@@ -341,12 +343,12 @@ class CliTest(sy_cases.IsolatedCase):
         self.assertIs(machine_label(text), Source.MACHINE_TIMED)
         self.assertRegex(out, r"timed +01 A\.mp3")
         self.assertIn(
-            f"embed them: lyricsmith album --offline --album {self.album}", out
+            f"embed them: lyricsmith album --offline --album {self.shown_album}", out
         )
 
     def test_run_alone_its_commands_name_the_entry_files(self) -> None:
         _, out, _ = self.main("--path", str(self.album), prog=None)
-        self.assertIn(f"embed them: album.py --offline --album {self.album}", out)
+        self.assertIn(f"embed them: album.py --offline --album {self.shown_album}", out)
         (self.models / "two.bin").write_bytes(b"x")
         _, _, err = self.main("--path", str(self.album), prog=None)
         folder = shlex.quote(str(self.models))
@@ -384,7 +386,9 @@ class CliTest(sy_cases.IsolatedCase):
         self.assertIn("embed not done (in a library but not in an Artist", out)
         loose_track = library / "Artist" / "01 L.mp3"
         track = shlex.quote(str(loose_track))
-        self.assertIn(f"--album {loose_track.parent} --track {track}", out)
+        self.assertIn(
+            f"--album {shlex.quote(str(loose_track.parent))} --track {track}", out
+        )
 
     def test_a_refused_embed_exits_1(self) -> None:
         self.embed.code = 2
@@ -470,18 +474,6 @@ class CliTest(sy_cases.IsolatedCase):
         self.assertRegex(out, r"time +01 A\.flac")
         self.assertIn("another track already claims 01 A.lrc", out)
 
-    @unittest.skipIf(sy_cases.IS_ROOT, "root reads a mode-000 folder")
-    def test_an_unreadable_folder_is_a_failed_row(self) -> None:
-        locked = self.album / "Locked"
-        locked.mkdir()
-        locked.chmod(0)
-        self.addCleanup(locked.chmod, 0o700)
-        code, out, _ = self.main("--path", str(self.album))
-        self.assertEqual(code, 1)
-        self.assertRegex(out, r"ERROR text +Locked")
-        self.assertIn("could not read the folder", out)
-        self.assertRegex(out, r"timed +01 A\.mp3")
-
     def test_a_dry_run_on_a_missing_path_plans_nothing(self) -> None:
         code, out, _ = self.main("--path", str(self.tmp / "gone"), "--dry-run")
         self.assertEqual(code, 2)
@@ -494,6 +486,6 @@ class CliTest(sy_cases.IsolatedCase):
         self.assertEqual((seams.album_entry, seams.which, seams.embed), expected)
 
     def test_an_unnamed_walk_error_names_the_root(self) -> None:
-        row = sy_modes._unreadable_folder(OSError("refused"), self.album)
+        row = sy_modes.unreadable_folder(OSError("refused"), self.album)
         expected = (self.album, "could not read the folder: refused")
         self.assertEqual((row.audio, row.detail), expected)

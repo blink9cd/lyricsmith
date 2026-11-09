@@ -130,6 +130,20 @@ class TextReply:
     text: str
 
 
+class RedirectRefused(ProviderError):
+    """A text GET's redirect *allowed* refused: `REDIRECT_REFUSED`, naming its target.
+
+    *location* is the refused ``Location`` resolved against the page that answered it,
+    or None when the redirect named none, so a caller can read one refused target as
+    an answer of its own (`lyrics_bandcamp`); every other caller reads a `ProviderError`.
+    """
+
+    def __init__(self, source: Source, location: str | None) -> None:
+        """Refuse *source*'s redirect to *location*, None when it named no target."""
+        super().__init__(f"{source} redirect refused", detail=REDIRECT_REFUSED)
+        self.location = location
+
+
 #: What a policy tells of each retry it makes: the provider asked, the refusal's class.
 OnRetry = Callable[[Source, Refusal], None]
 
@@ -430,8 +444,9 @@ def get_text(
 
     *url* and each ``Location`` must pass *allowed* before it is asked. Never retried.
     A *url* it refuses is `URL_REFUSED`; a ``Location`` it refuses, or none given, is
-    `REDIRECT_REFUSED`. A status in *absent*, on whichever hop answers it, is None, as
-    `get_json`'s is; with no *absent* every error status raises.
+    `RedirectRefused` (`REDIRECT_REFUSED`), naming it. A status in *absent*, on
+    whichever hop answers it, is None, as `get_json`'s is; with no *absent* every error
+    status raises.
     """
     if not allowed(url):
         raise ProviderError(f"{source} URL refused", detail=URL_REFUSED)
@@ -439,7 +454,7 @@ def get_text(
     current: str | None = url
     for _hop in range(max_redirects + 1):
         if current is None or not allowed(current):
-            raise ProviderError(f"{source} redirect refused", detail=REDIRECT_REFUSED)
+            raise RedirectRefused(source, current)
         with _send(session, current, {}, source, passes, redirects=True) as reply:
             if reply.status_code in passes:
                 return None

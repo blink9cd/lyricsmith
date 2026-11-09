@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import at_label
 import at_modes
@@ -51,6 +51,15 @@ class TypesTest(IsolatedCase):
     def test_shown_path_is_relative_under_the_root_and_whole_outside_it(self) -> None:
         root = Path("/music")
         inside = at_types.shown_path(root / "a" / "b.mp3", root)
-        self.assertEqual(inside, Path("a/b.mp3"))
+        self.assertEqual(inside, "a/b.mp3")
         outside = at_types.shown_path(Path("/else/c.mp3"), root)
-        self.assertEqual(outside, Path("/else/c.mp3"))
+        self.assertEqual(outside, str(Path("/else/c.mp3")))
+
+    def test_shown_path_reads_with_slashes_on_every_host(self) -> None:
+        # A Windows path, as a run there names it: the row reads a/b.mp3, as the
+        # album tool's manifests name a track, while a path outside stays the host's.
+        root = PureWindowsPath("C:/music")
+        inside = at_types.shown_path(root / "a" / "b.mp3", root)
+        self.assertEqual(inside, "a/b.mp3")
+        outside = at_types.shown_path(PureWindowsPath("D:/else/c.mp3"), root)
+        self.assertEqual(outside, "D:\\else\\c.mp3")

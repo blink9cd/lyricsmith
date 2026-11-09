@@ -30,6 +30,9 @@ checked field by field, its path against the file's own name too, so a malformed
 oversized or misplaced file is an error the caller reports, never a record it trusts.
 
 `STORE_ERRORS` is everything a store call raises when it cannot keep or read a record.
+`read_named` and `scan_records` are its read and list loops with the record's own parse
+handed in, and `ESCAPE_GROWTH`, `FINGERPRINT` and `NUL` its forms, so the hearing log
+(`lyrics_hearing_log`), a store of the same shape, reads its files as this one does.
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, TypeVar
@@ -54,12 +57,12 @@ MAX_TRANSCRIPT_BYTES: Final = 64 * 1024
 #: largest of the platforms the tools run on.
 MAX_PATH_BYTES: Final = 4096
 #: The most JSON one stored byte can grow to: a control character is ``\u0000``.
-_ESCAPE_GROWTH: Final = 6
+ESCAPE_GROWTH: Final = 6
 #: Room for the field names, the punctuation and the fingerprint.
 _ENVELOPE_BYTES: Final = 256
 #: The largest file a record can be, so the largest one read.
 MAX_RECORD_BYTES: Final = (
-    _ESCAPE_GROWTH * (MAX_TRANSCRIPT_BYTES + MAX_PATH_BYTES) + _ENVELOPE_BYTES
+    ESCAPE_GROWTH * (MAX_TRANSCRIPT_BYTES + MAX_PATH_BYTES) + _ENVELOPE_BYTES
 )
 #: Everything a store call raises when it cannot keep or read a record: an OS error, a
 #: write that did not read back, or a record refused (a `ValueError`, as a file that
@@ -69,12 +72,14 @@ STORE_ERRORS: Final = (OSError, ReadBackError, ValueError)
 RECORD_SUFFIX: Final = ".json"
 _RECORD_NAME: Final = re.compile(r"[0-9a-f]{64}\.json")
 #: A fingerprint: a SHA-256 in lower-case hex.
-_FINGERPRINT: Final = re.compile(r"[0-9a-f]{64}")
+FINGERPRINT: Final = re.compile(r"[0-9a-f]{64}")
 _FIELDS: Final = frozenset({"path", "fingerprint", "transcript"})
 #: The byte no file system path holds.
-_NUL: Final = b"\x00"
+NUL: Final = b"\x00"
 #: What the store's files are called in an error.
 _WHAT: Final = "transcript"
+#: A parsed record: what a store's parse makes of a file's bytes and name.
+_R = TypeVar("_R")
 #: How a transcript is measured: a lone surrogate counts as the bytes it takes, never
 #: an error.
 _TRANSCRIPT_ERRORS: Final = "surrogatepass"
@@ -132,9 +137,9 @@ def _checked(record: HeardRecord) -> HeardRecord:
     encoded = os.fsencode(record.path)
     if len(encoded) > MAX_PATH_BYTES:
         raise RecordRefusedError(f"a {_WHAT} record's path over {MAX_PATH_BYTES} bytes")
-    if _NUL in encoded:
+    if NUL in encoded:
         raise RecordRefusedError(f"a {_WHAT} record's path holds a NUL byte")
-    if not _FINGERPRINT.fullmatch(record.fingerprint):
+    if not FINGERPRINT.fullmatch(record.fingerprint):
         raise RecordRefusedError(f"a {_WHAT} record's fingerprint is not a SHA-256")
     if not transcript_fits(record.transcript):
         raise RecordRefusedError(f"a transcript over {MAX_TRANSCRIPT_BYTES} bytes")
@@ -174,10 +179,53 @@ def _parsed(data: bytes, name: str) -> HeardRecord:
     return record
 
 
-def _read_file(path: Path) -> HeardRecord:
-    """The record in the file *path*; raises one of `STORE_ERRORS` when it is not one."""
-    data = lyrics_files.read_regular(path, MAX_RECORD_BYTES + 1, follow=False)
-    return _parsed(data, path.name)
+def _read_parsed(path: Path, max_bytes: int, parse: Callable[[bytes, str], _R]) -> _R:
+    """*parse* of the file *path*'s bytes and name; raises one of `STORE_ERRORS`.
+
+    Read no further than *max_bytes* and one byte, so *parse* can tell an oversized file,
+    and never through a link or anything but a regular file.
+    """
+    data = lyrics_files.read_regular(path, max_bytes + 1, follow=False)
+    return parse(data, path.name)
+
+
+def read_named(
+    path: Path, max_bytes: int, parse: Callable[[bytes, str], _R]
+) -> _R | None:
+    """*parse* of the record file *path*, as a store reads one; none when it is missing.
+
+    *parse* takes the file's bytes and its name and raises a `ValueError` for a file
+    that is not a record; a file that cannot be read raises one of `STORE_ERRORS`.
+    """
+    try:
+        return _read_parsed(path, max_bytes, parse)
+    except FileNotFoundError:
+        return None
+
+
+def scan_records(
+    folder: Path, max_bytes: int, parse: Callable[[bytes, str], _R], what: str
+) -> tuple[list[_R], list[str]]:
+    """Every record file in *folder* by *parse*, in name order, and each problem.
+
+    Only a name of a record's form (sixty-four hex digits and ``.json``) is read, so a
+    write's leftover temporary file is not a record. A file that raises one of
+    `STORE_ERRORS` is a problem naming it, the store's *what* and the error's type; the
+    rest are still read. No *folder* is no records; one that is not a folder raises its
+    `OSError`.
+    """
+    records: list[_R] = []
+    problems: list[str] = []
+    if not folder.exists():
+        return records, problems
+    for path in sorted(folder.iterdir()):
+        if not _RECORD_NAME.fullmatch(path.name):
+            continue
+        try:
+            records.append(_read_parsed(path, max_bytes, parse))
+        except STORE_ERRORS as error:
+            problems.append(f"{path}: {what} record ignored ({type(error).__name__})")
+    return records, problems
 
 
 def read_record(folder: Path, track: Path) -> HeardRecord | None:
@@ -187,10 +235,7 @@ def read_record(folder: Path, track: Path) -> HeardRecord | None:
     (a link under its name included), is over `MAX_RECORD_BYTES`, or is not a record of
     *track* in every field.
     """
-    try:
-        return _read_file(record_path(folder, track))
-    except FileNotFoundError:
-        return None
+    return read_named(record_path(folder, track), MAX_RECORD_BYTES, _parsed)
 
 
 def list_records(folder: Path) -> Listing:
@@ -201,17 +246,7 @@ def list_records(folder: Path) -> Listing:
     as a record is a problem naming it and the error's type, and the rest are still
     listed. A *folder* that is not a folder raises its `OSError`.
     """
-    if not folder.exists():
-        return Listing((), ())
-    records: list[HeardRecord] = []
-    problems: list[str] = []
-    for path in sorted(folder.iterdir()):
-        if not _RECORD_NAME.fullmatch(path.name):
-            continue
-        try:
-            records.append(_read_file(path))
-        except STORE_ERRORS as error:
-            problems.append(f"{path}: {_WHAT} record ignored ({type(error).__name__})")
+    records, problems = scan_records(folder, MAX_RECORD_BYTES, _parsed, _WHAT)
     return Listing(
         tuple(sorted(records, key=lambda record: record.path)), tuple(problems)
     )

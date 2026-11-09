@@ -37,8 +37,9 @@ from test_sy_cli import (  # noqa: E402 - the black-box suite's own stand-ins
 )
 
 fixtures = sy_cases.fixtures
-#: Where the stand-in PATH lookup finds every program.
-BIN = Path("/usr/bin")
+#: Where the faked PATH search finds each program: absolute on the host, as the
+#: program run must be.
+BIN = sy_cases.host_absolute("/usr/bin")
 
 
 class CliHeardTest(sy_cases.IsolatedCase):

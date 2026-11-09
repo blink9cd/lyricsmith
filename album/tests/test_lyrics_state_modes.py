@@ -5,7 +5,9 @@ provider refusals, so no other account on the machine may read them. A state fol
 that already exists keeps its mode: only what a tool makes is made private. A write's
 mode is a keyword of the atomic write itself, defaulting to the old mode, so files
 beside the library are unchanged. Each test sets the umask it measures under and works
-in its own folder, with HOME and the XDG folders redirected there.
+in its own folder, with HOME and the XDG folders redirected there. On Windows the mode
+bits mean nothing, so each mode check skips there, and a portable twin beside it holds
+what the same calls write, on every host.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import datetime as dt
 import os
 import stat
 import sys
+import unittest
 from pathlib import Path
 from unittest import mock
 
@@ -57,16 +60,19 @@ class UmaskCase(fixtures.IsolatedCase):
 class WriteModeTest(UmaskCase):
     """The atomic write takes the new file's mode, defaulting to the old one."""
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_a_write_keeps_the_default_mode_unless_asked(self) -> None:
         target = self.tmp / "beside-the-library.txt"
         lyrics_files.replace_atomically(target, b"kept")
         self.assertEqual(mode_of(target), _OPEN_FILE)
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_a_replace_asked_for_a_mode_lands_with_it(self) -> None:
         target = self.tmp / "state.json"
         lyrics_files.replace_atomically(target, b"private", mode=_PRIVATE_FILE)
         self.assertEqual(mode_of(target), _PRIVATE_FILE)
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_a_confirmed_write_narrows_an_open_file_it_replaces(self) -> None:
         target = self.tmp / "state.json"
         target.write_bytes(b"old")
@@ -75,10 +81,20 @@ class WriteModeTest(UmaskCase):
         self.assertEqual(mode_of(target), _PRIVATE_FILE)
         self.assertEqual(target.read_bytes(), b"new")
 
+    def test_a_write_asked_for_a_mode_still_lands_its_bytes(self) -> None:
+        # The portable half of the mode tests above: the bytes, on any host.
+        target = self.tmp / "state.json"
+        target.write_bytes(b"old")
+        lyrics_files.write_confirmed(target, b"new", mode=_PRIVATE_FILE)
+        self.assertEqual(target.read_bytes(), b"new")
+        lyrics_files.replace_atomically(target, b"private", mode=_PRIVATE_FILE)
+        self.assertEqual(target.read_bytes(), b"private")
+
 
 class StateFolderTest(UmaskCase):
     """`make_state_folder` makes each missing folder private and leaves the rest."""
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_every_folder_it_makes_is_private(self) -> None:
         folder = self.tmp / "state" / "lyricsmith" / "cooldown"
         lyrics_state.make_state_folder(folder)
@@ -86,6 +102,7 @@ class StateFolderTest(UmaskCase):
             with self.subTest(folder=made.name):
                 self.assertEqual(mode_of(made), _PRIVATE_FOLDER)
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_an_existing_folder_keeps_its_mode(self) -> None:
         existing = self.tmp / "state" / "lyricsmith"
         existing.mkdir(parents=True)
@@ -94,12 +111,25 @@ class StateFolderTest(UmaskCase):
         self.assertEqual(mode_of(existing), _OPEN_FOLDER)
         self.assertEqual(mode_of(existing / "sweep"), _PRIVATE_FOLDER)
 
+    def test_each_missing_folder_is_made_and_an_existing_one_kept(self) -> None:
+        # The portable half of the mode tests: what is made, on any host.
+        existing = self.tmp / "state" / "lyricsmith"
+        existing.mkdir(parents=True)
+        (existing / "kept.txt").write_bytes(b"kept")
+        lyrics_state.make_state_folder(existing / "sweep" / "cooldown")
+        self.assertTrue((existing / "sweep" / "cooldown").is_dir())
+        self.assertEqual((existing / "kept.txt").read_bytes(), b"kept")
+        target = existing / "elsewhere" / "record.json"
+        lyrics_state.write_state_file(target, b"{}")
+        self.assertEqual(target.read_bytes(), b"{}")
+
     def test_a_file_in_the_way_is_an_error(self) -> None:
         blocker = self.tmp / "lyricsmith"
         blocker.write_bytes(b"not a folder")
         with self.assertRaises(FileExistsError):
             lyrics_state.make_state_folder(blocker)
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_a_state_file_is_written_private(self) -> None:
         target = self.tmp / "state" / "lyricsmith" / "record.json"
         lyrics_state.write_state_file(target, b"{}")
@@ -110,6 +140,7 @@ class StateFolderTest(UmaskCase):
 class CooldownModeTest(UmaskCase):
     """The cool-down and breaker files, and the folder holding them, are private."""
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_a_cooldown_file_and_its_folders_are_private(self) -> None:
         path = lcd.cooldown_path(os.environ, lyrics_model.Source.TEKSTOWO)
         lcd.write_cooldown(path, _NOW, "HTTP 429")
@@ -117,15 +148,26 @@ class CooldownModeTest(UmaskCase):
         self.assertEqual(mode_of(path.parent), _PRIVATE_FOLDER)
         self.assertEqual(mode_of(path.parent.parent), _PRIVATE_FOLDER)
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_a_breaker_file_is_private(self) -> None:
         path = lbk.breaker_path(os.environ, lyrics_model.Source.LRCLIB)
         lbk.write_breaker(path, lbk.BreakerState(run=1))
         self.assertEqual(mode_of(path), _PRIVATE_FILE)
 
+    def test_the_cooldown_and_breaker_files_are_written(self) -> None:
+        # The portable half of the mode tests: each file lands, on any host.
+        cooling = lcd.cooldown_path(os.environ, lyrics_model.Source.TEKSTOWO)
+        lcd.write_cooldown(cooling, _NOW, "HTTP 429")
+        breaker = lbk.breaker_path(os.environ, lyrics_model.Source.LRCLIB)
+        lbk.write_breaker(breaker, lbk.BreakerState(run=1))
+        self.assertTrue(cooling.is_file())
+        self.assertTrue(breaker.is_file())
+
 
 class AcceptRecordsModeTest(UmaskCase, rb.UndoCase):
     """Accept's records root, its own folder and each record are private."""
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_the_records_and_their_folders_are_private(self) -> None:
         mp3 = self.track("01.mp3", txt="A verse the album held\n")
         rb.simulate_run(
@@ -144,6 +186,7 @@ class AcceptRecordsModeTest(UmaskCase, rb.UndoCase):
             with self.subTest(record=record.name):
                 self.assertEqual(mode_of(record), _PRIVATE_FILE)
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_the_records_folder_is_made_private_by_its_own_mkdir(self) -> None:
         # With every chmod a no-op, only the mkdir's own mode can make it 0o700, so
         # the folder is never there with the umask's wider mode, even for a moment.
@@ -152,20 +195,44 @@ class AcceptRecordsModeTest(UmaskCase, rb.UndoCase):
             folder = lar.make_records_folder(root, self.album, _NOW)
         self.assertEqual(mode_of(folder), _PRIVATE_FOLDER)
 
+    def test_each_record_is_written_into_its_folder(self) -> None:
+        # The portable half of the mode tests: the records land, on any host.
+        mp3 = self.track("01.mp3", txt="A verse the album held\n")
+        rb.simulate_run(
+            self.album,
+            self.back_up(mp3, started=run_fakes.STARTED),
+            lyrics_model.PlainLyrics("A verse the run wrote\n"),
+        )
+        root = lar.records_root(os.environ)
+        folder = lar.make_records_folder(root, self.album, _NOW)
+        lar.write_records(folder, self.album, laj.read_contents(self.album).runs)
+        self.assertEqual(folder.parent, root)
+        self.assertEqual(len(list(folder.iterdir())), 2)
+
 
 class ExclusiveDirModeTest(UmaskCase):
     """`make_exclusive_dir` takes the new folder's mode, defaulting to mkdir's own."""
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_a_folder_asked_for_a_mode_is_made_with_it(self) -> None:
         folder = lrf.make_exclusive_dir(self.tmp, "base", mode=_PRIVATE_FOLDER)
         self.assertEqual(mode_of(folder), _PRIVATE_FOLDER)
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_a_taken_name_gets_the_mode_too(self) -> None:
         (self.tmp / "base").mkdir()
         folder = lrf.make_exclusive_dir(self.tmp, "base", mode=_PRIVATE_FOLDER)
         self.assertEqual(folder.name, "base-2")
         self.assertEqual(mode_of(folder), _PRIVATE_FOLDER)
 
+    def test_a_taken_name_asked_for_a_mode_takes_the_next_one(self) -> None:
+        # The portable half of the mode tests: the name, on any host.
+        (self.tmp / "base").mkdir()
+        folder = lrf.make_exclusive_dir(self.tmp, "base", mode=_PRIVATE_FOLDER)
+        self.assertEqual(folder.name, "base-2")
+        self.assertTrue(folder.is_dir())
+
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_a_folder_keeps_the_default_mode_unless_asked(self) -> None:
         folder = lrf.make_exclusive_dir(self.tmp, "base")
         self.assertEqual(mode_of(folder), _OPEN_FOLDER)

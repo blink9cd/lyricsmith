@@ -49,7 +49,9 @@ READY = (
     and shutil.which(sy_modes.FFMPEG) is not None
     and WHISPER_CLI is not None
     and not sy_models.model_problems(MODELS)
-    and not sy_models.model_problems(WHISPER_MODELS, at_models.MANIFEST)
+    and not sy_models.model_problems(
+        WHISPER_MODELS, at_models.run_models(at_models.WHISPER_MODEL_NAME)
+    )
 )
 TEXT = (
     "And so my fellow Americans,\n"

@@ -27,18 +27,16 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 
 import sweep  # noqa: E402 - import follows the sys.path bootstrap above
 import album  # noqa: E402 - import follows the sys.path bootstrap above
+import run_lock  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_child  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_made_run  # noqa: E402 - import follows the sys.path bootstrap above
+import denied_fixtures as dn  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_ledger as sl  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_lock  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_run  # noqa: E402 - import follows the sys.path bootstrap above
 
 _REFUSED = sf.Script(outcomes=sf.REFUSED, exit_code=album.EXIT_TRACK_ERRORS)
-# os.geteuid exists only off Windows, so it is looked up; root can list a mode-000
-# folder, so the unreadable-folder test skips under it.
-_GETEUID = getattr(os, "geteuid", None)
-_IS_ROOT = _GETEUID is not None and _GETEUID() == 0
 
 
 @dataclass(frozen=True)
@@ -159,7 +157,7 @@ class LibraryTest(CliCase):
         self.assertEqual(code, 0)
         self.assertIn("Home Artist/Album", stdout.getvalue())
 
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
+    @unittest.skipUnless(dn.MODE_000_LOCKS_A_FOLDER, dn.NO_FOLDER_LOCK)
     def test_a_library_that_cannot_be_listed_exits_two(self) -> None:
         self.library.chmod(0)
         self.addCleanup(self.library.chmod, 0o755)
@@ -173,7 +171,7 @@ class LibraryTest(CliCase):
         self.assertEqual(result.code, 130)
         self.assertNotIn("resume:", result.stdout)
 
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
+    @unittest.skipUnless(dn.MODE_000_LOCKS_A_FOLDER, dn.NO_FOLDER_LOCK)
     def test_an_unreadable_artist_folder_is_noticed_by_name(self) -> None:
         locked = self.library / "Locked"
         locked.mkdir()
@@ -381,7 +379,7 @@ class RunTest(CliCase):
         self.assertRegex(result.stdout, r"Artist/A1\s+\S+\s+-\s+abandoned")
         self.assertIn("4242", result.stderr)
 
-    @unittest.skipIf(_IS_ROOT, "root can write a read-only folder")
+    @unittest.skipUnless(dn.READ_ONLY_STOPS_A_FILE, dn.NO_READ_ONLY)
     def test_a_ledger_that_cannot_be_written_exits_two_naming_it(self) -> None:
         ledger = sl.ledger_path(self.library, {"XDG_STATE_HOME": str(self.state)})
         ledger.parent.mkdir(parents=True)
@@ -435,9 +433,10 @@ class OneSweepAtATimeTest(CliCase):
         self.assertEqual(self.fake.calls, [])
         self.assertNotIn("resume:", result.stdout)
 
-    def test_a_lock_flock_refuses_for_another_reason_exits_two(self) -> None:
+    def test_a_lock_refused_for_another_reason_exits_two(self) -> None:
+        # The lock's own refusal, on either host: a file system that keeps no locks.
         no_locks = OSError(errno.ENOLCK, "No locks available")
-        with mock.patch("fcntl.flock", side_effect=no_locks):
+        with mock.patch.object(run_lock, "acquire", side_effect=no_locks):
             result = self.main("--mode", "run")
         self.assertEqual(result.code, 2)
         self.assertIn(str(self.lock), result.stderr)
@@ -453,18 +452,17 @@ class OneSweepAtATimeTest(CliCase):
             pass
 
 
-class PosixOnlyTest(CliCase):
-    """A run signals the album tool with SIGINT, so it is refused off POSIX."""
+class WindowsHostTest(CliCase):
+    """Every mode runs on a Windows host: none is refused for want of POSIX."""
 
-    def test_a_run_on_windows_exits_two_before_anything_runs(self) -> None:
+    def test_a_run_on_windows_visits_the_album(self) -> None:
         sf.needy_album(self.library, "Artist", "A1")
         windows = SimpleNamespace(name="nt", environ=os.environ)
         with mock.patch.object(sweep, "os", windows):
             result = self.main("--mode", "run")
-        self.assertEqual(result.code, 2)
-        self.assertIn("POSIX", result.stderr)
-        self.assertEqual(self.fake.calls, [])
-        self.assertFalse(self.state.exists())
+        self.assertEqual(result.code, 0)
+        self.assertNotIn("POSIX", result.stderr)
+        self.assertEqual(self.fake.albums(), ["A1"])
 
     def test_a_survey_on_windows_still_runs(self) -> None:
         windows = SimpleNamespace(name="nt", environ=os.environ)

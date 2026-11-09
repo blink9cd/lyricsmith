@@ -10,7 +10,6 @@ invented.
 from __future__ import annotations
 
 import datetime as dt
-import os
 import sys
 import unittest
 from pathlib import Path
@@ -341,7 +340,6 @@ class BackupFailureTest(BackupCase):
         self.assertEqual(manifest.tracks[0].after.error.exc_type, "ReadBackError")
 
 
-@unittest.skipIf(not getattr(os, "O_NOFOLLOW", 0), "no O_NOFOLLOW to refuse a link")
 class LinkedProofTest(BackupCase):
     """A proof read finding a link under a name it just wrote refuses it, unread."""
 

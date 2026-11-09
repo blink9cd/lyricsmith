@@ -1,4 +1,4 @@
-"""`--mode prune` from the command line: its options, report, exit codes and guard.
+"""`--mode prune` from the command line: its options, report, exit codes and delete.
 
 Each test drives `album.main` on the real wiring over an album built under the
 test's own folder; every lyric is invented.
@@ -94,11 +94,25 @@ class PruneModeTest(cli_fakes.RealWiringCliCase):
         self.assertEqual(result.code, album.EXIT_OK)
         self.assertIn("album prune: no run folders under album", result.stdout)
 
-    def test_an_unsafe_rmtree_refuses_to_start(self) -> None:
+    def test_an_rmtree_that_can_follow_a_link_prunes_through_the_walk(self) -> None:
+        # Every Windows Python's: the walk deletes instead, so prune still runs.
         with mock.patch.object(shutil.rmtree, "avoids_symlink_attacks", False):
             result = self.prune()
-        self.assertEqual(result.code, album.EXIT_CANNOT_RUN)
-        self.assertEqual(len(self.runs_left()), 1)
+        self.assertEqual(result.code, album.EXIT_OK, result.stderr)
+        self.assertEqual(self.runs_left(), [])
+        self.assertIn("removed: undone", result.stdout)
+
+    def test_the_walk_removes_a_link_in_a_run_as_the_link(self) -> None:
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_bytes(b"not the album's\n")
+        run = self.album / lr.RUN_FOLDER_NAME / self.runs_left()[0]
+        (run / "out").symlink_to(outside, target_is_directory=True)
+        with mock.patch.object(shutil.rmtree, "avoids_symlink_attacks", False):
+            result = self.prune()
+        self.assertEqual(result.code, album.EXIT_OK, result.stderr)
+        self.assertEqual(self.runs_left(), [])
+        self.assertEqual((outside / "keep.txt").read_bytes(), b"not the album's\n")
 
     def test_a_report_that_cannot_be_written_is_exit_3(self) -> None:
         class Closed(io.StringIO):

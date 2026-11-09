@@ -7,9 +7,11 @@ transcript where the fixed call names it; the live smoke test runs the real one.
 from __future__ import annotations
 
 import dataclasses
+import os
 import stat
 import subprocess
 import sys
+import unittest
 import wave
 from collections.abc import Sequence
 from pathlib import Path
@@ -136,10 +138,15 @@ class WhisperTest(sy_cases.IsolatedCase):
         )
         self.assertEqual(heard, Heard(5, 0.6))
 
-    def test_the_work_folder_is_private_inside_scratch_and_removed(self) -> None:
+    @unittest.skipIf(os.name == "nt", sy_cases.NO_POSIX_MODES)
+    def test_the_work_folder_is_private(self) -> None:
         whisper = FakeWhisper()
         self.heard(whisper)
         self.assertEqual(whisper.workdir_mode, 0o700)
+
+    def test_the_work_folder_is_inside_scratch_and_removed(self) -> None:
+        whisper = FakeWhisper()
+        self.heard(whisper)
         workdir = Path(whisper.argv[whisper.argv.index("-of") + 1]).parent
         self.assertEqual(workdir.parent, self.scratch)
         self.assertEqual(list(self.scratch.iterdir()), [])
@@ -149,6 +156,11 @@ class WhisperTest(sy_cases.IsolatedCase):
         whisper = FakeWhisper()
         self.heard(whisper)
         self.assertEqual(whisper.timeout, sy_whisper.whisper_timeout(PCM_SECONDS))
+
+    def test_each_models_rate_is_read_only(self) -> None:
+        rates = sy_whisper.WHISPER_PER_SECOND_BY_MODEL
+        with self.assertRaises(TypeError):
+            rates[sy_whisper.WHISPER_MODEL_NAME] = 0.0  # type: ignore[index]
 
     def test_a_failed_run_is_an_error_never_a_pass(self) -> None:
         timeout = subprocess.TimeoutExpired(["whisper-cli"], 1.0, stderr=b"stuck\n")

@@ -8,9 +8,8 @@ so nothing here starts a process. Every album and title here is invented.
 
 from __future__ import annotations
 
-import os
+import shlex
 import sys
-import unittest
 from pathlib import Path
 from unittest import mock
 
@@ -19,13 +18,10 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 
 import sweep  # noqa: E402, F401 - its bootstrap puts src/ and the album tool on the path
 import silence_fixtures as sfx  # noqa: E402 - import follows the sys.path bootstrap above
+import denied_fixtures as dn  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_silence_album as ssa  # noqa: E402 - import follows the sys.path bootstrap above
 
-# os.geteuid exists only off Windows, so it is looked up; root can list a mode-000
-# folder, so the unreadable-folder tests skip under it.
-_GETEUID = getattr(os, "geteuid", None)
-_IS_ROOT = _GETEUID is not None and _GETEUID() == 0
 _STAMP = "silent-20261019T093000Z.tsv"
 
 
@@ -115,8 +111,8 @@ class MeasureTest(sfx.SilenceCase):
         self.assertNotIn("Artist C/Spacers", self.the_list().read_text("utf-8"))
         self.assertIn("limit reached; albums left: 2\n", result.stdout)
         self.assertIn(
-            f"resume: sweep.py --mode silence --library {self.library} "
-            f"--resume {self.the_list()}\n",
+            f"resume: sweep.py --mode silence --library {shlex.quote(str(self.library))} "
+            f"--resume {shlex.quote(str(self.the_list()))}\n",
             result.stdout,
         )
 
@@ -204,72 +200,6 @@ class RefuseTest(sfx.SilenceCase):
         self.assertIn("the list cannot be opened", result.stderr)
         self.assertEqual(self.ffmpeg.calls, [])
 
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
-    def test_an_unlistable_library_exits_two(self) -> None:
-        self.library.chmod(0)
-        self.addCleanup(self.library.chmod, 0o755)
-        result = self.main()
-        self.assertEqual(result.code, 2)
-        self.assertIn("the library cannot be listed", result.stderr)
-        self.assertFalse(self.state.exists())
-
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
-    def test_an_unreadable_album_is_named_skipped_and_exits_one(self) -> None:
-        locked = self.library / "Artist" / "Locked"
-        sfx.add_track(locked, "01.mp3")
-        sfx.add_track(self.library / "Artist" / "Open", "01.mp3")
-        locked.chmod(0)
-        self.addCleanup(locked.chmod, 0o755)
-        result = self.main()
-        self.assertEqual(result.code, 1)
-        self.assertIn("skipped album Artist/Locked: it cannot be read", result.stderr)
-        self.assertEqual(self.list_lines(), ["#album-done\tArtist/Open"])
-        self.assertIn("albums skipped: 1\n", result.stdout)
-
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
-    def test_a_skipped_album_is_left_and_the_resume_is_printed(self) -> None:
-        locked = self.library / "Artist" / "Locked"
-        sfx.add_track(locked, "01.mp3")
-        sfx.add_track(self.library / "Artist" / "Open", "01.mp3")
-        locked.chmod(0)
-        self.addCleanup(locked.chmod, 0o755)
-        result = self.main()
-        # A skipped album has no marker, so a resume retries it: it is left.
-        self.assertEqual(result.code, 1)
-        self.assertIn("finished; albums left: 1\n", result.stdout)
-        self.assertIn(
-            f"resume: sweep.py --mode silence --library {self.library} "
-            f"--resume {self.the_list()}\n",
-            result.stdout,
-        )
-
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
-    def test_an_unlistable_artist_folder_is_named(self) -> None:
-        locked = self.library / "Locked Artist"
-        sfx.add_track(locked / "Album", "01.mp3")
-        locked.chmod(0)
-        self.addCleanup(locked.chmod, 0o755)
-        result = self.main()
-        self.assertEqual(result.code, 0)
-        self.assertIn("skipped artist folder Locked Artist", result.stderr)
-
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
-    def test_an_unlistable_disc_folder_skips_its_album_unmarked(self) -> None:
-        album = self.library / "Artist" / "Album"
-        sfx.add_track(album, "01.mp3")
-        locked = album / "Disc 2"
-        sfx.add_track(locked, "01.mp3")
-        locked.chmod(0)
-        self.addCleanup(locked.chmod, 0o755)
-        result = self.main()
-        self.assertEqual(result.code, 1)
-        self.assertIn(
-            "skipped album Artist/Album: it cannot be read (PermissionError)",
-            result.stderr,
-        )
-        self.assertEqual(self.list_lines(), [])
-        self.assertIn("finished; albums left: 1\n", result.stdout)
-
     def test_a_linked_track_or_folder_is_named(self) -> None:
         album = self.library / "Artist" / "Album"
         sfx.add_track(album, "01.mp3")
@@ -303,3 +233,82 @@ class RefuseTest(sfx.SilenceCase):
         result = self.main()
         self.assertIn("skipped album Artist/Linked", result.stderr)
         self.assertEqual(self.ffmpeg.calls, [])
+
+
+class UnlistableFolderTest(sfx.SilenceCase):
+    """A folder the pass cannot list: the library's own exits 2, any other is skipped.
+
+    Each folder is locked with ``chmod(0)``, and each test skips where that stops no
+    listing (root, or Windows); `RefusedListingTest` runs them all on every host.
+    """
+
+    def lock(self, folder: Path) -> None:
+        """Make *folder* unlistable until the test ends; skip where chmod cannot."""
+        if not dn.MODE_000_LOCKS_A_FOLDER:
+            self.skipTest(dn.NO_FOLDER_LOCK)
+        folder.chmod(0)
+        self.addCleanup(folder.chmod, 0o755)
+
+    def test_an_unlistable_library_exits_two(self) -> None:
+        self.lock(self.library)
+        result = self.main()
+        self.assertEqual(result.code, 2)
+        self.assertIn("the library cannot be listed", result.stderr)
+        self.assertFalse(self.state.exists())
+
+    def test_an_unreadable_album_is_named_skipped_and_exits_one(self) -> None:
+        locked = self.library / "Artist" / "Locked"
+        sfx.add_track(locked, "01.mp3")
+        sfx.add_track(self.library / "Artist" / "Open", "01.mp3")
+        self.lock(locked)
+        result = self.main()
+        self.assertEqual(result.code, 1)
+        self.assertIn("skipped album Artist/Locked: it cannot be read", result.stderr)
+        self.assertEqual(self.list_lines(), ["#album-done\tArtist/Open"])
+        self.assertIn("albums skipped: 1\n", result.stdout)
+
+    def test_a_skipped_album_is_left_and_the_resume_is_printed(self) -> None:
+        locked = self.library / "Artist" / "Locked"
+        sfx.add_track(locked, "01.mp3")
+        sfx.add_track(self.library / "Artist" / "Open", "01.mp3")
+        self.lock(locked)
+        result = self.main()
+        # A skipped album has no marker, so a resume retries it: it is left.
+        self.assertEqual(result.code, 1)
+        self.assertIn("finished; albums left: 1\n", result.stdout)
+        self.assertIn(
+            f"resume: sweep.py --mode silence --library {shlex.quote(str(self.library))} "
+            f"--resume {shlex.quote(str(self.the_list()))}\n",
+            result.stdout,
+        )
+
+    def test_an_unlistable_artist_folder_is_named(self) -> None:
+        locked = self.library / "Locked Artist"
+        sfx.add_track(locked / "Album", "01.mp3")
+        self.lock(locked)
+        result = self.main()
+        self.assertEqual(result.code, 0)
+        self.assertIn("skipped artist folder Locked Artist", result.stderr)
+
+    def test_an_unlistable_disc_folder_skips_its_album_unmarked(self) -> None:
+        album = self.library / "Artist" / "Album"
+        sfx.add_track(album, "01.mp3")
+        locked = album / "Disc 2"
+        sfx.add_track(locked, "01.mp3")
+        self.lock(locked)
+        result = self.main()
+        self.assertEqual(result.code, 1)
+        self.assertIn(
+            "skipped album Artist/Album: it cannot be read (PermissionError)",
+            result.stderr,
+        )
+        self.assertEqual(self.list_lines(), [])
+        self.assertIn("finished; albums left: 1\n", result.stdout)
+
+
+class RefusedListingTest(UnlistableFolderTest):
+    """The same folders, each refused its listing by the listing itself, on any host."""
+
+    def lock(self, folder: Path) -> None:
+        """Refuse *folder* its listing until the test ends."""
+        self.enterContext(dn.listing_refused(folder))

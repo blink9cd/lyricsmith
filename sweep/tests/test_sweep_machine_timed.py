@@ -4,8 +4,10 @@
 frames as they were; a sweep run is what embeds it. The survey reads the frames, the
 state that matters: a track whose sidecar a machine labeled, and whose frames hold no
 timed lyrics, is named unembedded and makes its album one to visit, however synced its
-sidecar is. Frames already timed, from that sidecar or otherwise, owe nothing. The end
-to end case runs the real album tool offline as the child, so the embed it makes is the
+sidecar is. Frames already timed, from that sidecar or otherwise, owe nothing. An
+unlabeled timed ``.lrc`` owes an embed only beside frames holding no timed lyrics, and is
+named ``unlabeled``; beside timed frames of any lines or times it owes nothing. The end
+to end cases run the real album tool offline as the child, so the embed it makes is the
 one the survey reads after it. Every name, title and lyric here is invented.
 """
 
@@ -45,6 +47,10 @@ _OTHER_SYNCED = [("The ferry horn at noon", 1000), ("and nobody aboard", 4000)]
 _PLACEHOLDER_TIMED_LRC = "[by:machine timed]\n[00:01.000]♪\n"
 #: A SYLT frame's placeholder line, the same note glyph, in milliseconds.
 _PLACEHOLDER_SYNCED = [("♪", 1000)]
+#: An unlabeled timed ``.lrc`` holding `_OTHER_SYNCED` exactly, as a ``.lrc`` holds it.
+_UNLABELED_LRC = "[00:01.000]The ferry horn at noon\n[00:04.000]and nobody aboard\n"
+#: An unlabeled timed ``.lrc`` whose one line is the placeholder note glyph.
+_UNLABELED_PLACEHOLDER_LRC = "[00:01.000]♪\n"
 #: The SYLT timestamp format in milliseconds, as ID3 numbers it.
 _MILLISECONDS = 2
 #: The SYLT content type for lyrics, as ID3 numbers it.
@@ -81,6 +87,22 @@ def _synced_frames(mp3: Path, lines: list[tuple[str, int]]) -> None:
         text=lines,
     )
     _add_frame(mp3, sylt)
+
+
+def _run_sweep(case: sf.IsolatedCase, *args: str) -> tuple[int, str]:
+    """Run the sweep's entry point on *case*'s library, with the real album tool child.
+
+    Returns its exit code and what it printed.
+    """
+    # The child inherits this environment: keep the host's ffmpeg out of it.
+    case.enterContext(mock.patch.dict(os.environ, sf.env_without_ffmpeg(case.tmp)))
+    stdout = io.StringIO()
+    with (
+        contextlib.redirect_stdout(stdout),
+        contextlib.redirect_stderr(io.StringIO()),
+    ):
+        code = sweep.main([*args, "--library", str(case.library)])
+    return code, stdout.getvalue()
 
 
 class UnembeddedSurveyTest(sf.IsolatedCase):
@@ -147,11 +169,61 @@ class UnembeddedSurveyTest(sf.IsolatedCase):
         _synced_frames(mp3, _PLACEHOLDER_SYNCED)
         self.assertEqual(self._survey().unembedded, ("01 Gull.mp3 (machine timed)",))
 
-    def test_an_unlabeled_timed_sidecar_is_synced_as_before(self) -> None:
+
+class UnlabeledSurveyTest(sf.IsolatedCase):
+    """An unlabeled timed sidecar is owed only beside frames holding no timed lyrics.
+
+    The survey's narrow rule: frames holding timed lyrics keep serving, whatever
+    lines or times they hold, and such a track is not visited.
+    """
+
+    def setUp(self) -> None:
+        """An album folder to build tracks in."""
+        super().setUp()
+        self.album = self.library / "Invented Artist" / "Timed By Hand"
+
+    def _survey(self) -> sweep_survey.AlbumSurvey:
+        return sweep_survey.survey_album(self.album, lang="eng")
+
+    def test_beside_untimed_frames_it_needs_a_visit(self) -> None:
+        mp3 = _track(self.album, "01 Ferry.mp3", lrc=_UNLABELED_LRC)
+        _untimed_frames(mp3)
+        survey = self._survey()
+        self.assertEqual(survey.unembedded, ("01 Ferry.mp3 (unlabeled)",))
+        self.assertEqual((survey.synced, survey.untimed, survey.none), (1, 0, 0))
+        self.assertTrue(survey.needs_visit)
+
+    def test_beside_no_frames_it_needs_a_visit(self) -> None:
         _track(self.album, "01 Keeper.mp3", lrc=album_fixtures.LIGHTHOUSE_LRC)
+        self.assertEqual(self._survey().unembedded, ("01 Keeper.mp3 (unlabeled)",))
+
+    def test_beside_a_placeholder_timed_frame_only_it_needs_a_visit(self) -> None:
+        mp3 = _track(self.album, "01 Ferry.mp3", lrc=_UNLABELED_LRC)
+        _synced_frames(mp3, _PLACEHOLDER_SYNCED)
+        self.assertEqual(self._survey().unembedded, ("01 Ferry.mp3 (unlabeled)",))
+
+    def test_beside_other_timed_frames_it_owes_nothing(self) -> None:
+        # The frames keep serving: the survey leaves them, by the narrow rule.
+        mp3 = _track(self.album, "01 Keeper.mp3", lrc=album_fixtures.LIGHTHOUSE_LRC)
+        _synced_frames(mp3, _OTHER_SYNCED)
         survey = self._survey()
         self.assertEqual((survey.synced, survey.unembedded), (1, ()))
         self.assertFalse(survey.needs_visit)
+
+    def test_beside_its_lines_at_other_times_it_owes_nothing(self) -> None:
+        mp3 = _track(self.album, "01 Ferry.mp3", lrc=_UNLABELED_LRC)
+        _synced_frames(mp3, [(text, ms + 500) for text, ms in _OTHER_SYNCED])
+        self.assertFalse(self._survey().needs_visit)
+
+    def test_beside_frames_holding_it_it_owes_nothing(self) -> None:
+        mp3 = _track(self.album, "01 Ferry.mp3", lrc=_UNLABELED_LRC)
+        _synced_frames(mp3, _OTHER_SYNCED)
+        self.assertFalse(self._survey().needs_visit)
+
+    def test_an_unlabeled_placeholder_sidecar_owes_nothing(self) -> None:
+        mp3 = _track(self.album, "01 Ferry.mp3", lrc=_UNLABELED_PLACEHOLDER_LRC)
+        _untimed_frames(mp3)
+        self.assertEqual(self._survey().unembedded, ())
 
 
 class UnembeddedRunTest(sf.IsolatedCase):
@@ -171,15 +243,7 @@ class UnembeddedRunTest(sf.IsolatedCase):
         _untimed_frames(self.owed)
 
     def _main(self, *args: str) -> tuple[int, str]:
-        # The child inherits this environment: keep the host's ffmpeg out of it.
-        self.enterContext(mock.patch.dict(os.environ, sf.env_without_ffmpeg(self.tmp)))
-        stdout = io.StringIO()
-        with (
-            contextlib.redirect_stdout(stdout),
-            contextlib.redirect_stderr(io.StringIO()),
-        ):
-            code = sweep.main([*args, "--library", str(self.library)])
-        return code, stdout.getvalue()
+        return _run_sweep(self, *args)
 
     def test_the_survey_lists_it_and_names_the_track(self) -> None:
         code, survey = self._main("--mode", "survey")
@@ -204,11 +268,41 @@ class UnembeddedRunTest(sf.IsolatedCase):
         self.assertIn("albums a run would visit: 0", report)
 
 
+class UnlabeledRunTest(sf.IsolatedCase):
+    """An unlabeled timed sidecar beside untimed frames: a run embeds it, and it settles."""
+
+    def setUp(self) -> None:
+        """An album whose one track holds an unlabeled timed sidecar and untimed frames."""
+        super().setUp()
+        self.album = self.library / "Invented Artist" / "Timed By Hand"
+        self.owed = _track(self.album, "01 Ferry.mp3", lrc=_UNLABELED_LRC)
+        _untimed_frames(self.owed)
+
+    def test_the_survey_names_it_unlabeled(self) -> None:
+        code, survey = _run_sweep(self, "--mode", "survey")
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "unembedded: Invented Artist/Timed By Hand/01 Ferry.mp3 (unlabeled)",
+            survey,
+        )
+        self.assertIn("albums a run would visit: 1", survey)
+
+    def test_an_offline_run_embeds_it_and_then_it_owes_nothing(self) -> None:
+        listed = self.tmp / "changed.txt"
+        code, _ = _run_sweep(
+            self, "--mode", "run", "--offline", "--changed-list", str(listed)
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(listed.read_text("utf-8").splitlines(), [str(self.owed)])
+        code, report = _run_sweep(self, "--mode", "survey")
+        self.assertIn("albums a run would visit: 0", report)
+
+
 class UnembeddedFixPassTest(sf.IsolatedCase):
     """The fix pass owes no embed: an unembedded track alone visits nothing there.
 
-    ``album --mode fix-text`` passes over a track holding timed lyrics and embeds
-    nothing, so a visit for the embed belongs to the run pass alone.
+    ``album --mode fix-text`` passes over a track holding machine-timed lyrics and
+    embeds nothing, so a visit for the embed belongs to the run pass alone.
     """
 
     def test_a_record_beside_only_an_unembedded_track_visits_nothing(self) -> None:

@@ -6,7 +6,8 @@ the memory, about 3 GB, goes back when it exits. Before loading anything it refu
 network: every model is read from its folder, and nothing of the track leaves the
 machine. Once the vocals are separated, and before wav2vec2 loads, whisper-cli hears
 them, written as a WAV in a private folder inside the parent's work folder, and a text
-`sy_heard` finds not sung is replied as such, never aligned. Each function that needs
+`sy_heard` finds not sung is replied as such, never aligned; a request not to align
+replies what was heard, whatever it found. Each function that needs
 PyTorch is left out of the unit suites' coverage, which run without it and test `main`
 with those functions stood in. The live smoke test (tests/test_sy_live.py) runs each of
 them but the break mask, which its clip has no break to need;
@@ -53,10 +54,12 @@ from sy_lines import Span, frames_needed  # noqa: E402 - follows the sys.path in
 from sy_request import (  # noqa: E402 - follows the sys.path insert above
     STATUS_OK,
     STATUS_TOO_LONG,
+    HeardOnly,
     NotSung,
     Reply,
     Request,
     dump_reply,
+    heard_only,
     load_request,
 )
 from sy_text import BLANK, LABELS  # noqa: E402 - follows the sys.path insert above
@@ -432,11 +435,14 @@ def main(
     )
     # A transcript longer than the store keeps is not sent: the verdict still stands.
     kept = transcript if transcript_fits(transcript) else None
-    reply = (
-        NotSung(heard, kept)
-        if not_sung(heard)
-        else _scored(vocals, others, request, heard)
-    )
+    reply: Reply | NotSung | HeardOnly
+    if not request.align:
+        # A hearing: what was heard is the whole reply, sung or not; nothing aligned.
+        reply = heard_only(heard, kept)
+    elif not_sung(heard):
+        reply = NotSung(heard, kept)
+    else:
+        reply = _scored(vocals, others, request, heard)
     Path(args.reply).write_text(dump_reply(reply), encoding="utf-8", newline="\n")
     return 0
 

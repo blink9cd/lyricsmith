@@ -32,7 +32,10 @@ times (the file timed again since its embed), is named unembedded, with its labe
 embeds the file then. A visit settles it, offline or not: offline the album tool
 embeds the file, and online it embeds the file unless a synced step answers, whose
 answer it embeds instead. Frames holding the file itself, or other timed lines, owe
-nothing, since they serve the track as they are.
+nothing, since they serve the track as they are. A timed ``.lrc`` no machine labeled is
+named unembedded too, as ``unlabeled``, but only beside frames holding no timed lyrics:
+beside timed frames of any lines or times it owes nothing, a narrower rule than the
+album tool's, kept so deliberately because such frames are left to serve.
 
 The survey writes nothing and contacts nothing. `plan_visits` splits the albums that
 need a visit into those a run visits and those it passes over as done, for the survey
@@ -93,11 +96,14 @@ class AlbumSurvey:
     names each track serving implausible lyrics, by its path and the check's FLAG,
     ``01.mp3 (past end: last line ...)``; only a ``--refetch-implausible`` survey judges
     that, and either refetch option a lyrics frame over the cap, named by its reason.
-    *unembedded* names each track whose machine-labeled timed sidecar its frames have
-    not taken, by its path and the label's source: ``02.mp3 (machine timed)``.
+    *unembedded* names each track whose timed sidecar its frames owe an embed
+    (`_unembedded`), by its path and the label's source, ``02.mp3 (machine timed)``,
+    or ``03.mp3 (unlabeled)`` for a sidecar no machine labeled.
     *has_mp3* is False for a folder holding no MP3, which is no album to run.
     *records_digest* is, for the fix pass alone, the digest of the album's records in
     the transcript store now (`sweep_fix_text.records_digest`); None otherwise.
+    *timed_records*, for the fix pass alone too, names each track holding a record and
+    a timed ``.lrc`` no machine labeled (`sweep_fix_text.provider_timed`).
     """
 
     album: Path
@@ -109,16 +115,22 @@ class AlbumSurvey:
     implausible: tuple[str, ...] = ()
     records_digest: str | None = None
     unembedded: tuple[str, ...] = ()
+    timed_records: tuple[str, ...] = ()
 
     @property
     def needs_visit(self) -> bool:
-        """True when a track is unsynced, unreadable, implausible, or owes an embed."""
+        """True when a track is unsynced, unreadable, implausible, or owes an embed.
+
+        Or, for the fix pass alone, when a track holds a record and a provider's timed
+        text (*timed_records*), which the fix takes though the track is synced.
+        """
         return bool(
             self.untimed
             or self.none
             or self.unreadable
             or self.implausible
             or self.unembedded
+            or self.timed_records
         )
 
 
@@ -132,27 +144,47 @@ def _implausible(mp3: Path, album: Path, lang: str) -> str | None:
     return None if flag is None else f"{flag.rule}: {flag.detail}"
 
 
-def _unembedded(mp3: Path, album: Path, lang: str) -> str | None:
-    """The source a machine labeled *mp3*'s timed sidecar with, while its frames lack it.
+#: The label `_unembedded` gives an owed timed sidecar no machine labeled.
+UNLABELED = "unlabeled"
 
-    The frames lack it, by the album tool's own rule for a labeled file
-    (`EmbeddedLyrics.synced_besides`, `EmbeddedLyrics.held_by`), when they hold no
-    timed lyrics, or its lines at other times: a run embeds the file then. None when
-    the sidecar is unlabeled or untimed, and when the frames hold the file itself or
-    other timed lines, which serve the track as they are. Placeholders, by the album
-    tool's rule (`lyrics_placeholder.is_placeholder_lyrics`: an instrumental notice or
-    note glyphs alone, LRC header tags alone, or time stamps with no word), are set
-    aside on both sides first: a placeholder sidecar is no timed lyrics, so it owes
-    nothing, as the album tool's fetch never embeds one (`unless_placeholder`), and a
-    placeholder frame serves nothing, so it holds no sidecar
-    (`EmbeddedLyrics.without_placeholders`). Only a labeled track has its frames read
-    here, so the rest cost no second tag read. Raises what classifying it raises.
+
+def _unembedded(mp3: Path, album: Path, lang: str) -> str | None:
+    """The label of *mp3*'s timed sidecar while its frames owe it an embed; else None.
+
+    A machine-labeled sidecar is owed, by the album tool's own rule for a labeled file
+    (`EmbeddedLyrics.synced_besides`, `EmbeddedLyrics.held_by`), when the frames hold
+    no timed lyrics, or its lines at other times: a run embeds the file then. Frames
+    holding the file itself, or other timed lines, serve the track as they are. The
+    label returned is its source, ``machine timed`` or ``machine transcript``.
+
+    An unlabeled sidecar is owed only when the frames hold no timed lyrics at all
+    (`UNLABELED`): beside untimed frames or none, a run embeds it. Beside timed frames
+    it owes nothing, even ones holding other lines or the same lines at other times,
+    which the album tool would replace with the file (`EmbeddedLyrics.serving`). That
+    divergence is deliberate: frames holding timed lyrics are
+    left to serve, and a survey following the full serving rule would revisit
+    hundreds of albums whose frames differ from their ``.lrc`` only by blank lines.
+    No frame of another language escapes this: `embedded_lyrics` ranks every
+    millisecond SYLT, in any language, so frames whose ``synced`` is None hold no
+    timed candidate a sidecar could match (`EmbeddedLyrics.held_by`).
+
+    None when the sidecar is untimed. Placeholders, by the album tool's rule
+    (`lyrics_placeholder.is_placeholder_lyrics`: an instrumental notice or note glyphs
+    alone, LRC header tags alone, or time stamps with no word), are set aside on both
+    sides first: a placeholder sidecar is no timed lyrics, so it owes nothing, as the
+    album tool's fetch never embeds one (`unless_placeholder`), and a placeholder
+    frame serves nothing, so it holds no sidecar
+    (`EmbeddedLyrics.without_placeholders`). Only a track with a timed sidecar has its
+    frames read here, so the rest cost no second tag read. Raises what classifying it
+    raises.
     """
     state = plan_sidecars(mp3, album)
     timed = unless_placeholder(state.lyrics)
-    if state.label is None or not isinstance(timed, SyncedLyrics):
+    if not isinstance(timed, SyncedLyrics):
         return None
     frames = embedded_lyrics(read_tags(mp3).frames, lang).without_placeholders()
+    if state.label is None:
+        return UNLABELED if frames.synced is None else None
     if frames.held_by(timed) is not None or frames.synced_besides(timed):
         return None
     return str(state.label)
@@ -371,7 +403,7 @@ def plan_visits(
     them as well. The survey and the run both plan
     with this, so the list a survey prints is the list a run visits. An album whose
     every track is synced needs no visit, done or not, so it is in neither list, unless
-    a track's machine-made timed sidecar is not embedded, or a ``--refetch-implausible``
+    a track's timed sidecar owes an embed (`_unembedded`), or a ``--refetch-implausible``
     survey found a track serving implausible lyrics.
     The albums *last* names come after the others to visit, each group in walk order.
     """

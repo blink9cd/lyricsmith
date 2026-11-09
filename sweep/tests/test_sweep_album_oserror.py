@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import contextlib
 import io
-import os
 import sys
 import unittest
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from unittest import mock
@@ -26,15 +26,12 @@ import sweep  # noqa: E402 - its bootstrap puts src/ and the album tool on the p
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_changed  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_child  # noqa: E402 - import follows the sys.path bootstrap above
+import denied_fixtures as dn  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_ledger as sl  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_run  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_survey  # noqa: E402 - import follows the sys.path bootstrap above
 
-# os.geteuid exists only off Windows, so it is looked up; root can list a mode-000
-# folder, so the unreadable-folder tests skip under it.
-_GETEUID = getattr(os, "geteuid", None)
-_IS_ROOT = _GETEUID is not None and _GETEUID() == 0
 _LIBRARY_MESSAGE = "the library cannot be listed"
 
 
@@ -80,6 +77,15 @@ class AlbumErrorCase(sf.IsolatedCase):
         locked.chmod(0)
         self.addCleanup(locked.chmod, 0o755)
 
+    def refuse_run_folder(self) -> Callable[[], None]:
+        """Refuse the first album's run folder its listing; return what lets it go.
+
+        The portable twin of `lock_run_folder`: the listing itself raises, on any host.
+        """
+        refused = self.enterContext(ExitStack())
+        refused.enter_context(dn.listing_refused(self.first / lr.RUN_FOLDER_NAME))
+        return refused.close
+
     def assert_first_could_not_run(self, result: Result, error: str) -> None:
         """The first album could not run, named with *error*; the second still ran."""
         self.assertEqual(result.code, sweep_run.EXIT_ALBUM_ERRORS)
@@ -99,17 +105,33 @@ class AlbumErrorCase(sf.IsolatedCase):
 class UnreadableRunFolderTest(AlbumErrorCase):
     """An album whose run folder cannot be listed could not run; the sweep goes on."""
 
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
+    @unittest.skipUnless(dn.MODE_000_LOCKS_A_FOLDER, dn.NO_FOLDER_LOCK)
     def test_the_album_could_not_run_and_the_next_one_runs(self) -> None:
         self.lock_run_folder()
         result = self.main()
         self.assert_first_could_not_run(result, "[Errno 13] Permission denied")
 
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
+    @unittest.skipUnless(dn.MODE_000_LOCKS_A_FOLDER, dn.NO_FOLDER_LOCK)
     def test_a_later_sweep_retries_the_album_once_it_can_be_read(self) -> None:
         self.lock_run_folder()
         self.main()
         (self.first / lr.RUN_FOLDER_NAME).chmod(0o755)
+        result = self.main()
+        self.assertEqual(result.code, sweep_run.EXIT_OK)
+        self.assertEqual(self.fake.albums(), ["Second", "First"])
+        self.assertIs(self.entries()[-1].outcome, sl.Outcome.DONE)
+
+    def test_a_run_folder_whose_listing_is_refused_could_not_run(self) -> None:
+        (self.first / lr.RUN_FOLDER_NAME).mkdir()
+        self.refuse_run_folder()
+        result = self.main()
+        self.assert_first_could_not_run(result, "[Errno 13] Permission denied")
+
+    def test_a_later_sweep_retries_once_the_listing_is_let_through(self) -> None:
+        (self.first / lr.RUN_FOLDER_NAME).mkdir()
+        let_go = self.refuse_run_folder()
+        self.main()
+        let_go()
         result = self.main()
         self.assertEqual(result.code, sweep_run.EXIT_OK)
         self.assertEqual(self.fake.albums(), ["Second", "First"])
@@ -137,14 +159,28 @@ class PostRunListingTest(AlbumErrorCase):
     the album is never said to have not run at all.
     """
 
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
+    @unittest.skipUnless(dn.MODE_000_LOCKS_A_FOLDER, dn.NO_FOLDER_LOCK)
     def test_the_album_has_no_record_and_keeps_its_exit_code(self) -> None:
+        def lock() -> None:
+            locked = self.first / lr.RUN_FOLDER_NAME
+            locked.chmod(0)
+            self.addCleanup(locked.chmod, 0o755)
+
+        self.assert_no_record_once_the_run_folder_is(lock)
+
+    def test_a_listing_refused_after_the_run_is_no_record_too(self) -> None:
+        # The portable twin of the mode-000 case: the listing itself raises.
+        self.assert_no_record_once_the_run_folder_is(self.refuse_run_folder)
+
+    def assert_no_record_once_the_run_folder_is(
+        self, lock: Callable[[], object]
+    ) -> None:
+        """*lock* the first album's run folder once its album tool ran; assert no record."""
+
         def runner(argv: Sequence[str], timeout_s: float) -> sweep_child.ChildResult:
             result = self.fake(argv, timeout_s)
             if sf.option_value(argv, "--album").endswith("First"):
-                locked = self.first / lr.RUN_FOLDER_NAME
-                locked.chmod(0)
-                self.addCleanup(locked.chmod, 0o755)
+                lock()
             return result
 
         self.runner = runner
@@ -209,11 +245,14 @@ class LaunchFailedChangedListTest(AlbumErrorCase):
             pending: sweep_changed._Pending,
             *,
             started: bool,
+            made_nothing: Callable[[], bool],
         ) -> Iterable[str]:
             calls.append(album)
             if len(calls) == 1:
                 raise KeyboardInterrupt
-            return real(union, album, pending, started=started)
+            return real(
+                union, album, pending, started=started, made_nothing=made_nothing
+            )
 
         self.runner = runner
         listed = self.tmp / "changed.txt"
@@ -232,11 +271,18 @@ class LaunchFailedChangedListTest(AlbumErrorCase):
 class LibraryListingTest(AlbumErrorCase):
     """Only the library's own listing ends a sweep as a library that cannot be listed."""
 
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
+    @unittest.skipUnless(dn.MODE_000_LOCKS_A_FOLDER, dn.NO_FOLDER_LOCK)
     def test_an_unlistable_library_still_exits_two_naming_it(self) -> None:
         self.library.chmod(0)
         self.addCleanup(self.library.chmod, 0o755)
         result = self.main()
+        self.assertEqual(result.code, sweep_run.EXIT_USAGE)
+        self.assertIn(f"{_LIBRARY_MESSAGE}: {self.library}", result.stderr)
+        self.assertEqual(self.fake.calls, [])
+
+    def test_a_library_whose_listing_is_refused_exits_two_naming_it(self) -> None:
+        with dn.listing_refused(self.library):
+            result = self.main()
         self.assertEqual(result.code, sweep_run.EXIT_USAGE)
         self.assertIn(f"{_LIBRARY_MESSAGE}: {self.library}", result.stderr)
         self.assertEqual(self.fake.calls, [])

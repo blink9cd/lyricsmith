@@ -270,11 +270,12 @@ class SkipTest(FixCase):
         self.answer({TITLES[HARBOR]: HARBOR})
         self.assert_skipped(paths, "its text changed since it was heard")
 
-    def test_a_timed_track_is_skipped(self) -> None:
-        lrc = "[00:01.00]Up at the quarry on a chalky shelf\n"
+    def test_a_machine_timed_track_is_skipped(self) -> None:
+        # A provider's timed text is a fix's (`test_lyrics_fix_timed`); sync's is not.
+        lrc = "[by:machine timed]\n[00:01.00]Up at the quarry on a chalky shelf\n"
         paths = self.build(song_track(1, HARBOR, txt=QUARRY, lrc=lrc))
         self.hear(paths[0], HARBOR, held=QUARRY)
-        self.assert_skipped(paths, "its lyrics are not untimed only")
+        self.assert_skipped(paths, "its timed lyrics are machine made")
 
     def test_a_sung_text_is_skipped(self) -> None:
         paths = self.build(song_track(1, HARBOR, txt=HARBOR))

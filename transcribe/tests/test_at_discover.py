@@ -6,6 +6,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import at_discover
 from tests._isolation import IsolatedCase
@@ -142,3 +143,26 @@ class ClassifyTest(IsolatedCase):
     def test_an_entry_that_cannot_be_read_raises(self) -> None:
         with self.assertRaises(OSError):
             at_discover.classify(self.root / "gone.mp3", named=True)
+
+
+class ClassifySeamTest(IsolatedCase):
+    """ClassifyTest's link outcomes, reached on every host through Path.is_symlink.
+
+    Windows needs a privilege to make a symlink, so there the real links are skipped.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.regular = self.root / "one.mp3"
+        self.regular.write_bytes(b"")
+
+    def test_a_walked_link_is_linked_and_a_named_one_is_followed(self) -> None:
+        with mock.patch.object(Path, "is_symlink", return_value=True):
+            self.assertIs(
+                at_discover.classify(self.regular, named=False),
+                at_discover.Entry.LINKED,
+            )
+            self.assertIs(
+                at_discover.classify(self.regular, named=True),
+                at_discover.Entry.AUDIO,
+            )

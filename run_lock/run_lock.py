@@ -110,15 +110,20 @@ class Lock:
         self.release()
 
 
-def acquire(path: Path) -> "Lock | None":
+#: The lock file's mode when :func:`acquire` creates it, unless the caller asks for another.
+_DEFAULT_MODE = 0o644
+
+
+def acquire(path: Path, *, mode: int = _DEFAULT_MODE) -> "Lock | None":
     """Take the lock on *path* without waiting; None when another holder has it.
 
-    Creates *path* and its parent directories when absent. Any failure other than contention
-    (an unwritable directory, a path that is a directory) raises OSError after the descriptor
-    is closed, so a failed attempt holds nothing open.
+    Creates *path* and its parent directories when absent, the file with *mode* (less the
+    umask; an existing file keeps its own). A caller keeping private state asks for 0o600.
+    Any failure other than contention (an unwritable directory, a path that is a directory)
+    raises OSError after the descriptor is closed, so a failed attempt holds nothing open.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, mode)
     try:
         held = _try_lock(fd)
     except OSError:

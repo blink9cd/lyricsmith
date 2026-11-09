@@ -21,6 +21,11 @@ files by device and inode.
 
 `save_changed_list` writes the file atomically with the interrupt held, and hands back
 why it could not, for the caller to report after its summary. Nothing here prints.
+
+A fix's ``--hold-for-genius`` list is the same file, written by the same code, each
+notice naming that option (*flag*): `held_changed` names the tracks the fix held for
+Genius (`lyrics_outcomes.HELD_FOR_GENIUS`), and `joined` puts the two writes' answers
+together, so a run reports both lists' failures at once.
 """
 
 from __future__ import annotations
@@ -32,7 +37,18 @@ from pathlib import Path
 
 import lyrics_files
 from lyrics_album import deferred_interrupt
-from lyrics_records import ErrorStage, ManifestTrack, UndoTrackResult
+from lyrics_outcomes import HELD_FOR_GENIUS
+from lyrics_records import (
+    ErrorStage,
+    ManifestTrack,
+    OutcomeStatus,
+    UndoTrackResult,
+)
+
+#: The option naming the list of the MP3s saved, and the one naming a fix's held
+#: tracks, each as the album tool and the sweep take it and every notice names it.
+CHANGED_FLAG = "--changed-list"
+HOLD_FLAG = "--hold-for-genius"
 
 #: Why a path is left out of the list, one per rule of the reader's contract.
 REASON_LINEFEED = "holds a linefeed, which would split it into two lines"
@@ -167,13 +183,24 @@ def undo_changed(album: Path, results: Iterable[UndoTrackResult]) -> tuple[str, 
     return tuple(_listed(album, result.path) for result in results if result.saved)
 
 
-def left_out_notice(left: LeftOut) -> str:
-    """The stderr line naming a path left out of the list, escaped as Python shows it.
+def held_changed(album: Path, tracks: Iterable[ManifestTrack]) -> tuple[str, ...]:
+    """The MP3s of a fix's *tracks* it held for Genius, in run order: none was saved."""
+    return tuple(
+        _listed(album, track.path)
+        for track in tracks
+        if track.after is not None
+        and track.after.status is OutcomeStatus.KEPT_EXISTING
+        and track.after.withheld == HELD_FOR_GENIUS
+    )
+
+
+def left_out_notice(left: LeftOut, *, flag: str = CHANGED_FLAG) -> str:
+    """The stderr line naming a path left out of *flag*'s list, escaped as Python shows it.
 
     The escaped form shows a linefeed, a control character or an undecodable byte as
     a visible escape, and can always be printed.
     """
-    return f"--changed-list: left out {left.path!r}: {left.reason}"
+    return f"{flag}: left out {left.path!r}: {left.reason}"
 
 
 def said_once(notice: Callable[[str], None]) -> Callable[[str], None]:
@@ -189,15 +216,20 @@ def said_once(notice: Callable[[str], None]) -> Callable[[str], None]:
 
 
 def save_changed_list(
-    target: Path | None, paths: Iterable[str], notice: Callable[[str], None]
+    target: Path | None,
+    paths: Iterable[str],
+    notice: Callable[[str], None],
+    *,
+    flag: str = CHANGED_FLAG,
 ) -> str | None:
     """Write the list of *paths* to *target*; why it could not be written, or None.
 
     Nothing is written when *target* is None. Each path left out is said once through
-    *notice*. The file is replaced atomically, so a reader finds the old list or the
-    whole new one, and Ctrl-C is held from choosing the lines until the replace has
-    landed or failed; a held Ctrl-C is then raised, the failure, if any, lost with it,
-    so a caller that wants both tries again (`write_changed_list`).
+    *notice*, and every line names the list by *flag*, the option naming it. The file
+    is replaced atomically, so a reader finds the old list or the whole new one, and
+    Ctrl-C is held from choosing the lines until the replace has landed or failed; a
+    held Ctrl-C is then raised, the failure, if any, lost with it, so a caller that
+    wants both tries again (`write_changed_list`).
     """
     if target is None:
         return None
@@ -205,11 +237,11 @@ def save_changed_list(
     with deferred_interrupt():
         data, left = format_changed_list(paths)
         for item in left:
-            notice(left_out_notice(item))
+            notice(left_out_notice(item, flag=flag))
         try:
             lyrics_files.replace_atomically(target, data)
         except OSError as error:
-            failure = f"could not write --changed-list {target}: {error}"
+            failure = f"could not write {flag} {target}: {error}"
     return failure
 
 
@@ -217,8 +249,10 @@ def write_changed_list(
     path: Path | None,
     listed: Callable[[], Sequence[str]],
     notice: Callable[[str], None],
+    *,
+    flag: str = CHANGED_FLAG,
 ) -> tuple[str | None, bool]:
-    """Write the ``--changed-list`` *path*: why it failed, and whether Ctrl-C came.
+    """Write *flag*'s list to *path*: why it failed, and whether Ctrl-C came.
 
     A Ctrl-C landing while the list is chosen or written, before the write holds it or
     as the hold ends, would leave no list, or lose a write's failure: the pair is run
@@ -227,6 +261,15 @@ def write_changed_list(
     """
     once = said_once(notice)
     try:
-        return save_changed_list(path, listed(), once), False
+        return save_changed_list(path, listed(), once, flag=flag), False
     except KeyboardInterrupt:
-        return save_changed_list(path, listed(), once), True
+        return save_changed_list(path, listed(), once, flag=flag), True
+
+
+def joined(*written: tuple[str | None, bool]) -> tuple[str | None, bool]:
+    """Several `write_changed_list` answers as one: every failure, and any Ctrl-C.
+
+    The failures are said in one line, in the order given; None when every list landed.
+    """
+    failures = [failure for failure, _late in written if failure is not None]
+    return "; ".join(failures) or None, any(late for _failure, late in written)

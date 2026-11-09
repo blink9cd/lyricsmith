@@ -21,24 +21,34 @@ counted. A report-only pass leaves out each album's hint and closes the summary 
 it once. The entry point holds the ledger's lock for the whole walk and writes no
 ledger line; nothing here touches the ledger. Nothing here prints: text goes out
 through the *emit* and *notice* the entry point passes.
+
+`accept_mode` is the mode's runner: it holds that lock, walks the albums through the
+*walk* the entry point binds (its walk notices are the entry point's own), and
+prints the reports and the summary on stdout.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
+import sys
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 import lyrics_exit
 import lyrics_wiring
+import sweep_lock
+import sweep_report
 from lyrics_accept_mode import HINT, AcceptReport, accept_album, format_accept
 from lyrics_accept_records import UnsafeAcceptingError
 from lyrics_album import AcquireLock, LockHeldError, RunFolderLinkError
-from sweep_run import EXIT_ALBUM_ERRORS, EXIT_OK
+from sweep_ledger import ledger_path
+from sweep_run import EXIT_ALBUM_ERRORS, EXIT_OK, EXIT_USAGE
 from lyrics_model import LyricsError
 from lyrics_prune import Delete
 from lyrics_stages import Stages
@@ -71,8 +81,8 @@ def refusal_reason(error: Exception) -> str:
 class AcceptSeams:
     """The album tool's parts accept runs with: its lock, its stages, the environment.
 
-    *environ* names the state folder the records go under; *delete* None is
-    `shutil.rmtree`. A test passes its own; `real_seams` binds the album tool's.
+    *environ* names the state folder the records go under; *delete* None is the album
+    tool's own, `lyrics_delete.chosen_delete`'s. A test passes its own; `real_seams` binds the album tool's.
     """
 
     acquire_lock: AcquireLock
@@ -230,3 +240,52 @@ def accept_library(run: AcceptRun, albums: Sequence[Path]) -> int:
     with lyrics_exit.report_writes():
         run.emit(format_summary(tally))
     return EXIT_ALBUM_ERRORS if tally.failed else EXIT_OK
+
+
+class Wired(Protocol):
+    """The part of the sweep's wiring the mode uses: the clock and its own seams."""
+
+    @property
+    def now(self) -> Callable[[], datetime]:
+        """The clock the album tool's accept records its time by."""
+
+    @property
+    def accept(self) -> AcceptSeams | None:
+        """The pass's seams; None binds the real ones."""
+
+
+def accept_mode(
+    args: argparse.Namespace,
+    library: Path,
+    wiring: Wired,
+    words: sweep_report.Words,
+    *,
+    prog_file: str,
+    notice: Callable[[str], None],
+    walk: Callable[[Path], Sequence[Path]],
+) -> int:
+    """Hold the library's lock, accept each album, print the summary; 2 if it cannot.
+
+    The ledger's lock keeps it off a library a sweep run is visiting; it writes no
+    ledger line. *walk* gives the albums a run considers, linked ones dropped; *words*
+    and *prog_file* name the command in each album's hint (`sweep_report.resume_prog`),
+    and *notice* takes every notice.
+    """
+    ledger = ledger_path(library, os.environ)
+    run = AcceptRun(
+        library,
+        bool(args.apply),
+        wiring.accept or real_seams(),
+        wiring.now,
+        " ".join(sweep_report.resume_prog(words, prog_file)),
+        lambda text: print(text, end="", file=sys.stdout),
+        notice,
+    )
+    try:
+        with sweep_lock.held(sweep_lock.lock_path(ledger)):
+            return accept_library(run, walk(library))
+    except sweep_lock.SweepLockError as error:
+        notice(f"{' '.join(words)}: {error}")
+        return EXIT_USAGE
+    except lyrics_exit.ReportNotWrittenError as error:
+        return lyrics_exit.lost_report_exit(error, " ".join(words), notice)

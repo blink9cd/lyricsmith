@@ -9,9 +9,13 @@ longer one the fix takes (`lyrics_fix_text.skip_reason`) is its error, nothing c
 The candidates are the album's other stored untimed texts, read before the run, then each
 provider's untimed answer (`lyrics_compare.answers_in_turn`), each provider asked only
 once every earlier candidate failed, its answer judged against the track's duration as a
-run's is. The first the transcript sings (`lyrics_fix_text.first_sung`) is written
-through the run's own write (`lyrics_write_answer.write_answer`), replacing the old
-frames and sidecars.
+run's is. A provider-timed track's (`lyrics_fix_text.text_of`) are the album's other
+texts, timed ones as their words alone, then the whole chain, its synced steps first
+(`lyrics_compare.timed_answers_in_turn`). So a sibling winner is written untimed, for
+sync to time against this track, while a synced answer keeps its stamps. The first the
+transcript sings (`lyrics_fix_text.first_sung`) is written through
+the run's own write (`lyrics_write_answer.write_answer`), replacing the old frames and
+sidecars.
 
 With none sung, the wrong text is removed through a refetch's removal
 (`lyrics_refetch.remove_implausible`): every lyrics frame and both sidecar names, backed
@@ -28,8 +32,13 @@ no key) is not one the run meant to ask, and keeps nothing.
 On an album that looks spoken (`FixPlan.spoken`, `lyrics_spoken`) a removal those
 guards allow is withheld: the track keeps its text and nothing changes, and it ends
 ``kept existing`` with the reason recorded (`TrackOutcome.withheld`), neither an error
-nor a refusal, so it is counted apart and can be listed later. Either way the track's
-record stays in the store: the fix only reads it.
+nor a refusal, so it is counted apart and can be listed later. A fix given
+``--hold-for-genius`` (`FixPlan.hold`) withholds every such removal the same way, its
+reason `HELD_FOR_GENIUS`: every source it asked answered, none sang, and Genius, which
+it never asks, might still have the track, so the fix lists it for a later pass. The
+hold is asked before the spoken album, so a held track on a spoken album is recorded
+held for Genius and still listed. Either way the track's record stays in the store: the
+fix only reads it.
 """
 
 from __future__ import annotations
@@ -39,7 +48,7 @@ from dataclasses import dataclass, field
 from itertools import chain
 from typing import TYPE_CHECKING
 
-from lyrics_compare import COMPARED, answers_in_turn, judged_lyrics
+from lyrics_compare import COMPARED, answers_in_turn, timed_answers_in_turn
 from lyrics_cooldown import table_stop
 from lyrics_fix_text import (
     SKIP_NOT_UNTIMED,
@@ -47,7 +56,8 @@ from lyrics_fix_text import (
     SiblingTexts,
     TextChangedError,
     first_sung,
-    skip_reason,
+    fix_skip_reason,
+    text_of,
     words_of_text,
 )
 from lyrics_heard_store import HeardRecord
@@ -62,6 +72,7 @@ from lyrics_model import (
 )
 from lyrics_outcomes import (
     FETCH_ERROR,
+    HELD_FOR_GENIUS,
     WRONG_TEXT,
     TrackState,
     every_provider_failed,
@@ -95,12 +106,14 @@ class FixPlan:
     *cooling* holds each provider the run left out because it is cooling down, which
     a run would otherwise have asked. *spoken* says why the album looks spoken
     (`lyrics_spoken.spoken_reason`), so no removal is made; None when it does not.
+    *hold* is True under ``--hold-for-genius``: no removal is made, each is held.
     """
 
     records: Mapping[str, HeardRecord]
     siblings: SiblingTexts
     cooling: frozenset[Source] = field(default_factory=frozenset)
     spoken: str | None = None
+    hold: bool = False
 
 
 def _answers(
@@ -108,12 +121,17 @@ def _answers(
     query: TrackQuery,
     tags: TrackTags,
     attempts: list[ProviderAttempt],
+    *,
+    timed: bool,
 ) -> Iterator[Candidate]:
-    """Each provider's untimed answer, as drawn; every attempt is kept in *attempts*."""
+    """Each provider's answer, as drawn; every attempt is kept in *attempts*.
+
+    The untimed steps alone, or, for a *timed* text, the whole chain, its synced
+    steps first (`timed_answers_in_turn`).
+    """
     deadline_s = ctx.options.deadline_s
-    asked = answers_in_turn(
-        query, ctx.providers, deadline_s, duration_s=tags.duration_s
-    )
+    draw = timed_answers_in_turn if timed else answers_in_turn
+    asked = draw(query, ctx.providers, deadline_s, duration_s=tags.duration_s)
     for source, lyrics, tried in asked:
         attempts.append(tried)
         if lyrics is not None:
@@ -175,15 +193,17 @@ def _remove(
 ) -> TrackOutcome:
     """No text sung: remove the wrong one, unless a guard keeps it (`_kept`).
 
-    A removal the guards allow is withheld on an album that looks spoken.
+    A removal the guards allow is withheld when the fix holds for Genius, else on an
+    album that looks spoken.
     """
     path = ctx.album / track.path
     attempts = list(state.result.attempts) if state.result is not None else []
     kept = _kept(plan, ctx, track.path, attempts)
     if kept is not None:
         return state.outcome(OutcomeStatus.ERROR, kept)
-    if plan.spoken is not None:
-        state.withheld = plan.spoken
+    withheld = HELD_FOR_GENIUS if plan.hold else plan.spoken
+    if withheld is not None:
+        state.withheld = withheld
         return state.outcome(OutcomeStatus.KEPT_EXISTING)
     state.implausible = WRONG_TEXT
     state.remove_frames, state.remove_sidecars = bool(tags.frames), True
@@ -207,15 +227,16 @@ def fix_step(
     state.query = query = track_query(tags, path)
     state.stage = ErrorStage.SIDECAR
     state.held_kind = read_held(stages, ctx.album, path, tags.frames, lang)
-    refused = judged_lyrics(stages, ctx.album, path, tags, lang)
-    reason = skip_reason(refused, record)
+    stored = text_of(stages, ctx.album, path, tags, lang)
+    reason, refused = fix_skip_reason(stored, record), stored.lyrics
     if refused is None or reason is not None:
         raise TextChangedError(reason or SKIP_NOT_UNTIMED)
     attempts: list[ProviderAttempt] = []
     state.stage, state.in_fetch = ErrorStage.FETCH, True
-    candidates = chain(
-        plan.siblings.besides(track.path), _answers(ctx, query, tags, attempts)
-    )
+    siblings = plan.siblings
+    others = (siblings.every_besides if stored.timed else siblings.besides)(track.path)
+    answers = _answers(ctx, query, tags, attempts, timed=stored.timed)
+    candidates = chain(others, answers)
     refused_words = words_of_text(refused.plain_text())
     winner = first_sung(candidates, record.transcript, refused_words)
     state.in_fetch = False

@@ -2,6 +2,103 @@
 
 Notable changes to lyricsmith, newest first.
 
+## 0.4.0 - 2026-11-09
+
+### Added
+
+- `album --mode fix-text --hold-for-genius <file>` and `sweep --mode fix-text
+  --hold-for-genius <file>` never ask Genius, which now challenges every script, and keep
+  instead of removing a wrong text that every provider asked answered without singing:
+  the track ends `kept existing`, its removal withheld as `held for Genius`, and its path
+  is listed in `<file>` in the `--changed-list` format for a later pass. A provider that
+  failed still keeps the track as an error, and a later provider's sung answer still
+  replaces the text. The sweep keeps the union of its albums' lists, a resumed sweep
+  adding to it, and an album whose open tracks were all held is done, so it never feeds
+  the stop rule. Refused beside `--no-genius`, with any other mode, and when it names
+  the same file as `--changed-list`, since each list is written whole. The
+  `removal withheld:` line now names each reason it counts.
+- `sync --mode hear` separates, transcribes, and judges each selected track without
+  timing it: it aligns nothing and writes no `.lrc`, frame, or sidecar. `--kinds` picks
+  provider-timed texts by default, and machine-timed or untimed ones when asked;
+  `--tracks-from` takes a list in the `--changed-list` format. Every verdict goes to
+  `--hearing-log <dir>`, one private JSON record a track and model with its transcript,
+  and a rerun skips a track already heard with the same text and model. A text not sung
+  also gets its `--heard-dir` record and by-hand row, as a timing run writes them. A
+  track `sweep --mode draw` listed is found when `--path` reaches the library through a
+  link.
+- `transcribe --mode fetch-models --whisper-model ggml-large-v3.bin` fetches the full
+  `large-v3` model, pinned by hash beside the turbo, for a comparison hearing with
+  `sync --mode hear --whisper-model`. The default fetch is unchanged.
+- `sweep --mode draw` draws a seeded, stratified sample of a library's provider-timed
+  tracks, read from its sidecars, run manifests, and ledger: every track on an album
+  where a wrong text was found, and up to 250 from each recorded provenance, writing a
+  track list and `strata.tsv`. `--withheld` lists instead the tracks whose removal was
+  withheld.
+- `sweep --mode hear-report` reports a hearing log over a drawn sample: each group's
+  `not sung` rate, a library-wide estimate weighted by each group's size, a shift test of
+  each `not sung` transcript against its album's other texts with the misses tallied by
+  genre, and, with `--compare-model`, how many tracks rise past the sung share under a
+  second model. It prints approximate figures and writes nothing. A strata row may sit in
+  a disc folder of its album, as a multi-disc album's `Disc 1/` holds its tracks. A link
+  or junction at the track or at a folder between it and its album is refused, and so is
+  a row whose path or album is not lexically normal, which a `..` past a link could
+  otherwise read through.
+- `bounded_run`'s `run_bounded` takes `inherit_stderr=True`, which gives the child the
+  caller's own stderr instead of a pipe, so a long run's progress lines appear as they
+  are written rather than when it ends. The result's `stderr` is then `""`.
+
+### Changed
+
+- `sweep`'s survey also names a synced track whose timed `.lrc` no machine labeled, as
+  `unembedded: <album>/<track> (unlabeled)`, and a run visits its album to embed the
+  file, but only while the track's frames hold no timed lyrics. Frames holding timed
+  lyrics are left to serve, even where `album` would replace them with the file.
+- `album --mode fix-text` also fixes provider-timed texts a hearing found not sung. Their
+  candidates are the album's other texts, timed ones by their words alone, then the whole
+  chain, its synced steps first. A sibling's timing is never copied: a sibling or an
+  untimed answer is written untimed for `sync` to time, while a synced answer keeps its
+  stamps. A machine-timed `.lrc` is skipped. `sweep --mode fix-text` visits an all-synced
+  album when a track of it holds both a record and a provider's timed text.
+- `sync`: a `--heard-dir` record is spent when its track is gone, when `sync` itself timed
+  it, or when a provider's timed text differs from the one heard; before, any timed track
+  spent it, which would have erased a provider-timed text's record before its fix.
+
+### Fixed
+
+- `sweep` runs on Windows: `--mode run` and `--mode fix-text` no longer refuse a host that
+  is not POSIX. Past its bound an `album` child is terminated there, since Windows cannot
+  send it Ctrl-C, and the stop is recorded as on POSIX, exit 130 and timed out.
+  The ledger's lock is `run_lock`'s, `msvcrt.locking` on Windows, still `0o600` in a
+  `0o700` folder. `--mode accept` runs on Windows too, through `album`'s own delete, and
+  resuming a run refuses a link at the silent list's name there as on POSIX.
+- `album`'s `--mode prune` and `--mode accept` run on Windows. Where `shutil.rmtree` does
+  not resist links (every Windows Python), the delete is `album`'s own walk, which never
+  enters a symbolic link, junction, or other reparse point and stops when a folder is
+  swapped while it walks. A junction is refused wherever a link is: a run folder, the
+  `.lyricsmith` folder itself, and an album walk, whose notice now names it. On Windows,
+  where an open lock blocks the folder's rename, accept moves the run folder's entries
+  one at a time under the lock and removes the emptied folder last, saying when it keeps
+  it.
+- `album`: a read or write that must not follow a link refuses one on Windows too, where
+  `O_NOFOLLOW` does not exist: the name is looked at first, then the opened file is
+  checked to be the one looked at. A link target Windows reads back as `\\?\C:\...` is recorded
+  as it was made.
+- `sync` and `transcribe`: a track's path below the folder walked is printed with `/` on
+  every host, as `album`'s manifests name tracks; on Windows a report row read `One\01`.
+  A path outside it still prints in the host's form.
+- `album`: a Bandcamp page that redirects to an `https` address off Bandcamp, as the
+  pages of an artist serving them from its own domain do, is now nothing found (`page
+  elsewhere`), not a refusal recorded as `unrecognized`. The step never follows the
+  redirect, and the domain was seen to redirect straight back, so the page holds nothing
+  it could use. `fix-text` no longer keeps such a track an error on every pass. It is
+  passed over among same-titled `/music` entries as a gone page is. A redirect naming no
+  target, a third one, and one to a plain `http` address, another port, or a login stay
+  Bandcamp's error, as before.
+- Two of `bounded_run`'s tests failed on Windows and now run only where their subject
+  does. The check that an unkillable `ps` is abandoned runs on POSIX alone, as its only
+  caller does, and the late-tracking live test waits for a grandchild process on POSIX
+  alone, since on Windows the child is still suspended at that point.
+
 ## 0.3.0 - 2026-11-02
 
 ### Added

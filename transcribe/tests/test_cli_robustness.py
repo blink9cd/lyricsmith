@@ -41,7 +41,6 @@ def raising_for(method: str, target: Path) -> Iterator[None]:
         yield
 
 
-@unittest.skipIf(sys.platform == "win32", "the fake whisper-cli is a shebang script")
 class UnreadableTest(CliCase):
     def test_an_unreadable_path_is_a_setup_error(self) -> None:
         for method in ("exists", "is_dir"):
@@ -81,10 +80,10 @@ class UnreadableTest(CliCase):
         self.assertEqual(self.transcriptions(), [])
 
     def test_an_unreadable_whisper_cli_is_a_setup_error(self) -> None:
-        with raising_for("is_file", self.bin / "whisper-cli"):
+        with raising_for("is_file", self.fake):
             code, _, err = self.run_main("--path", str(self.lib))
         self.assertEqual(code, EXIT_SETUP)
-        self.assertIn("whisper-cli cannot be read", err)
+        self.assertIn(f"{self.fake.name} cannot be read", err)
         self.assertEqual(self.calls(), [])
 
     def test_an_output_that_cannot_be_checked_fails_only_its_file(self) -> None:
@@ -94,7 +93,7 @@ class UnreadableTest(CliCase):
                 with raising_for(method, self.lib / "a" / name):
                     code, out, _ = self.run_main("--path", str(self.lib))
                 self.assertEqual(code, EXIT_FILE_FAILED)
-                self.assertIn(f"failed                 {Path('a') / 'one.mp3'}", out)
+                self.assertIn("failed                 a/one.mp3", out)
                 self.assertIn("    could not check the output: [Errno 13]", out)
                 self.assertIn(
                     "transcribed 1, overwritten 0, skipped 0, refused 0, failed 1", out
@@ -103,7 +102,11 @@ class UnreadableTest(CliCase):
                 self.assertEqual(len(self.transcriptions()), 1)
 
 
-@unittest.skipIf(sys.platform == "win32", "the fake whisper-cli is a shebang script")
+# WalkErrorTest reaches the same rows on every host, through the walk's error list.
+@unittest.skipIf(
+    sys.platform == "win32",
+    "Windows forbids a control character in a folder name and ignores mode 0 on one",
+)
 @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any folder")
 class UnreadableFolderTest(CliCase):
     def setUp(self) -> None:
@@ -128,7 +131,7 @@ class UnreadableFolderTest(CliCase):
         code, out, _ = self.run_main("--path", str(self.lib), "--dry-run")
         self.assertEqual(code, EXIT_FILE_FAILED)
         self.assertIn("failed                 locked\\x07", out)
-        self.assertIn(f"transcribe             {Path('a') / 'one.mp3'}", out)
+        self.assertIn("transcribe             a/one.mp3", out)
         self.assertEqual(self.calls(), [])
 
 
@@ -166,7 +169,6 @@ def walk_error(filename: str | None) -> Iterator[None]:
         yield
 
 
-@unittest.skipIf(sys.platform == "win32", "the fake whisper-cli is a shebang script")
 class WalkErrorTest(CliCase):
     """The unreadable-folder rows, reached without a real locked folder (root too)."""
 
@@ -184,7 +186,7 @@ class WalkErrorTest(CliCase):
             )
             self.assertEqual(code, EXIT_FILE_FAILED)
             self.assertIn("failed                 locked\\x07", out)
-            self.assertIn(f"overwrite (ours)       {Path('a') / 'one.mp3'}", out)
+            self.assertIn("overwrite (ours)       a/one.mp3", out)
 
     def test_a_walk_error_without_a_filename_names_the_walk_root(self) -> None:
         # OSError.filename may be None; the row then names the --path folder.
@@ -195,7 +197,6 @@ class WalkErrorTest(CliCase):
         self.assertNotIn("None", out)
 
 
-@unittest.skipIf(sys.platform == "win32", "the fake whisper-cli is a shebang script")
 class UnreadablePathFolderTest(CliCase):
     """A --path folder that cannot be listed is a setup error, not a failed row."""
 
@@ -213,6 +214,7 @@ class UnreadablePathFolderTest(CliCase):
         self.assertIn(f"--path {self.lib} cannot be read", err)
         self.assertEqual(self.calls(), [])
 
+    @unittest.skipIf(sys.platform == "win32", "Windows ignores mode 0 on a folder")
     @unittest.skipIf(
         hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any folder"
     )
@@ -254,7 +256,6 @@ class ColorTest(IsolatedCase):
             self.assertNotIn("\\x1b", text)
 
 
-@unittest.skipIf(sys.platform == "win32", "the fake whisper-cli is a shebang script")
 class TerminalSafeTest(CliCase):
     def test_direction_and_separator_characters_are_spelled(self) -> None:
         # Regression: only C0, DEL and C1 were spelled, so a right-to-left override

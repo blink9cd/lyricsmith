@@ -19,9 +19,12 @@ recoverable state when a step fails:
    rename ``.lyricsmith``, lock inside, and delete it. A records failure deletes
    nothing more, though a leftover finished first stays finished. The rename happens
    while the lock is held, so no run can start between the judgment and the removal.
-   (A system that cannot rename a folder holding an open file never gets here: the
-   caller's rmtree guard refuses Windows first. Were it reached, the rename would
-   fail after the records exist, and nothing would be lost.)
+4. On a system that cannot rename a folder holding an open file (Windows), the lock
+   is such a file, so step 3 moves every entry but the lock out instead, still under
+   the lock (`lyrics_accept_records.remove_lyricsmith`), and only once the lock is let
+   go are the lock and ``.lyricsmith`` removed, unless a run has taken them since
+   (`lyrics_accept_records.drop_lock_folder`). A ``.lyricsmith`` kept then is one
+   informational report line, ``.lyricsmith kept: <reason>``, and changes no exit.
 
 A link or a non-folder at ``.lyricsmith.accepting`` is refused on every pass, a
 report-only one too, so the report never promises a removal ``--apply`` would refuse.
@@ -40,10 +43,10 @@ from typing import Final
 
 import lyrics_album
 import lyrics_exit
-import lyrics_prune_mode
 from lyrics_accept_check import check_flags
 from lyrics_accept_judge import ACCEPTING_NAME, AtRisk, Contents, Refusal, RunHeld
 from lyrics_accept_judge import judge_contents, read_contents
+from lyrics_accept_records import RENAMES_HELD_FOLDERS, drop_lock_folder
 from lyrics_accept_records import finish_leftover, make_records_folder
 from lyrics_accept_records import records_root, refuse_unsafe_accepting
 from lyrics_accept_records import remove_lyricsmith, write_records
@@ -98,6 +101,8 @@ class AcceptReport:
     then run, a track once per run and reason. *records* is the records folder
     written, or None. *error* says why the records could not be written, when that
     stopped the removal, and *partial* is the records folder made before it, if any.
+    *kept_folder* says why ``.lyricsmith`` stayed after the lock was let go (step 4
+    above), or is None when it went or that step never ran.
     """
 
     apply: bool
@@ -110,6 +115,7 @@ class AcceptReport:
     error: str | None = None
     run_folders: int = 0
     partial: Path | None = None
+    kept_folder: str | None = None
 
     @property
     def tracks_at_risk(self) -> int:
@@ -145,20 +151,27 @@ def accept_album(
     environ: Mapping[str, str],
     now: Callable[[], datetime],
     delete: Delete | None = None,
+    rename_whole: bool | None = None,
 ) -> AcceptReport:
     """Judge *album*'s runs and, with *apply*, record their manifests and remove them.
 
     *environ* names the state folder the records go under, *now* their time; *delete*
-    None is `shutil.rmtree`. Raises `RunFolderLinkError`, `LockHeldError`,
-    `UnsafeAcceptingError` and the `OSError` reading the run folder raises, each
-    before anything is changed. The caller runs the rmtree guard first.
+    None is `lyrics_delete.chosen_delete`'s. *rename_whole* False removes
+    ``.lyricsmith`` entry by entry, the lock last and after its release (step 4
+    above); None is `RENAMES_HELD_FOLDERS`. Raises `RunFolderLinkError`,
+    `LockHeldError`, `UnsafeAcceptingError` and the `OSError` reading the run folder
+    raises, each before anything is changed.
     """
+    if rename_whole is None:
+        rename_whole = RENAMES_HELD_FOLDERS
     refuse_unsafe_accepting(album / ACCEPTING_NAME)
     if not os.path.lexists(album / RUN_FOLDER_NAME):
         if not os.path.lexists(album / ACCEPTING_NAME):
             return AcceptReport(apply, found=False)
         return AcceptReport(apply, leftover=_leftover(album, apply, delete))
     with album_lock(album, acquire=acquire_lock):
+        # Taken under the lock, so the drop after it can tell the folder is still ours.
+        held = os.lstat(album / RUN_FOLDER_NAME)
         contents = read_contents(album, stages.read_manifest)
         judgment = judge_contents(contents)
         found = len(contents.runs)
@@ -176,7 +189,11 @@ def accept_album(
                 leftover=leftover,
                 run_folders=found,
             )
-        done = _apply(album, contents, environ, now, delete)
+        done = _apply(album, contents, environ, now, delete, rename_whole)
+    # Only after a removal was begun: a records failure deletes nothing, lock included.
+    kept = None
+    if not rename_whole and done.records is not None:
+        kept = drop_lock_folder(album, held)
     return AcceptReport(
         apply,
         at_risk=tuple(risks),
@@ -186,6 +203,7 @@ def accept_album(
         error=done.error,
         run_folders=found,
         partial=done.partial,
+        kept_folder=kept,
     )
 
 
@@ -229,11 +247,13 @@ def _apply(
     environ: Mapping[str, str],
     now: Callable[[], datetime],
     delete: Delete | None,
+    rename_whole: bool,
 ) -> _Applied:
     """Finish a leftover, write the records, then remove ``.lyricsmith``: in that order.
 
     A leftover that cannot go stops the pass before the records, since the rename
     must never replace it; a records failure stops it before anything is deleted.
+    *rename_whole* is `lyrics_accept_records.remove_lyricsmith`'s.
     """
     leftover = _leftover(album, True, delete) if contents.leftover else None
     if leftover is not None and leftover.failed:
@@ -245,7 +265,7 @@ def _apply(
     except (LyricsError, OSError) as error:
         reason = f"{_RECORDS_FAILED}: {error}"
         return _Applied(KEPT, leftover, error=reason, partial=folder)
-    failed = remove_lyricsmith(album, delete)
+    failed = remove_lyricsmith(album, delete, rename_whole=rename_whole)
     outcome = REMOVED if failed is None else f"{ERROR_PREFIX}{failed}"
     return _Applied(outcome, leftover, folder)
 
@@ -276,6 +296,8 @@ def format_accept(
         lines.append(f"records: {report.records}")
     if report.partial is not None:
         lines.append(f"partial records: {report.partial}")
+    if report.kept_folder is not None:
+        lines.append(f"{RUN_FOLDER_NAME} kept: {report.kept_folder}")
     if report.error is not None:
         lines.append(f"{ERROR_PREFIX}{report.error}")
     verb = REMOVED if report.apply else WOULD_REMOVE
@@ -333,11 +355,9 @@ def accept_exit(report: AcceptReport) -> int:
 def accept_mode(args: argparse.Namespace, wiring: Wiring, prog: str) -> int:
     """Accept --album's runs, or report what accepting them would remove.
 
-    Refuses to start, exit 2, where `shutil.rmtree` is not proof against links, as
-    prune does. A report that cannot be written is the lost-report exit, 3.
+    A report that cannot be written is the lost-report exit, 3.
     """
     album = lyrics_album.resolve_album(args.album)
-    lyrics_prune_mode.refuse_unsafe_delete("accept")
     report = accept_album(
         album,
         apply=bool(args.apply),

@@ -18,7 +18,7 @@ class SummaryTest(unittest.TestCase):
         )
         self.assertEqual(
             at_summary.plan_line(planned, ROOT),
-            f"skipped (has sidecar)  {Path('a') / 'one.mp3'}",
+            "skipped (has sidecar)  a/one.mp3",
         )
 
     def test_result_lines_indent_the_detail(self) -> None:

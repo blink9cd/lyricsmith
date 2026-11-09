@@ -8,10 +8,16 @@ categories prefer it over reading the backup's record. Every name and lyric is i
 
 from __future__ import annotations
 
+import abc
 import dataclasses
+import errno
 import json
+import os
 import sys
+import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent), str(_HERE.parent / "src")]
@@ -233,7 +239,32 @@ class RunTest(FreshCliCase):
         self.assertIsNone(after.held)
 
 
-class UnreadableLinkTest(FreshCliCase):
+def _mode_000_stops_a_read() -> bool:
+    """True when ``chmod(0)`` stops this process reading a file.
+
+    Root reads a mode-000 file, and on Windows ``chmod`` sets only the read-only
+    attribute, which stops no read. Probed rather than inferred from the platform, so
+    the real-permission tests run wherever they can; their twin raises the refusal
+    through the open itself, which runs everywhere.
+    """
+    with TemporaryDirectory() as scratch:
+        probe = Path(scratch) / "probe"
+        probe.write_bytes(b"")
+        probe.chmod(0)
+        try:
+            probe.read_bytes()
+        except PermissionError:
+            return True
+        finally:
+            probe.chmod(0o600)
+    return False
+
+
+#: Whether ``chmod(0)`` stops a read here; probed once, at import.
+_MODE_000_LOCKS = _mode_000_stops_a_read()
+
+
+class UnreadableLinkCase(FreshCliCase, abc.ABC):
     """A sidecar link inside the album whose target cannot be read leaves ``held`` unknown."""
 
     def setUp(self) -> None:
@@ -252,11 +283,14 @@ class UnreadableLinkTest(FreshCliCase):
         )
         target = words.with_suffix(".txt").rename(self.album / "notes.txt")
         self.path.with_suffix(".txt").symlink_to(target.name)
-        target.chmod(0)
-        self.addCleanup(target.chmod, 0o644)
+        self.lock(target)
 
-    @tag_builders.needs_binding_modes
-    def test_a_strip_goes_on(self) -> None:
+    @abc.abstractmethod
+    def lock(self, target: Path) -> None:
+        """Make *target* unreadable to this process for the rest of the test."""
+
+    def assert_a_strip_goes_on(self) -> None:
+        """A strip over the track succeeds, its ``held`` unknown, the link gone."""
         result = self.main("--album", str(self.album), "--mode", "strip")
         self.assertEqual(result.code, album.EXIT_OK, result.stderr)
         after, _words = self.afters()
@@ -265,11 +299,53 @@ class UnreadableLinkTest(FreshCliCase):
         self.assertIsNone(after.held)
         self.assertFalse(self.path.with_suffix(".txt").is_symlink())
 
-    @tag_builders.needs_binding_modes
-    def test_a_run_errors_at_the_sidecar_stage_as_before(self) -> None:
+    def assert_a_run_errors_at_the_sidecar_stage(self) -> None:
+        """A run records the track's sidecar error, ``PermissionError``, ``held`` unknown."""
         self.run_album()
         after, _words = self.afters()
         assert after is not None and after.error is not None
         self.assertIs(after.error.stage, lr.ErrorStage.SIDECAR)
         self.assertEqual(after.error.exc_type, "PermissionError")
         self.assertIsNone(after.held)
+
+
+@unittest.skipUnless(
+    _MODE_000_LOCKS, "chmod(0) does not stop a read here (root, or Windows)"
+)
+class UnreadableLinkTest(UnreadableLinkCase):
+    """The target is made unreadable by its mode, where a mode stops a read."""
+
+    def lock(self, target: Path) -> None:
+        """Take every permission off *target*; give them back at the cleanup."""
+        target.chmod(0)
+        self.addCleanup(target.chmod, 0o644)
+
+    @tag_builders.needs_binding_modes
+    def test_a_strip_goes_on(self) -> None:
+        self.assert_a_strip_goes_on()
+
+    @tag_builders.needs_binding_modes
+    def test_a_run_errors_at_the_sidecar_stage_as_before(self) -> None:
+        self.assert_a_run_errors_at_the_sidecar_stage()
+
+
+class RefusedOpenLinkTest(UnreadableLinkCase):
+    """The portable twin: each open of the target refuses it, as a mode-000 file's does."""
+
+    def lock(self, target: Path) -> None:
+        """Make every open of *target* raise ``PermissionError``, as a locked file's."""
+        real = os.open
+        locked = os.path.realpath(target)
+
+        def refusing(name: str, flags: int, *args: int) -> int:
+            if os.path.realpath(name) == locked:
+                raise PermissionError(errno.EACCES, "Permission denied", str(name))
+            return real(name, flags, *args)
+
+        self.enterContext(mock.patch.object(os, "open", refusing))
+
+    def test_a_strip_goes_on(self) -> None:
+        self.assert_a_strip_goes_on()
+
+    def test_a_run_errors_at_the_sidecar_stage_as_before(self) -> None:
+        self.assert_a_run_errors_at_the_sidecar_stage()

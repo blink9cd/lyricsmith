@@ -66,7 +66,6 @@ class ReadRegularFollowTest(fixtures.IsolatedCase):
     def test_a_link_is_followed_by_default(self) -> None:
         self.assertEqual(lyrics_files.read_regular(self.link), b"words\n")
 
-    @unittest.skipIf(not getattr(os, "O_NOFOLLOW", 0), "no O_NOFOLLOW to refuse a link")
     def test_a_link_is_refused_unfollowed(self) -> None:
         with self.assertRaises(OSError):
             lyrics_files.read_regular(self.link, follow=False)

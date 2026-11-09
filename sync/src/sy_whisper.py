@@ -4,7 +4,8 @@ The child separates the vocals, then, before wav2vec2 loads, hands them here as 
 samples. A request carrying a transcript kept from an earlier run is judged on that, and
 whisper-cli is not run: nothing is transcribed twice. Otherwise the samples are written
 as a WAV in a private folder inside the parent's work folder and transcribed by
-whisper-cli exactly as the transcribe tool calls it, in English. A run that fails, times
+whisper-cli exactly as the transcribe tool calls it, in English, with the whisper model
+the request names. A run that fails, times
 out or leaves no transcript raises `HeardError`, so the child fails and the track is an
 error: a check that could not run is never a pass. The run goes through a `Runner`, so
 the tests stand in for whisper-cli.
@@ -15,13 +16,14 @@ from __future__ import annotations
 import subprocess
 import tempfile
 import wave
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import sy_located  # noqa: F401 - puts the other tools and libraries on sys.path
 import at_engine
-from at_models import VAD_MODEL_NAME, WHISPER_MODEL_NAME
+from at_models import LARGE_MODEL_NAME, VAD_MODEL_NAME, WHISPER_MODEL_NAME
 from at_types import ENGINE_STEM
 from lyrics_heard import Heard
 from sy_heard import judge
@@ -42,15 +44,32 @@ WAV_NAME: Final = "vocals.wav"
 PCM_BYTES: Final = 2
 #: whisper-cli's error lines a failed run's message keeps, as ffmpeg's are kept.
 WHISPER_ERROR_LINES: Final = 4
+#: large-v3's seconds of bound a second of vocals, about twice the turbo's. On five
+#: test-library tracks at low load its median whisper time was about 0.068 s a second
+#: of audio against the turbo's about 0.040 (paired ratios 1.3 to 2.5, median about
+#: 1.7), so 1.0 keeps about the turbo's headroom over its own measured time.
+LARGE_WHISPER_PER_SECOND: Final = 1.0
+#: Each pinned whisper model's seconds of bound a second of vocals, on top of
+#: `WHISPER_BASE_S`: the turbo's (`WHISPER_PER_SECOND`) and large-v3's, each measured.
+WHISPER_PER_SECOND_BY_MODEL: Final[Mapping[str, float]] = MappingProxyType(
+    {
+        WHISPER_MODEL_NAME: WHISPER_PER_SECOND,
+        LARGE_MODEL_NAME: LARGE_WHISPER_PER_SECOND,
+    }
+)
 
 
 class HeardError(RuntimeError):
     """whisper-cli could not hear the vocals: never a pass, so the child fails."""
 
 
-def whisper_timeout(seconds: float) -> float:
-    """whisper-cli's bound on *seconds* of vocals: a minute plus half their length."""
-    return WHISPER_BASE_S + WHISPER_PER_SECOND * seconds
+def whisper_timeout(seconds: float, model: str = WHISPER_MODEL_NAME) -> float:
+    """whisper-cli's bound on *seconds* of vocals heard with *model*.
+
+    A minute plus the model's own share of their length: half of it for the turbo, all
+    of it for large-v3 (`WHISPER_PER_SECOND_BY_MODEL`).
+    """
+    return WHISPER_BASE_S + WHISPER_PER_SECOND_BY_MODEL[model] * seconds
 
 
 def write_wav(path: Path, pcm: bytes) -> None:
@@ -113,12 +132,13 @@ def heard_in(
         write_wav(workdir / WAV_NAME, pcm)
         argv = at_engine.build_argv(
             request.whisper_cli,
-            models / WHISPER_MODEL_NAME,
+            models / request.whisper_model,
             models / VAD_MODEL_NAME,
             WHISPER_LANGUAGE,
             workdir / WAV_NAME,
             workdir,
         )
         text = workdir / f"{ENGINE_STEM}{TXT_SUFFIX}"
-        transcript = _transcript(argv, text, whisper_timeout(seconds), run)
+        bound = whisper_timeout(seconds, request.whisper_model)
+        transcript = _transcript(argv, text, bound, run)
     return judge(request.ids, transcript), transcript

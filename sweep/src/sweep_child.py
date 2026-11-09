@@ -14,7 +14,12 @@ stdout), and its stdin is closed.
 **The bound.** `run_child` waits at most *timeout_s* for the child. Past it, the child is
 sent Ctrl-C's own signal, so it stops the way an operator would stop it; a child still
 running `STOP_GRACE_S` later is killed, and a second Ctrl-C during that grace kills it at
-once. Every wait is bounded, the one after the kill too: a child still not gone then (one
+once. Windows' `Popen.send_signal` cannot send that signal, so there
+(`CAN_FORWARD_SIGNALS` false) the child is sent SIGTERM instead, which `Popen` carries out
+as `terminate()` on every host (TerminateProcess on Windows), ending it at once with no
+chance to record the track in hand, and the result carries the album tool's interrupted
+code, as a child stopped by the signal reports it, rather than the terminated child's
+own exit 1. Every wait is bounded, the one after the kill too: a child still not gone then (one
 stuck in uninterruptible I/O, say) is left, never reaped, and the result says so with
 its pid rather than raising, so the album is still recorded.
 
@@ -42,6 +47,7 @@ from typing import Protocol
 
 import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 from lyrics_bandcamp import BANDCAMP_STEP_DEADLINE_S
+from lyrics_exit import EXIT_INTERRUPTED
 from lyrics_fetch import (
     CHAIN,
     PROVIDER_DEADLINE_S,
@@ -106,6 +112,11 @@ ALBUM_TIMEOUT_S = TRACK_WORST_S * _LONG_ALBUM_TRACKS
 STOP_GRACE_S = 6 * 60.0
 #: How long to wait for a killed child to be gone.
 KILL_WAIT_S = 30.0
+#: Whether the bound's stop can be sent as Ctrl-C's own signal. Windows' `Popen` sends
+#: only SIGTERM (as TerminateProcess) and the console events, so SIGINT raised
+#: ValueError there; the child is sent SIGTERM instead. Read at call time, so tests can
+#: flip it.
+CAN_FORWARD_SIGNALS = sys.platform != "win32"
 #: Where the child's stdout goes: this process's own stderr, by descriptor, so the
 #: sweep's report alone reaches stdout.
 _STDERR_FD = 2
@@ -164,6 +175,8 @@ REFETCH_OPTION = "--refetch-untimed"
 IMPLAUSIBLE_OPTION = "--refetch-implausible"
 #: The option the sweep and the album tool each take for the list of the MP3s saved.
 CHANGED_LIST_OPTION = "--changed-list"
+#: The option the sweep and the album tool's fix each take for the held tracks' list.
+HOLD_OPTION = "--hold-for-genius"
 #: The option the sweep and the album tool's fix each take for the transcript store.
 HEARD_DIR_OPTION = "--heard-dir"
 #: The option the sweep and the album tool each take to leave NetEase's steps unasked.
@@ -197,12 +210,14 @@ def album_argv(
     skip: Sequence[str] = (),
     mode: str = MODE_RUN,
     heard_dir: Path | None = None,
+    hold_list: Path | None = None,
 ) -> list[str]:
     """The command running the album tool at *entry* on *album*, never ``--fresh``.
 
     *mode* is the album tool's mode: a run by default, or the fix pass's
     ``fix-text``, which *heard_dir* names the transcript store of
-    (``--heard-dir``).
+    (``--heard-dir``), and *hold_list* the file the fix lists the tracks it held
+    for Genius in (``--hold-for-genius``).
 
     *refetch_untimed* adds ``--refetch-untimed``, the refetch pass's option,
     *refetch_implausible* ``--refetch-implausible``, and *changed_list*
@@ -227,6 +242,8 @@ def album_argv(
         argv.append(IMPLAUSIBLE_OPTION)
     if changed_list is not None:
         argv += [CHANGED_LIST_OPTION, str(changed_list)]
+    if hold_list is not None:
+        argv += [HOLD_OPTION, str(hold_list)]
     if only:
         argv += [ONLY_FLAG, SEPARATOR.join(option_name(source) for source in only)]
     argv += skip
@@ -268,6 +285,33 @@ def _ended(
     )
 
 
+def _stop(process: _Process) -> bool:
+    """Stop *process*, past its bound, as Ctrl-C would; True if it was terminated instead.
+
+    Ctrl-C's own signal where it can be sent; elsewhere (`CAN_FORWARD_SIGNALS` false)
+    SIGTERM, the one signal Windows' `Popen` sends, as `terminate()`, which the caller
+    reports as the stop the signal would have made. Sent through `send_signal` on both
+    paths, so a runner's process need offer nothing more.
+    """
+    if CAN_FORWARD_SIGNALS:
+        process.send_signal(signal.SIGINT)
+        return False
+    process.send_signal(signal.SIGTERM)
+    return True
+
+
+def _as_stopped(settled: _Settled) -> _Settled:
+    """*settled* for a child this process terminated: reaped, it reads as interrupted.
+
+    A terminated Windows child exits 1, which the album tool would mean as a failure;
+    the signal's stop exits with the album tool's interrupted code, so that is recorded.
+    An unreaped child keeps its None.
+    """
+    if settled.exit_code is None:
+        return settled
+    return _Settled(EXIT_INTERRUPTED, settled.interrupted)
+
+
 def run_child(
     argv: Sequence[str],
     timeout_s: float,
@@ -278,7 +322,8 @@ def run_child(
 ) -> ChildResult:
     """Run *argv* to its end, bounded by *timeout_s*; how it ended.
 
-    Past the bound the child is sent SIGINT and given *stop_grace_s* to stop. When
+    Past the bound the child is sent SIGINT, or terminated where that cannot be sent
+    (`_stop`), and given *stop_grace_s* to stop. When
     Ctrl-C interrupts this process, the child, in the same process group, got it too:
     it is given the same grace, and the result says it was interrupted. Never raises
     for a child that will not stop: the result says it was left, with its pid.
@@ -287,8 +332,10 @@ def run_child(
     try:
         return ChildResult(process.wait(timeout=timeout_s))
     except subprocess.TimeoutExpired:
-        process.send_signal(signal.SIGINT)
+        terminated = _stop(process)
         settled = _settle(process, stop_grace_s, kill_wait_s)
+        if terminated:
+            settled = _as_stopped(settled)
         return _ended(process, settled, timed_out=True, interrupted=False)
     except KeyboardInterrupt:
         settled = _settle(process, stop_grace_s, kill_wait_s)

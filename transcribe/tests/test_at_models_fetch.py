@@ -231,10 +231,35 @@ class DeadlineTest(IsolatedCase):
         )
         self.assertEqual(result.status, at_models.FetchStatus.DOWNLOADED)
 
-    def test_the_deadline_covers_the_largest_model_at_a_slow_line(self) -> None:
-        # Generous: the largest pinned model at 100 kB/s still finishes inside it.
-        largest = max(model.size for model in at_models.MANIFEST)
-        self.assertGreater(at_models.DOWNLOAD_DEADLINE_SECONDS, largest / 100_000)
+    def test_each_deadline_covers_its_model_at_a_slow_line(self) -> None:
+        # Generous: every pinned model at 100 kB/s still finishes inside its own.
+        for model in at_models.MANIFEST:
+            with self.subTest(model=model.name):
+                deadline = at_models.download_deadline(model)
+                self.assertGreater(deadline, model.size / 100_000)
+
+    def test_the_default_set_keeps_six_hours_and_large_v3_gets_more(self) -> None:
+        # Only a fetch that names large-v3 waits longer than the default set did.
+        six_hours = 6 * 60 * 60
+        for model in at_models.run_models(at_models.WHISPER_MODEL_NAME):
+            with self.subTest(model=model.name):
+                self.assertEqual(at_models.download_deadline(model), six_hours)
+        (large,) = (
+            m for m in at_models.MANIFEST if m.name == at_models.LARGE_MODEL_NAME
+        )
+        self.assertGreater(at_models.download_deadline(large), six_hours)
+
+    def test_a_large_file_is_cut_off_at_its_own_longer_deadline(self) -> None:
+        big = at_models.ModelFile("big.bin", URL, 4_000_000_000, TINY.sha256)
+        deadline = at_models.download_deadline(big)
+        clock = SlowClock(step=59.0)
+        [result] = at_models.fetch_models(
+            self.models, opener=FakeOpener(drip=1), manifest=(big,), clock=clock
+        )
+        self.assertEqual(result.status, at_models.FetchStatus.FAILED)
+        self.assertIn(f"passed the {deadline} s download deadline", result.detail)
+        self.assertGreater(clock.now, at_models.DOWNLOAD_DEADLINE_SECONDS)
+        self.assertLess(clock.now, deadline + 2 * clock.step)
 
 
 class RedirectTest(IsolatedCase):

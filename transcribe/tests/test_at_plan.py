@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import unittest
 from pathlib import Path
 
@@ -157,10 +158,7 @@ class ClaimOutputsTest(unittest.TestCase):
                 FileResult(
                     second.audio,
                     Outcome.FAILED,
-                    (
-                        f"another audio file, {Path('a') / 'one.mp3'}, "
-                        "already writes this .lrc",
-                    ),
+                    ("another audio file, a/one.mp3, already writes this .lrc",),
                 ),
             ],
         )
@@ -315,6 +313,23 @@ class PresentLinkTest(IsolatedCase):
         folder.mkdir()
         with mock.patch.object(Path, "is_file", return_value=True):
             self.assertEqual(at_plan.read_lrc(folder), "")
+
+    def test_a_file_whose_descriptor_is_no_regular_file_is_present_not_ours(
+        self,
+    ) -> None:
+        # The fstat refusal on every host: Windows cannot open a folder at all, so
+        # there the test above stops at os.open's error before the fstat is reached.
+        lrc = self.root / "one.lrc"
+        lrc.write_text(OURS, encoding="utf-8", newline="\n")
+        real = os.fstat
+
+        def fstat(descriptor: int) -> os.stat_result:
+            found = real(descriptor)
+            # A FIFO's mode in place of the regular file's: what a swap would show.
+            return os.stat_result((stat.S_IFIFO, *tuple(found)[1:]))
+
+        with mock.patch.object(at_plan.os, "fstat", side_effect=fstat):
+            self.assertEqual(at_plan.read_lrc(lrc), "")
 
     def test_a_txt_that_lexists_only_is_present(self) -> None:
         # Reaches plan_files' lexists branch without a real symlink.

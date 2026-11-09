@@ -3,7 +3,9 @@
 IsolatedCase points HOME and the per-user data variables into a temporary folder,
 replaces PATH with a folder holding only this test's fakes, and makes every network
 entry point raise, so a test that reaches the host or the network fails loudly instead
-of touching it. write_fake_whisper writes a stand-in whisper-cli there.
+of touching it. write_fake_whisper writes a stand-in whisper-cli there: a shebang script
+on POSIX, and on Windows, which runs no shebang, a .cmd shim that hands its arguments to
+this interpreter running the same Python body.
 """
 
 from __future__ import annotations
@@ -51,14 +53,42 @@ with open(stem + ".txt", "w", encoding="utf-8") as txt:
 """
 
 
+#: The Windows fake's Python body, beside its .cmd shim. Not named whisper-cli.*, so a
+#: PATHEXT holding .PY cannot make the PATH search find it before the shim.
+FAKE_WHISPER_SCRIPT = "fake_whisper.py"
+#: The Windows shim's file name: the one PATHEXT extension the isolated PATH search tries.
+FAKE_WHISPER_SHIM = "whisper-cli.cmd"
+
+
 def write_fake_whisper(bin_dir: Path) -> Path:
-    """Write the stand-in whisper-cli into bin_dir and return its path."""
+    """Write the stand-in whisper-cli into bin_dir and return the path that runs it."""
+    if sys.platform == "win32":
+        return _write_windows_fake(bin_dir)
     path = bin_dir / "whisper-cli"
     path.write_text(
         f"#!{sys.executable}\n{FAKE_WHISPER_BODY}", encoding="utf-8", newline="\n"
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path
+
+
+def _write_windows_fake(bin_dir: Path) -> Path:
+    """The body as a script, and a .cmd shim running it with this interpreter.
+
+    CreateProcess starts a .cmd through cmd.exe, so the shim's exit status is the
+    interpreter's (its last command's) and %* passes the arguments on as received;
+    %~dp0 is the shim's own folder, so the shim works from any working folder.
+    """
+    (bin_dir / FAKE_WHISPER_SCRIPT).write_text(
+        FAKE_WHISPER_BODY, encoding="utf-8", newline="\n"
+    )
+    shim = bin_dir / FAKE_WHISPER_SHIM
+    shim.write_text(
+        f'@"{sys.executable}" "%~dp0{FAKE_WHISPER_SCRIPT}" %*\r\n',
+        encoding="utf-8",
+        newline="",
+    )
+    return shim
 
 
 class IsolatedCase(unittest.TestCase):
@@ -81,6 +111,10 @@ class IsolatedCase(unittest.TestCase):
             "XDG_DATA_HOME": str(self.home / "xdg"),
             "LOCALAPPDATA": str(self.home / "local"),
             "PATH": str(self.bin),
+            # Windows' PATH search tries each PATHEXT extension in turn; pinned to the
+            # fake's own, so `which` answers its exact file name (the runner's PATHEXT
+            # spells .CMD in capitals). Unread on POSIX.
+            "PATHEXT": ".cmd",
             "FAKE_WHISPER_LOG": str(self.log),
         }
         patcher = mock.patch.dict(os.environ, environment)

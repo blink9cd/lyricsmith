@@ -30,7 +30,7 @@ from lyrics_errors import AlbumUnusableError as AlbumUnusableError
 from lyrics_model import LyricsError
 from lyrics_records import is_mp3_name
 from lyrics_run_folders import LOCK_NAME as LOCK_NAME
-from lyrics_run_folders import RUN_FOLDER_NAME
+from lyrics_run_folders import RUN_FOLDER_NAME, is_link_or_junction
 from lyrics_run_folders import RunFolderLinkError as RunFolderLinkError
 from lyrics_run_folders import refuse_linked_run_folder as refuse_linked_run_folder
 
@@ -96,18 +96,27 @@ def walk_album(
 
     Hidden folders are pruned. A linked MP3 or folder is skipped and reported, never
     followed, so neither the run folder nor another album reached through a link
-    joins the run. A folder that cannot be listed is passed over unless *onerror*
-    (`os.walk`'s own) raises.
+    joins the run. A junction counts as a linked folder: `os.walk` would enter one,
+    since it reads as no symbolic link, so it is taken out of the walk here. A folder
+    that cannot be listed is passed over unless *onerror* (`os.walk`'s own) raises.
+    An entry that cannot be looked at raises its `OSError`, which ends discovery with
+    exit 2.
     """
     tracks: list[Path] = []
     links: list[Path] = []
     for folder, dirs, files in os.walk(album, onerror=onerror, followlinks=False):
-        dirs[:] = [name for name in dirs if not _is_hidden(name)]
-        for path in _visible(Path(folder), [*dirs, *files]):
-            if path.is_symlink() and (path.name in dirs or _is_mp3(path)):
+        here = Path(folder)
+        for path in _visible(here, [*dirs, *files]):
+            if is_link_or_junction(path) and (path.name in dirs or _is_mp3(path)):
                 links.append(path)
             elif path.name in files and _is_mp3(path) and path.is_file():
                 tracks.append(path)
+        # Pruned after the listing, so a linked folder is still reported above.
+        dirs[:] = [
+            name
+            for name in dirs
+            if not _is_hidden(name) and not is_link_or_junction(here / name)
+        ]
     return Discovery(_album_order(album, tracks), _album_order(album, links))
 
 

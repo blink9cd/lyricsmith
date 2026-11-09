@@ -34,6 +34,7 @@ def _args(
         no_genius=no_genius,
         config=None,
         only_providers=only_providers,
+        hold_for_genius=None,
     )
 
 

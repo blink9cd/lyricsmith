@@ -363,10 +363,12 @@ def fetch_mode(
     opener: at_models.Opener,
     manifest: Sequence[at_models.ModelFile],
 ) -> int:
-    """Download what is missing or mismatched; one row per file."""
-    results = at_models.fetch_models(
-        options.model_dir, opener=opener, manifest=manifest
-    )
+    """Download what is missing or mismatched of what `Options.whisper_model`'s run reads.
+
+    One row per file; large-v3 is among them only when it is the model named.
+    """
+    wanted = at_models.run_models(options.whisper_model, manifest)
+    results = at_models.fetch_models(options.model_dir, opener=opener, manifest=wanted)
     for line in at_models.fetch_lines(results):
         say(line)
     return at_models.fetch_exit_code(results)

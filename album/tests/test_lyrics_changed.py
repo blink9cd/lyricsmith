@@ -21,14 +21,26 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
 import album_profile  # noqa: E402, F401 - loads the shared Hypothesis profile
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
+import host_shapes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_changed as lc  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 
 #: Any text, lone surrogates included: a path decoded from bytes that are not UTF-8
 #: holds them, through the file system's surrogate escape.
 _ANY_TEXT = st.text(alphabet=st.characters(exclude_categories=()))
-#: Paths: any text, and the same text made absolute, so both kinds are common.
-_PATHS = st.lists(st.one_of(_ANY_TEXT, _ANY_TEXT.map(lambda text: "/" + text)))
+#: Paths: any text, and the same text made absolute on this host, so both are common.
+_PATHS = st.lists(
+    st.one_of(_ANY_TEXT, _ANY_TEXT.map(lambda text: host_shapes.on_host("/" + text)))
+)
+#: An invented POSIX path made absolute on this host, and how the writer writes one:
+#: each the path itself off Windows, so every POSIX literal here is unchanged there.
+_ON = host_shapes.on_host
+_AS = host_shapes.as_written
+
+
+def _lines(*paths: str) -> bytes:
+    """The list file's bytes naming each normal POSIX path of *paths* as written here."""
+    return "".join(f"{_AS(path)}\n" for path in paths).encode()
 
 
 def _track(path: str, after: lr.TrackOutcome | None) -> lr.ManifestTrack:
@@ -46,41 +58,42 @@ class FormatTest(fixtures.IsolatedCase):
     """What a list file holds: each absolute path once, normalized, linefeed ended."""
 
     def test_each_path_is_one_linefeed_ended_line(self) -> None:
-        data, left = lc.format_changed_list(["/m/a b.mp3", "/m/Ü/c.mp3"])
-        self.assertEqual(data, "/m/a b.mp3\n/m/Ü/c.mp3\n".encode())
+        data, left = lc.format_changed_list([_ON("/m/a b.mp3"), _ON("/m/Ü/c.mp3")])
+        self.assertEqual(data, _lines("/m/a b.mp3", "/m/Ü/c.mp3"))
         self.assertEqual(left, ())
 
     def test_nothing_changed_is_an_empty_file(self) -> None:
         self.assertEqual(lc.format_changed_list([]), (b"", ()))
 
     def test_a_path_named_twice_is_written_once_where_first_named(self) -> None:
-        data, _ = lc.format_changed_list(["/m/b.mp3", "/m/a.mp3", "/m/x/../b.mp3"])
-        self.assertEqual(data, b"/m/b.mp3\n/m/a.mp3\n")
+        paths = ["/m/b.mp3", "/m/a.mp3", "/m/x/../b.mp3"]
+        data, _ = lc.format_changed_list([_ON(path) for path in paths])
+        self.assertEqual(data, _lines("/m/b.mp3", "/m/a.mp3"))
 
     def test_a_path_is_normalized_as_the_reader_normalizes_it(self) -> None:
-        data, _ = lc.format_changed_list(["/m/./a//b.mp3"])
-        self.assertEqual(data, b"/m/a/b.mp3\n")
+        data, _ = lc.format_changed_list([_ON("/m/./a//b.mp3")])
+        self.assertEqual(data, _lines("/m/a/b.mp3"))
 
     def test_each_path_the_reader_would_refuse_is_left_out_with_its_reason(
         self,
     ) -> None:
         paths = ["/m/a\nb.mp3", "/m/a.mp3\r", "/m/a\x00.mp3", "/m/\udcff.mp3", "a.mp3"]
-        data, left = lc.format_changed_list(["/m/ok.mp3", *paths])
-        self.assertEqual(data, b"/m/ok.mp3\n")
+        data, left = lc.format_changed_list([_ON(p) for p in ["/m/ok.mp3", *paths]])
+        self.assertEqual(data, _lines("/m/ok.mp3"))
         self.assertEqual(
             left,
             (
-                lc.LeftOut("/m/a\nb.mp3", lc.REASON_LINEFEED),
-                lc.LeftOut("/m/a.mp3\r", lc.REASON_CR),
-                lc.LeftOut("/m/a\x00.mp3", lc.REASON_NUL),
-                lc.LeftOut("/m/\udcff.mp3", lc.REASON_NOT_UTF8),
+                lc.LeftOut(_ON("/m/a\nb.mp3"), lc.REASON_LINEFEED),
+                lc.LeftOut(_ON("/m/a.mp3\r"), lc.REASON_CR),
+                lc.LeftOut(_ON("/m/a\x00.mp3"), lc.REASON_NUL),
+                lc.LeftOut(_ON("/m/\udcff.mp3"), lc.REASON_NOT_UTF8),
                 lc.LeftOut("a.mp3", lc.REASON_RELATIVE),
             ),
         )
 
     def test_a_carriage_return_inside_a_name_is_written(self) -> None:
-        data, left = lc.format_changed_list(["/m/a\rb.mp3"])
-        self.assertEqual((data, left), (b"/m/a\rb.mp3\n", ()))
+        data, left = lc.format_changed_list([_ON("/m/a\rb.mp3")])
+        self.assertEqual((data, left), (_lines("/m/a\rb.mp3"), ()))
 
     def test_a_left_out_path_is_shown_escaped(self) -> None:
         notice = lc.left_out_notice(lc.LeftOut("/m/a\nb\udcff.mp3", lc.REASON_NOT_UTF8))
@@ -108,23 +121,28 @@ class ParseTest(fixtures.IsolatedCase):
     """The strict read-back: every line as the contract has it, or nothing at all."""
 
     def test_each_line_is_a_normalized_absolute_path(self) -> None:
+        data = f"{_ON('/m/a.mp3')}\n\n{_ON('/m/./b.mp3')}\n".encode()
         self.assertEqual(
-            lc.parse_changed_list(b"/m/a.mp3\n\n/m/./b.mp3\n"), ("/m/a.mp3", "/m/b.mp3")
+            lc.parse_changed_list(data), (_AS("/m/a.mp3"), _AS("/m/b.mp3"))
         )
 
     def test_an_empty_file_lists_nothing(self) -> None:
         self.assertEqual(lc.parse_changed_list(b""), ())
 
     def test_any_line_the_contract_refuses_makes_the_list_unreadable(self) -> None:
+        drive = host_shapes.HOST_DRIVE.encode()
+        good = drive + b"/m/ok.mp3\n"
+        # The good line alone reads, so each refusal below is the bad line's.
+        self.assertIsNotNone(lc.parse_changed_list(good))
         for data in (
-            b"/m/a.mp3",
-            b"/m/a.mp3\r\n",
-            b"/m/a\x00.mp3\n",
-            b"/m/\xff.mp3\n",
+            drive + b"/m/a.mp3",
+            drive + b"/m/a.mp3\r\n",
+            drive + b"/m/a\x00.mp3\n",
+            drive + b"/m/\xff.mp3\n",
             b"a.mp3\n",
         ):
             with self.subTest(data=data):
-                self.assertIsNone(lc.parse_changed_list(b"/m/ok.mp3\n" + data))
+                self.assertIsNone(lc.parse_changed_list(good + data))
 
     @given(st.binary())
     def test_fuzz_parse_changed_list(self, data: bytes) -> None:
@@ -205,9 +223,9 @@ class SaveTest(fixtures.IsolatedCase):
     def test_the_list_replaces_the_file_whole(self) -> None:
         target = self.tmp / "changed.txt"
         target.write_bytes(b"/old/list.mp3\n")
-        error = lc.save_changed_list(target, ["/m/a.mp3"], self.notices.append)
+        error = lc.save_changed_list(target, [_ON("/m/a.mp3")], self.notices.append)
         self.assertIsNone(error)
-        self.assertEqual(target.read_bytes(), b"/m/a.mp3\n")
+        self.assertEqual(target.read_bytes(), _lines("/m/a.mp3"))
         # No temporary file is left beside it.
         self.assertEqual(
             sorted(p.name for p in self.tmp.iterdir()),
@@ -216,11 +234,12 @@ class SaveTest(fixtures.IsolatedCase):
 
     def test_each_left_out_path_is_one_notice(self) -> None:
         target = self.tmp / "changed.txt"
-        lc.save_changed_list(target, ["/m/a\nb.mp3", "/m/c.mp3"], self.notices.append)
-        self.assertEqual(target.read_bytes(), b"/m/c.mp3\n")
+        paths = [_ON("/m/a\nb.mp3"), _ON("/m/c.mp3")]
+        lc.save_changed_list(target, paths, self.notices.append)
+        self.assertEqual(target.read_bytes(), _lines("/m/c.mp3"))
         self.assertEqual(
             self.notices,
-            [lc.left_out_notice(lc.LeftOut("/m/a\nb.mp3", lc.REASON_LINEFEED))],
+            [lc.left_out_notice(lc.LeftOut(paths[0], lc.REASON_LINEFEED))],
         )
 
     def test_a_file_that_cannot_be_written_is_handed_back_not_raised(self) -> None:
@@ -237,9 +256,9 @@ class WriteChangedListTest(fixtures.IsolatedCase):
 
     def test_a_list_is_written_with_no_interrupt(self) -> None:
         path = self.tmp / "changed.txt"
-        got = lc.write_changed_list(path, lambda: ["/m/01 A.mp3"], lambda text: None)
+        got = lc.write_changed_list(path, lambda: [_ON("/m/01 A.mp3")], lambda _: None)
         self.assertEqual(got, (None, False))
-        self.assertEqual(path.read_text(encoding="utf-8"), "/m/01 A.mp3\n")
+        self.assertEqual(path.read_bytes(), _lines("/m/01 A.mp3"))
 
     def test_a_ctrl_c_while_listing_writes_the_list_on_the_second_pass(self) -> None:
         path = self.tmp / "changed.txt"
@@ -249,9 +268,9 @@ class WriteChangedListTest(fixtures.IsolatedCase):
             calls.append(1)
             if len(calls) == 1:
                 raise KeyboardInterrupt
-            return ["/m/01 A.mp3"]
+            return [_ON("/m/01 A.mp3")]
 
         got = lc.write_changed_list(path, listed, lambda text: None)
         self.assertEqual(got, (None, True))
         self.assertEqual(len(calls), 2)
-        self.assertEqual(path.read_text(encoding="utf-8"), "/m/01 A.mp3\n")
+        self.assertEqual(path.read_bytes(), _lines("/m/01 A.mp3"))

@@ -11,6 +11,7 @@ import logging
 import os
 import shlex
 import sys
+import unittest
 from pathlib import Path
 from unittest import mock
 
@@ -19,6 +20,7 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent), str(_HERE.parent / "src")]
 
 import cli_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_config  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_summary  # noqa: E402 - import follows the sys.path bootstrap above
@@ -136,13 +138,32 @@ class GeniusTest(cli_fakes.CliCase):
         self.assertTrue(self.counts_line(result).endswith("genius: configured"))
         self.assertEqual(self.folder.manifests[0].genius, lr.GeniusState.CONFIGURED)
 
-    def test_a_shared_key_file_is_warned_about(self) -> None:
+    def write_shared_key_file(self) -> Path:
+        """A key file whose POSIX bits let group and others read it."""
         config = self.tmp / "config.toml"
         config.write_text(
             '[genius]\naccess_token = "not-a-real-key"\n', encoding="utf-8", newline=""
         )
         config.chmod(0o644)
+        return config
+
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
+    def test_a_shared_key_file_is_warned_about(self) -> None:
+        config = self.write_shared_key_file()
         result = self.run_album("--config", str(config))
+        self.assertIn("readable by other users", result.stderr)
+
+    def test_a_key_file_warning_reaches_stderr_on_any_host(self) -> None:
+        # The bits read as POSIX reads them on every host: NTFS reports a writable file
+        # as 0o666, so the warning is drawn there too, and its path to stderr is held.
+        real = lyrics_config.permission_warnings
+
+        def as_on_posix(path: Path) -> tuple[str, ...]:
+            return real(path, posix=True)
+
+        config = self.write_shared_key_file()
+        with mock.patch.object(lyrics_config, "permission_warnings", as_on_posix):
+            result = self.run_album("--config", str(config))
         self.assertIn("readable by other users", result.stderr)
 
     def test_no_genius_skips_the_key(self) -> None:

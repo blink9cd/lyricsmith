@@ -47,14 +47,15 @@ def audible_track(album: Path, name: str, lrc: str) -> Path:
     """A silent MP3 of `INTERLUDE_S` seconds named *name* under *album*, *lrc* beside it.
 
     Unlike `sweep_fixtures.add_track`'s empty file, it holds audio, so its duration
-    can be read and its lyrics judged against it.
+    can be read and its lyrics judged against it. Its frames hold *lrc*, as a run
+    leaves them, so it owes no embed (`sweep_fixtures.embed_sidecar`).
     """
     mp3 = album / name
     mp3.parent.mkdir(parents=True, exist_ok=True)
     frame = _FRAME_HEADER + bytes(_FRAME_BYTES - len(_FRAME_HEADER))
     mp3.write_bytes(frame * round(INTERLUDE_S * _FRAMES_A_SECOND))
     mp3.with_suffix(".lrc").write_text(lrc, encoding="utf-8", newline="")
-    return mp3
+    return sf.embed_sidecar(mp3)
 
 
 class ImplausibleArgvTest(sf.IsolatedCase):

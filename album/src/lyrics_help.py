@@ -73,7 +73,10 @@ Output:
   texts tried before the providers'; with none it removes the wrong text,
   backed up, as 'wrong text removed'. Every provider failing removes nothing,
   and nor does an album that looks spoken (a Comedy or Spoken Word genre, or
-  most tracks not sung): its tracks read 'removal withheld'.
+  most tracks not sung): its tracks read 'removal withheld'. With
+  --hold-for-genius it never asks Genius, keeps each text every provider asked
+  answered without singing, read 'removal withheld, held for Genius', and lists
+  those tracks in that file.
   --mode prune removes the run folders nothing needs: a run whose every track is
   undone, with nothing set aside, and a backup that never finished; --dry-run first
   shows which.
@@ -96,22 +99,21 @@ Exit codes:
   2    could not run: bad options, no album or no MP3, the album lock held by
        another run, no run to check or undo, a chosen run whose manifest could
        not be read, a --track outside the album, not one of its tracks or not in
-       the run, a --heard-dir that is not a folder, an unusable --config, or a
-       prune or an accept on a Python whose
-       shutil.rmtree does not protect against links (any on Windows); an accept
-       refused (an unfinished run, an unreadable manifest or run folder, an entry
-       lyricsmith did not write, a link), nothing removed, or whose records could
-       not be written, nothing removed but an earlier accept's leftover; or an
-       album-level step failed with an OS error before any MP3 changed (the lock,
-       the backup, a manifest read)
+       the run, a --heard-dir that is not a folder, or an unusable --config; an
+       accept refused (an unfinished run, an unreadable manifest or run folder,
+       an entry lyricsmith did not write, a link), nothing removed, or whose
+       records could not be written, nothing removed but an earlier accept's
+       leftover; or an album-level step failed with an OS error before any MP3
+       changed (the lock, the backup, a manifest read)
   3    the work finished, or stopped part-way, but the run's record (its
-       manifest) or the --changed-list file could not be written, said after the
-       report: an OS error, or a manifest write that did not read back as written
-       (recording a finished track, which ends a run or an undo after its
-       report); or, once a run, a strip, an undo, a prune or an accept began,
-       its report, as a check's, a compare's or a dry run's: a progress line or
-       the summary that a closed stdout or stderr refused, which ends it with no
-       summary; it outranks 1 and 130, since undo needs the record
+       manifest) or the --changed-list file could not be written, or a fix's
+       --hold-for-genius file, said after the report: an OS error, or a
+       manifest write that did not read back as written (recording a finished
+       track, which ends a run or an undo after its report); or, once a run, a
+       strip, an undo, a prune or an accept began, its report, as a check's, a
+       compare's or a dry run's: a progress line or the summary that a closed
+       stdout or stderr refused, which ends it with no summary; it outranks 1
+       and 130, since undo needs the record
   130  interrupted (Ctrl-C); once the backup is done, the manifest records the
        tracks that finished; an accept stopped after its rename leaves
        .lyricsmith.accepting, which the next accept finishes"""

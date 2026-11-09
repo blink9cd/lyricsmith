@@ -1,8 +1,12 @@
-"""The two pinned whisper.cpp models and the per-user folder they live in.
+"""The pinned whisper.cpp models and the per-user folder they live in.
 
 The manifest is the one place the model names, URLs, sizes and digests are written;
-`--mode fetch-models` downloads exactly these, and a transcribe run's model defaults
-point at them inside the folder `default_model_dir` derives. `default_model_dir`
+`--mode fetch-models` downloads the ones a run hearing with the whisper model it is
+given reads, by default every file but large-v3, and a transcribe run's model defaults
+point at them inside the folder `default_model_dir` derives. Two are whisper models:
+the turbo every run hears with by default, and full large-v3, which only sync's
+hearing mode names; `run_models` is what a run hearing with one of
+them reads. `default_model_dir`
 computes that folder without creating it; only fetch-models' download creates it.
 The download is checked: every redirect must stay on HTTPS, each file is streamed to
 a temporary partial, hashed and bounded by its pinned size and an overall deadline on
@@ -39,9 +43,16 @@ class ModelFile:
 
 
 WHISPER_MODEL_NAME = "ggml-large-v3-turbo.bin"
+#: Full large-v3, the larger model, which only sync's hearing mode uses.
+LARGE_MODEL_NAME = "ggml-large-v3.bin"
 VAD_MODEL_NAME = "ggml-silero-v6.2.0.bin"
+#: The whisper models a run may hear with, the default first.
+WHISPER_MODEL_NAMES = (WHISPER_MODEL_NAME, LARGE_MODEL_NAME)
 
-#: The two pinned models: the Whisper model, then the voice-activity model.
+#: The pinned models: the default Whisper model, the voice-activity model, then full
+#: large-v3, last so that a fetch lands the pair every run needs before the largest
+#: download. Its size and SHA-256 are the turbo's repository's own published LFS
+#: pointer for the file, as the turbo's are.
 MANIFEST: tuple[ModelFile, ...] = (
     ModelFile(
         WHISPER_MODEL_NAME,
@@ -55,7 +66,31 @@ MANIFEST: tuple[ModelFile, ...] = (
         885098,
         "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
     ),
+    ModelFile(
+        LARGE_MODEL_NAME,
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+        3095033483,
+        "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+    ),
 )
+
+
+def run_models(
+    whisper_model: str, manifest: Sequence[ModelFile] | None = None
+) -> tuple[ModelFile, ...]:
+    """The manifest's files a run hearing with *whisper_model* reads, in manifest order.
+
+    Every file but the other whisper models, so a run never needs a model it does not
+    hear with, and fetch-models fetches large-v3 only when it is named. *manifest* is
+    `MANIFEST` when None, read at call time, so a test's stand-in counts. Raises
+    `ValueError` for a name that is not one of `WHISPER_MODEL_NAMES`.
+    """
+    if whisper_model not in WHISPER_MODEL_NAMES:
+        raise ValueError(f"{whisper_model!r} is not a pinned whisper model")
+    others = set(WHISPER_MODEL_NAMES) - {whisper_model}
+    files = MANIFEST if manifest is None else manifest
+    return tuple(model for model in files if model.name not in others)
+
 
 #: The folder under the per-user data root that holds this tool's files.
 APP_FOLDER = "lyricsmith"
@@ -87,11 +122,15 @@ def default_model_dir(platform: str, env: Mapping[str, str], home: Path) -> Path
 
 #: The timeout on every socket operation of a download.
 NETWORK_TIMEOUT_SECONDS = 60
-#: The bound on one file's whole download. The socket timeout bounds only each read,
-#: so a server sending a byte a minute would otherwise never be cut off. Six hours
-#: lets the largest pinned model (about 1.6 GB) arrive over a line as slow as about
-#: 75 kB/s.
+#: The least bound on one file's whole download. The socket timeout bounds only each
+#: read, so a server sending a byte a minute would otherwise never be cut off. Six
+#: hours lets the turbo, the largest file of the default fetch (about 1.6 GB), arrive
+#: over a line as slow as about 75 kB/s.
 DOWNLOAD_DEADLINE_SECONDS = 6 * 60 * 60
+#: The slowest line a file larger than that is waited for: 75 KiB/s, which the turbo
+#: beats inside six hours, so only a larger file (large-v3, about 3.1 GB) is given
+#: longer.
+SLOWEST_LINE_BYTES_PER_SECOND = 75 * 1024
 #: One read from the response, and one read when hashing a file on disk.
 CHUNK_BYTES = 1 << 20
 #: The status column's width in fetch-models' rows.
@@ -209,6 +248,16 @@ class _Refused(Exception):
     """A download this tool will not accept: not HTTPS, the wrong size, or too slow."""
 
 
+def download_deadline(model_file: ModelFile) -> int:
+    """Seconds *model_file*'s download may take: six hours, or its size at the slowest line.
+
+    Scaled by what is fetched, so the default set keeps six hours and only a fetch
+    naming large-v3 waits longer for it.
+    """
+    at_slowest = -(-model_file.size // SLOWEST_LINE_BYTES_PER_SECOND)  # rounded up
+    return max(DOWNLOAD_DEADLINE_SECONDS, at_slowest)
+
+
 def _stream_into(
     model_file: ModelFile, partial: IO[bytes], opener: Opener, clock: Clock
 ) -> str:
@@ -218,11 +267,12 @@ def _stream_into(
     off at the pinned size plus one chunk, and one that stops short is named by its
     byte count rather than as a digest mismatch. The deadline is checked after every
     read, each of which the socket timeout bounds, so a server trickling bytes is cut
-    off at `DOWNLOAD_DEADLINE_SECONDS` plus at most one read.
+    off at its `download_deadline` plus at most one read.
     """
     digest = hashlib.sha256()
     total = 0
-    deadline = clock() + DOWNLOAD_DEADLINE_SECONDS
+    allowed = download_deadline(model_file)
+    deadline = clock() + allowed
     with opener(model_file.url, timeout=NETWORK_TIMEOUT_SECONDS) as response:
         if not response.geturl().startswith("https://"):
             raise _Refused(
@@ -234,7 +284,7 @@ def _stream_into(
                 raise _Refused(f"more bytes than the pinned {model_file.size}")
             if clock() > deadline:
                 raise _Refused(
-                    f"passed the {DOWNLOAD_DEADLINE_SECONDS} s download deadline "
+                    f"passed the {allowed} s download deadline "
                     f"after {total} of the pinned {model_file.size} bytes"
                 )
             digest.update(chunk)

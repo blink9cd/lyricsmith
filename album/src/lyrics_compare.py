@@ -17,6 +17,10 @@ provider's answer rather than to a whole pass. Compare writes nothing into the a
 (a YouTube Music or Tekstowo refusal still writes its cool-down, through the client),
 takes no lock, makes no run folder, and prints nothing itself: a run whose manifest
 cannot be read is passed over, and named through the caller's notice.
+
+A fix of a provider-timed text reads it by `timed_lyrics` and draws the whole chain
+(`timed_answers_in_turn`), its synced steps first; compare itself judges untimed text
+alone.
 """
 
 from __future__ import annotations
@@ -41,6 +45,7 @@ from lyrics_model import (
     ProviderKey,
     ProviderTable,
     Source,
+    SyncedLyrics,
     TrackQuery,
     TrackTags,
 )
@@ -156,18 +161,50 @@ def answers_in_turn(
     the end earlier in the same draw (`lyrics_fetch.SameSong`); compare passes no
     duration, so it judges by neither.
     """
+    keys = tuple(_key(source) for source in COMPARED)
+    return _drawn(keys, query, providers, deadline_s, duration_s)
+
+
+def timed_answers_in_turn(
+    query: TrackQuery,
+    providers: ProviderTable,
+    deadline_s: float,
+    *,
+    duration_s: float | None = None,
+) -> Iterator[Asked]:
+    """`answers_in_turn` for a timed text's fix: the whole chain, in `CHAIN` order.
+
+    So the synced steps (LRCLIB, NetEase, YouTube Music) are drawn before the untimed
+    ones, each answer judged as `answers_in_turn` judges one. A synced step's answer
+    is synced lyrics, which a fix writes with its stamps.
+    """
+    return _drawn(CHAIN, query, providers, deadline_s, duration_s)
+
+
+def _drawn(
+    keys: Sequence[ProviderKey],
+    query: TrackQuery,
+    providers: ProviderTable,
+    deadline_s: float,
+    duration_s: float | None,
+) -> Iterator[Asked]:
+    """Each of *keys*' answers for *query*, one at a time, as `answers_in_turn` says.
+
+    The steps share one draw's memory (`Heard`, `SameSong`), as a chain's pass does,
+    so an LRC provider asked by its synced step is not asked again by its untimed one.
+    """
     heard: Heard = {}
     songs = SameSong()
-    for source in COMPARED:
-        provider = providers.get(_key(source))
+    for key in keys:
+        provider = providers.get(key)
         if provider is None or skips(provider, query):
             continue
         asked = partial(attempt, heard=heard, duration_s=duration_s, same_song=songs)
-        lyrics, tried = asked(_key(source), provider, query, deadline_s)
+        lyrics, tried = asked(key, provider, query, deadline_s)
         again = stripped_retry(query, (tried.outcome,), found=lyrics is not None)
         if again is not None:
-            lyrics, tried = asked(_key(source), provider, again, deadline_s)
-        yield source, lyrics, tried
+            lyrics, tried = asked(key, provider, again, deadline_s)
+        yield key.source, lyrics, tried
 
 
 def judged_lyrics(
@@ -189,6 +226,21 @@ def judged_lyrics(
     if lyrics_kind(sidecar) is not TrackLyricsKind.NONE:
         return sidecar
     return served_untimed_frames(tags.frames, lang)
+
+
+def timed_lyrics(
+    stages: Stages, album: Path, path: Path
+) -> tuple[SyncedLyrics, Source | None] | None:
+    """The timed ``.lrc`` text the track serves from, and its machine label; else None.
+
+    Read by the sidecar plan, as `judged_lyrics` reads it: a provider-timed track's
+    is the text sync's hearing judged, labeled None. Timing held only in the frames is
+    not read, deliberately. A sidecar that cannot be read raises, as there.
+    """
+    planned = stages.normalize_sidecars(path, album=album, apply=False)
+    if isinstance(planned.lyrics, SyncedLyrics):
+        return planned.lyrics, planned.label
+    return None
 
 
 def _few_words(count: int, duration_s: float | None) -> str | None:

@@ -4,14 +4,18 @@ The entry point declares every option on its parser, where its companion doc's
 consistency check reads them; this module holds what the options are checked
 against: the modes, the default language and the language-code type, and
 `refuse_misplaced`, which exits 2 through the parser when an option is given to a mode
-that has no use for it, or beside an option it contradicts. Pure argparse: nothing here
-reads a file or prints, apart from argparse's own error exit.
+that has no use for it, or beside an option it contradicts, and `refuse_one_list_file`,
+which the sweep shares, refusing one file named for both lists. Pure argparse: nothing
+here reads a file or prints, apart from asking the file system whether the two list
+paths name one file, and argparse's own error exit.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import re
+from pathlib import Path
 
 #: The modes, as --mode names them.
 MODE_RUN, MODE_CHECK, MODE_UNDO, MODE_STRIP, MODE_COMPARE, MODE_PRUNE, MODE_ACCEPT = (
@@ -69,6 +73,11 @@ _CHANGED_LIST = ("changed_list", "--changed-list")
 _APPLY = ("apply", "--apply")
 #: The transcript store a fix reads: the fix needs it, and every other mode refuses it.
 _HEARD_DIR = ("heard_dir", "--heard-dir")
+#: The file a fix lists the tracks it held for Genius in, never asking Genius: every
+#: other mode refuses it, and so does a fix given --no-genius.
+_HOLD = ("hold_for_genius", "--hold-for-genius")
+#: The options only a fix takes.
+_FIX_ONLY = (_HEARD_DIR, _HOLD)
 #: Options a mode has no use for, refused rather than silently ignored. A strip is a
 #: new run that asks no provider, of every track or the one --track names, so it
 #: refuses --run-id and every run-only option. A check changes nothing, so its list
@@ -81,12 +90,13 @@ _HEARD_DIR = ("heard_dir", "--heard-dir")
 #: takes --apply alone, and refuses --dry-run, which leaving out --apply already is. A
 #: fix is a new run that asks the providers for some tracks again, as a refetch does:
 #: it takes a run's options but the offline run, which could ask none, and the three
-#: replacing options, whose work it does itself; it alone takes --heard-dir.
+#: replacing options, whose work it does itself; it alone takes --heard-dir and
+#: --hold-for-genius.
 _REFUSED: dict[str, tuple[tuple[str, str], ...]] = {
-    MODE_RUN: (_RUN_PICKER, _APPLY, _HEARD_DIR),
-    MODE_CHECK: (*_RUN_ONLY, _CHANGED_LIST, _APPLY, _HEARD_DIR),
-    MODE_UNDO: (*_RUN_ONLY, _APPLY, _HEARD_DIR),
-    MODE_STRIP: (_RUN_PICKER, *_RUN_ONLY, _APPLY, _HEARD_DIR),
+    MODE_RUN: (_RUN_PICKER, _APPLY, *_FIX_ONLY),
+    MODE_CHECK: (*_RUN_ONLY, _CHANGED_LIST, _APPLY, *_FIX_ONLY),
+    MODE_UNDO: (*_RUN_ONLY, _APPLY, *_FIX_ONLY),
+    MODE_STRIP: (_RUN_PICKER, *_RUN_ONLY, _APPLY, *_FIX_ONLY),
     MODE_COMPARE: (
         _RUN_PICKER,
         _DRY_RUN,
@@ -95,7 +105,7 @@ _REFUSED: dict[str, tuple[tuple[str, str], ...]] = {
         *_REFETCHES,
         _CHANGED_LIST,
         _APPLY,
-        _HEARD_DIR,
+        *_FIX_ONLY,
     ),
     MODE_PRUNE: (
         _RUN_PICKER,
@@ -103,14 +113,14 @@ _REFUSED: dict[str, tuple[tuple[str, str], ...]] = {
         *(option for option in _RUN_ONLY if option != _DRY_RUN),
         _CHANGED_LIST,
         _APPLY,
-        _HEARD_DIR,
+        *_FIX_ONLY,
     ),
     MODE_ACCEPT: (
         _RUN_PICKER,
         ("track", "--track"),
         *_RUN_ONLY,
         _CHANGED_LIST,
-        _HEARD_DIR,
+        *_FIX_ONLY,
     ),
     MODE_FIX_TEXT: (_RUN_PICKER, _OFFLINE, _FRESH, *_REFETCHES, _APPLY),
 }
@@ -132,6 +142,11 @@ def refuse_misplaced(parser: argparse.ArgumentParser, args: argparse.Namespace) 
             parser.error(f"{flag} cannot be used with --mode {args.mode}")
     if args.mode == MODE_FIX_TEXT and getattr(args, _HEARD_DIR[0]) is None:
         parser.error(f"{_HEARD_DIR[1]} is required with --mode {MODE_FIX_TEXT}")
+    # Holding for Genius already leaves Genius out; beside --no-genius the one choice
+    # would be made twice, so the pair is refused rather than read either way.
+    if getattr(args, _HOLD[0]) is not None and args.no_genius:
+        parser.error(f"{_HOLD[1]} cannot be used with --no-genius")
+    refuse_one_list_file(parser, args.changed_list, getattr(args, _HOLD[0]))
     # A fresh run asks only the providers, and an offline one asks none of them. A
     # refetch asks the providers too, and accepts the answers a fresh run declines.
     if args.fresh and args.offline:
@@ -151,3 +166,33 @@ def refuse_misplaced(parser: argparse.ArgumentParser, args: argparse.Namespace) 
         for attr, flag in (("fresh", "--fresh"), ("offline", "--offline")):
             if getattr(args, refetch) and getattr(args, attr):
                 parser.error(f"{name} cannot be used with {flag}")
+
+
+def refuse_one_list_file(
+    parser: argparse.ArgumentParser, changed: Path | None, held: Path | None
+) -> None:
+    """Exit 2 through *parser* when --changed-list and --hold-for-genius name one file.
+
+    Each list is written whole, so one file named for both would keep only the list
+    written last, and the tracks of the other would be lost without a word.
+    """
+    if changed is not None and held is not None and names_one_file(changed, held):
+        parser.error(f"{_HOLD[1]} cannot name the same file as {_CHANGED_LIST[1]}")
+
+
+def names_one_file(first: Path, second: Path) -> bool:
+    """True when *first* and *second* name one file, now or once either is written.
+
+    Each is made absolute with every link resolved, so a path spelled another way, or
+    a link to the other, is caught even before either file exists; two existing files
+    are compared by the file system too, which catches a hard link.
+    """
+    if os.path.realpath(first) == os.path.realpath(second):
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        # One of them does not exist yet, or cannot be looked at: the paths differ, so
+        # they are taken as two files. A file that cannot be looked at fails its own
+        # write, which the run says.
+        return False

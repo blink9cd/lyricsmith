@@ -8,19 +8,23 @@ named `tests`, the name this folder answers to as well. `fake_child` and `reply_
 stand in for the child process that needs PyTorch, and `not_sung_reply` for one whose
 text whisper-cli did not hear; `fake_opener` stands in for the network, and
 `invented_models` and `invented_whisper_models` for the pinned models, each holding
-`DATA`.
+`DATA`. `host_absolute` roots a made-up track at the host's drive, so it is absolute on
+Windows too, and `FOLDER_LOCKS` and `FILE_LOCKS` say whether ``chmod(0)`` locks
+anything here, for the mode-000 tests and their portable twins.
 """
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.util
 import io
 import os
 import subprocess
 import sys
+import tempfile
 import types
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from unittest import mock
 
@@ -60,10 +64,53 @@ OTHER_SONG = (
     " all night and nobody comes home again under the bridge the river keeps its"
     " silver promise"
 )
-# os.geteuid exists only off Windows, so it is looked up; root reads a mode-000 file or
-# folder, so the unreadable-sidecar and unreadable-folder tests skip under it.
-_GETEUID = getattr(os, "geteuid", None)
-IS_ROOT = _GETEUID is not None and _GETEUID() == 0
+#: The root of the drive the suites run on, album's `fixtures.HOST_ROOT`. A made-up
+#: track path must be absolute on the host, as the walk names one, and ``/music`` has
+#: no drive on Windows, so it is not absolute there.
+HOST_ROOT = fixtures.HOST_ROOT
+#: Why a POSIX mode check skips on Windows: album's `fixtures.NO_POSIX_MODES`.
+NO_POSIX_MODES = fixtures.NO_POSIX_MODES
+#: Why a real mode-000 test skips where the lock does not hold.
+NO_MODE_000_LOCK = "chmod(0) does not stop a read here (root, or Windows)"
+
+
+#: The absolute POSIX path given, rooted at `HOST_ROOT`: album's `fixtures.host_absolute`.
+host_absolute = fixtures.host_absolute
+
+
+def _mode_000_locks(
+    make: Callable[[Path], object], look: Callable[[Path], object]
+) -> bool:
+    """True when ``chmod(0)`` stops this process doing *look* to what *make* made.
+
+    Root reads a mode-000 file or folder, and on Windows ``chmod`` sets only the
+    read-only attribute, which stops no read. Probed rather
+    than inferred from the platform, so the real-permission tests run wherever they can;
+    each has a twin raising the refusal through a seam, which runs everywhere.
+    """
+    with tempfile.TemporaryDirectory() as scratch:
+        probe = Path(scratch) / "probe"
+        make(probe)
+        probe.chmod(0)
+        try:
+            look(probe)
+        except PermissionError:
+            return True
+        finally:
+            probe.chmod(0o700)
+    return False
+
+
+#: Whether a mode-000 folder cannot be listed here; a mode that stops a listing
+#: stops a look at its entries too, for any user the bits bind.
+FOLDER_LOCKS = _mode_000_locks(Path.mkdir, lambda folder: list(folder.iterdir()))
+#: Whether a mode-000 file cannot be read here.
+FILE_LOCKS = _mode_000_locks(lambda file: file.write_bytes(b""), Path.read_bytes)
+
+
+def permission_denied(path: Path) -> PermissionError:
+    """The refusal a mode-000 *path* gets, as the OS raises it, for a twin to raise."""
+    return PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(path))
 
 
 def transcribe_test_module(name: str) -> types.ModuleType:

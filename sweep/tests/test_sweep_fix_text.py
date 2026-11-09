@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import os
 import shlex
 import sys
 import unittest
@@ -27,6 +26,7 @@ import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap 
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_child  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fix_text  # noqa: E402 - import follows the sys.path bootstrap above
+import denied_fixtures as dn  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_ledger as sl  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_heard_store import (  # noqa: E402 - follows the sys.path bootstrap
@@ -38,10 +38,6 @@ from lyrics_heard_store import (  # noqa: E402 - follows the sys.path bootstrap
 )
 from lyrics_outcomes import WRONG_TEXT  # noqa: E402 - follows the sys.path bootstrap
 
-# os.geteuid exists only off Windows, so it is looked up; root can list a mode-000
-# folder, so the unlistable-folder test skips under it.
-_GETEUID = getattr(os, "geteuid", None)
-_IS_ROOT = _GETEUID is not None and _GETEUID() == 0
 #: An invented fingerprint: the store checks only its form.
 _FINGERPRINT = "ab" * 32
 #: An invented transcript.
@@ -149,13 +145,12 @@ class WhichAlbumsTest(FixTextCase):
         self.assertEqual(self.fake.albums(), ["A1"])
         self.assertIn("transcript record ignored", result.stderr)
 
-    def test_an_album_holding_a_record_but_nothing_unsynced_is_not_visited(
-        self,
-    ) -> None:
+    def test_an_all_synced_album_holding_a_record_is_visited(self) -> None:
+        # A provider-timed text heard not sung is a fix's too.
         done = sf.synced_album(self.library, "Artist", "A0")
         self.hear(done, "01 Done.mp3")
         self.main("--mode", "fix-text")
-        self.assertEqual(self.fake.calls, [])
+        self.assertEqual(self.fake.albums(), ["A0"])
 
     def test_a_heard_dir_that_is_not_a_folder_is_a_usage_error(self) -> None:
         self.heard.rmdir()
@@ -173,11 +168,21 @@ class WhichAlbumsTest(FixTextCase):
         self.assertEqual(result.code, 2)
         self.assertIn("the transcript folder is not a folder", result.stderr)
 
-    @unittest.skipIf(_IS_ROOT, "root lists a mode-000 folder")
+    @unittest.skipUnless(dn.MODE_000_LOCKS_A_FOLDER, dn.NO_FOLDER_LOCK)
     def test_a_heard_dir_that_cannot_be_listed_is_a_usage_error(self) -> None:
         self.hear(self.albums[0])
         self.heard.chmod(0)
         self.addCleanup(self.heard.chmod, 0o700)
+        self.assert_an_unlistable_heard_dir_is_a_usage_error()
+
+    def test_a_heard_dir_whose_listing_is_refused_is_a_usage_error(self) -> None:
+        # The portable twin of the mode-000 case: the listing itself raises.
+        self.hear(self.albums[0])
+        with dn.listing_refused(self.heard):
+            self.assert_an_unlistable_heard_dir_is_a_usage_error()
+
+    def assert_an_unlistable_heard_dir_is_a_usage_error(self) -> None:
+        """A fix-text run exits 2, naming the transcript folder, and visits nothing."""
         result = self.main("--mode", "fix-text")
         self.assertEqual(result.code, 2)
         self.assertIn("the transcript folder cannot be listed", result.stderr)

@@ -36,7 +36,7 @@ it searches by each track's artist, title and album tags and its length.
 
 ```text
 album.py --album <dir> [--mode run|check|undo|strip|compare|prune|accept|fix-text]
-                [--apply] [--heard-dir <dir>]
+                [--apply] [--heard-dir <dir>] [--hold-for-genius <file>]
                 [--track <file>] [--run-id <id>]
                 [--lang <code>] [--config <file>] [--dry-run] [--offline] [--no-genius]
                 [--no-netease] [--no-bandcamp] [--no-youtube-music] [--no-tekstowo]
@@ -48,8 +48,9 @@ album.py --album <dir> [--mode run|check|undo|strip|compare|prune|accept|fix-tex
 | Option | Default | Description |
 | --- | --- | --- |
 | `--album` | required | The album folder. Every MP3 under it, in any subfolder, is a track. |
-| `--mode` | `run` | `run` backs up, fetches, embeds and checks. `check` re-checks a finished run. `undo` puts a run's backup back. `strip` backs up, then removes every track's lyrics frames and sidecars. `compare` asks each provider for every untimed-only track and reports whether a provider other than its lyrics' source agrees; it writes nothing. `prune` removes the run folders nothing needs. `accept` keeps the album as it is and reports what removing every run's backup would lose; with `--apply` it removes them (*`--mode accept`*). `fix-text` replaces each untimed text `sync` found not sung with the first text its transcript sings, the album's other texts tried before the providers', or removes it as `wrong text removed`, a removal withheld on an album that looks spoken (*`--mode fix-text`*). |
+| `--mode` | `run` | `run` backs up, fetches, embeds and checks. `check` re-checks a finished run. `undo` puts a run's backup back. `strip` backs up, then removes every track's lyrics frames and sidecars. `compare` asks each provider for every untimed-only track and reports whether a provider other than its lyrics' source agrees; it writes nothing. `prune` removes the run folders nothing needs. `accept` keeps the album as it is and reports what removing every run's backup would lose; with `--apply` it removes them (*`--mode accept`*). `fix-text` replaces each untimed or provider-timed text `sync` found not sung with the first text its transcript sings, the album's other texts tried before the providers', or removes it as `wrong text removed`, a removal withheld on an album that looks spoken (*`--mode fix-text`*). |
 | `--heard-dir` | none | `fix-text` only, and required there: the transcript store `sync --heard-dir` wrote. The fix only reads it: every record is kept (*`--mode fix-text`*). |
+| `--hold-for-genius` | no list, and such a text removed | `fix-text` only: leave Genius unasked, as `--no-genius` does; a track whose wrong text every provider asked answered without singing is kept, its removal withheld as `held for Genius`, and its absolute path written to this file, one per line, as `--changed-list` writes. Refused with `--no-genius`, and when it names the same file as `--changed-list`. See *Holding for Genius* under *`--mode fix-text`*. |
 | `--apply` | off | `accept` only: record each run's manifest outside the album, then remove the album's `.lyricsmith` folder, every backup and its undo with it. Without it, accept only reports. |
 | `--track` | every track | `run`, `strip`, `check`, `undo`, `compare` and `fix-text`: one MP3 under `--album`, relative to the working directory. |
 | `--run-id` | the newest run | `check` and `undo` only: which run to read. |
@@ -90,7 +91,11 @@ track either would. `accept` takes every run, as `prune` does, so it takes `--al
 `--apply` is its dry run. Every other mode refuses `--apply`. `fix-text` is a new run that
 asks the providers for some tracks again, so it takes a run's options and `--track`, and
 refuses `--run-id`, `--offline`, `--fresh`, `--refetch-untimed`, `--refetch-implausible`
-and `--apply`; it needs `--heard-dir`, which every other mode refuses.
+and `--apply`; it needs `--heard-dir`, which every other mode refuses, and alone takes
+`--hold-for-genius`, which it refuses beside `--no-genius`, since the option already
+leaves Genius out, and when it names the same file as `--changed-list`, whether as the
+same path, another spelling of it, or a link to it: each list is written whole, so one
+file would keep only the list written last.
 `--changed-list` is refused by `check` and with `--dry-run`: neither changes anything, so
 its list would always be empty.
 
@@ -509,8 +514,9 @@ but that cool-down: it takes no album lock, makes no run folder and needs no ear
 so it can run beside a run of the same album; a track that run is writing may then read as
 an error or as its earlier state, because tags are saved in place.
 
-**`--mode fix-text`** fixes the untimed texts `sync` found are not sung, another song's
-words stored on a track, which `--mode compare` cannot tell when every provider repeats them.
+**`--mode fix-text`** fixes the texts `sync` found are not sung, another song's words
+stored on a track, which `--mode compare` cannot tell when every provider repeats them:
+untimed texts, and provider-timed ones (*Provider-timed texts* below).
 `sync --heard-dir <dir>` keeps the transcript of each track it lists `not sung`; this mode
 takes that folder as `--heard-dir` and, for each track of the album, or the one `--track`
 names, that has a record there, tries other texts against the transcript, using the rule
@@ -525,19 +531,20 @@ transcript was judged against; and the transcript, judged again, heard 20 distin
 pairs or more and finds under 0.25 of them in the text. Otherwise the track is skipped,
 with one notice saying why (`its lyrics are not untimed only`, `its text changed since it
 was heard`, `too little heard to judge`, `the transcript sings its text`), and its record
-is kept. A track holding a worded `SYLT` frame or a timed `.lrc` beside its `.txt` is
-timed, not untimed only, and is skipped. Only the tracks it takes are backed up and run,
-and the run is undone as any run is.
+is kept. A track holding a worded `SYLT` frame beside its `.txt`, with no timed `.lrc`,
+is timed, not untimed only, and is skipped: timing held only in the frames is never read.
+A track holding a timed `.lrc` is taken as *Provider-timed texts* below says. Only the
+tracks it takes are backed up and run, and the run is undone as any run is.
 
 *Which text it writes.* First, with no request, every other untimed text stored on the
 album, read before anything is written, so a text one track gives up is still there for
 the track it belongs to: on an album whose provider texts are one track off, each track
 finds its own words on its neighbor. Then each provider's untimed step, in the chain's
 order, asked one at a time as `--mode compare` asks them, each answer judged against the
-track's length as a run's is. Only the album's untimed-only tracks give a text: a
-neighbor holding timed lyrics is no candidate, so on a shifted album whose neighbors are
-already timed the fix may find nothing sung and remove the text rather than fix it. A
-candidate whose words are the refused text's, or a text already tried, is passed over.
+track's length as a run's is. For an untimed track only the album's untimed-only tracks
+give a text: a neighbor holding timed lyrics is no candidate, so on a shifted album whose
+neighbors are already timed the fix may find nothing sung and remove the text rather than
+fix it. A candidate whose words are the refused text's, or a text already tried, is passed over.
 The first the transcript sings, 0.25 of its pairs or more, is written as a run writes an
 answer: the old frames and sidecars replaced, a `USLT` frame and a `.txt`, backed up, on
 the changed list, and the row and the manifest name its source. A text taken from another
@@ -550,6 +557,29 @@ outcome's `origin`. A later compare reads a track written as another track's tex
 source. It counts on the `written:` line as `untimed replaced`. No provider is asked
 once a text has won. A written fix always shows `FLAG: unlike backup`, by design: the
 new text is another song's words than the wrong one it replaced, and the row says so.
+
+*Provider-timed texts.* A track holding no untimed text alone but a timed `.lrc` no
+machine labeled, its timing a provider's, is taken by the `.lrc`'s text: the text `sync
+--mode hear` heard, with the same fingerprint, too-little-heard and sung tests, and the
+same skip notices. One whose `.lrc` carries a machine label (`[by:machine timed]`, `[by:machine
+transcript]`) is `sync`'s own and is skipped (`its timed lyrics are machine made`). Its
+candidates are the album's other texts, untimed ones first and then timed ones, read
+before anything is written; then the whole provider chain in order, its synced steps
+(LRCLIB, NetEase, YouTube Music) before its untimed ones, each asked only once every
+earlier candidate failed; the refused text's words passed over as above. A sibling's
+timing is never copied, since its stamps belong to its own audio: a sibling that wins,
+timed or not, is written as untimed text, a `USLT` frame and a `.txt`, the `SYLT` frames
+and the `.lrc` removed, and so is an untimed provider answer; `sync` then times it from
+the transcript it kept, with no second hearing, labeled machine timed. A synced provider
+answer keeps its stamps, since synced providers are matched by duration: its `SYLT` and
+`USLT` frames and an unlabeled millisecond-stamped `.lrc` replace the old, its blank
+stamped lines kept. With none sung, the text and its timing go as `wrong text removed`,
+every lyrics frame and both sidecar names, under the same guards as an untimed text's
+removal, and are withheld on an album that looks spoken. Every frame and sidecar replaced
+or removed is backed up, and `--mode undo` restores the track byte for byte. An untimed
+track's candidates are unchanged: a neighbor holding timed lyrics is never one. On the
+`written:` line a timed track's fix counts as `synced replaced` when a synced answer
+wins, and as `replaced by untimed` when a sibling or an untimed answer does.
 
 *When nothing is sung.* The wrong text is removed, every lyrics frame and both sidecar
 names, backed up so `--mode undo` restores them byte for byte, and the row reads `wrong
@@ -585,6 +615,26 @@ transcript does sing is still written on such an album, since speech matching a 
 that text. A single-track album whose one track is heard not sung is over half, and so
 withholds its removal too.
 
+*Holding for Genius.* Genius challenges every request a script sends, so a fix that asks
+it gets only refusals: each keeps the track as its error, and a sweep counts the album
+refused. With Genius left out by `--no-genius` instead, a track no other provider has is
+removed. `--hold-for-genius <file>` keeps such a track for a later pass instead: Genius
+is left out exactly as `--no-genius` leaves it (no key is looked for, the summary's
+Genius label reads `skipped`, and no request goes to Genius), and a removal the guards
+above allow is withheld, so the track keeps its text and its record, nothing is written,
+and the row reads `kept existing: removal withheld, held for Genius`. The manifest
+records the outcome as `kept existing` with `held for Genius` as its `withheld`, and the
+summary counts it on the `removal withheld:` line as `held for Genius`. Only a track
+every provider asked answered without singing is held: one a provider failed for is
+still the error the guards above make, and a provider after Genius in the chain
+(Tekstowo) is still asked, so its sung answer still replaces the text. The hold is
+asked before the spoken album, so on an album that looks spoken a held track reads
+`held for Genius`, not `spoken word`. Each held track's absolute path is written to the
+file, one per line, in the format and the way *The changed list* says, a path that
+format cannot hold left out with a `--hold-for-genius: left out ...` line; a file that
+cannot be written is exit `3`. A dry run, and a run with nothing to fix, write no file.
+It is no error: the fix exits `0` for a held track.
+
 *Records.* The fix only reads the store: every record is kept, whatever the track's end.
 A written track's record is `sync`'s to settle: `album` never touches `sync`'s by-hand
 list, so the track's `not sung` row stays, and `sync`'s rerun finds the record's
@@ -593,8 +643,13 @@ transcribing the track again, times it, and deletes the record itself. Without t
 that row would skip the track for good. A removed track holds no untimed text, so `sync`
 plans nothing for it and a later fix skips it (`its lyrics are not untimed only`); after
 `--mode undo` the wrong text and the record match again, and a fix takes the track
-again. So records are deleted by `sync`, once a track is timed, and by deleting the
-store's folder when the library's run is done. A dry run (`--dry-run`) prints each
+again. A provider-timed track written untimed keeps its record until `sync` times the
+new text, which it judges against the kept transcript; one written with a synced answer
+holds a timed text whose fingerprint is no longer the record's, so `sync` spends the
+record; one removed holds no text, and a later fix skips it until undo brings the text
+back. So records are deleted by `sync`, once a track is gone, timed by `sync` itself, or timed
+by a provider with a text other than the one heard (`../sync/sync.md`), and by deleting
+the store's folder when the library's run is done. A dry run (`--dry-run`) prints each
 track's plan, skipped with why, `take <track>'s text (<source>)` when another track's
 text would win (`take <track>'s text` alone for one no run recorded), or `ask the
 providers`, which on an album that looks spoken reads `ask the providers; no removal:
@@ -616,7 +671,7 @@ Each listed entry gets one outcome, tried in this order:
 
 | The entry | Outcome |
 | --- | --- |
-| A link, or not a directory | `kept: not a run folder` |
+| A link or a junction, or not a directory | `kept: not a run folder` |
 | A folder named for an earlier prune | `removed: left by an earlier prune` |
 | A folder with no `manifest.json`: a backup that never finished | `removed: unfinished backup` |
 | A manifest that cannot be read (malformed, over the 16 MiB cap, linked, or the folder cannot be searched) | `kept: unreadable manifest`, with the reason; never removed unread, and never taken for an unfinished backup |
@@ -643,9 +698,8 @@ there is no run, as on an album never run.
 **Rename, then delete.** Each folder is first renamed, inside the run folder, to
 its run id with `.pruning` after it, a name no mode takes for a run, and only then deleted. A
 prune stopped part-way therefore never leaves a half-deleted folder that still reads as a run
-whose backup is missing, and a later prune removes what it finds so named. Deletion is
-`shutil.rmtree`, which removes a link inside the folder and never what it points to only where
-`shutil.rmtree.avoids_symlink_attacks` is true; where it is not, the mode refuses to start. A
+whose backup is missing, and a later prune removes what it finds so named. The delete
+never leaves the folder it is given (*The delete that never follows a link*, below). A
 rename or delete that fails is that folder's error, its folder kept or left for the next prune
 to finish, and the pass goes on.
 
@@ -672,9 +726,28 @@ removed 2 · kept 2 · errors 0
 A row whose rename or removal failed shows `ERROR: <reason>` in its outcome column, counted
 under `errors`. A dry run ends with `dry run: nothing was removed` after the counts line.
 Exit `0` means the pass finished, whatever it kept; `1`, that at least one removal failed;
-`2`, that it could not start (an unusable album, a refused link, the album lock held, or a
-`shutil.rmtree` without protection against links); `3`, that the report could not be
-written.
+`2`, that it could not start (an unusable album, a refused link, or the album lock held);
+`3`, that the report could not be written.
+
+**The delete that never follows a link.** Prune and accept delete through one chooser, on
+every host. Where `shutil.rmtree.avoids_symlink_attacks` is true, it is `shutil.rmtree`, whose
+walk holds each folder open by descriptor. Where it is false, which is every Windows Python,
+it is lyricsmith's own walk (`lyrics_delete`). That walk reads each entry without following
+it. An entry that is a symbolic link, a Windows junction or any other reparse point is
+removed as the link itself, never what it points to: with `rmdir` when it is a folder link or
+a junction, else with `unlink`. Only a folder that is no link is entered. Before a folder is
+listed, after it is listed, before each entry in it goes and before the folder itself goes,
+its path is read again and must still name the folder first entered, the same device and
+inode (on Windows, volume serial and file ID); a folder swapped for another or for a link
+since stops the delete with an error, and nothing more goes. A folder given that is itself a
+link, or no folder, is refused the same way.
+
+That check narrows a race and does not close it. A folder swapped for a junction or a link
+in the moment between one check and the single call after it (one unlink, one rmdir or one
+listing) still has that call act on the same name inside the swapped-in target. Windows
+Python offers no delete relative to a held folder handle, which is what would close it.
+Mounting the swap takes write access to the album and a race won on purpose; on a file
+system that reports no inode, two folders read alike and the check narrows it less.
 
 **`--mode accept`** keeps the album as it is and drops what its runs kept for undo, for
 the one `--album`. Prune removes only what nothing needs, so a kept run stays forever;
@@ -689,9 +762,9 @@ Every run of the album is taken, always; no option picks a run, a track or an ag
 and then the album's whole `.lyricsmith` folder goes, its `lock` included. The pass asks
 no provider and touches no MP3 and no sidecar.
 
-**Accept needs a POSIX system.** It deletes only through a `shutil.rmtree` that is proof
-against links, and on Windows `shutil.rmtree.avoids_symlink_attacks` is false, so there
-accept is refused with exit `2` before anything is read, its report-only pass included.
+**Accept runs on every host.** It deletes through the same delete as prune, which never
+follows a link out of the folder (*The delete that never follows a link*, under
+`--mode prune`).
 
 **What refuses the album** (exit `2`, nothing touched, each reason printed as a
 `refused:` line in the report, except where the table says one error on stderr):
@@ -704,8 +777,7 @@ accept is refused with exit `2` before anything is read, its report-only pass in
 | An entry in `.lyricsmith` that is not the `lock`, a run-id folder or a `.pruning` leftover | `unknown entry`, each named: deleting the folder would delete something lyricsmith did not write |
 | A linked `.lyricsmith` or `lock`, or a link or non-folder at `.lyricsmith.accepting` | one error on stderr and no report, before anything is read, as the other modes refuse a link |
 
-The album lock held by another run, and a Python whose `shutil.rmtree` does not protect
-against links (as for prune), refuse it too, each as one error on stderr and no report.
+The album lock held by another run refuses it too, as one error on stderr and no report.
 
 **What is at risk**, listed by track ahead of everything else, each with its run and
 reason. Every run counts, not only the newest: a newer run's backup holds the older run's
@@ -742,7 +814,26 @@ leaves `.lyricsmith.accepting`, which no mode reads as a run; the next accept fi
 it first, reported as `left by an earlier accept`, even on an album with no
 `.lyricsmith` left, where it takes no lock, since taking it would create the folder.
 Renaming the whole folder, lock included, is what lets the lock go: a run that starts
-afterward makes a fresh `.lyricsmith` and its own lock. A folder you made yourself
+afterward makes a fresh `.lyricsmith` and its own lock.
+
+**On Windows the folder is emptied, not renamed.** Windows refuses to rename a folder while a
+file inside it is open, and the lock is such a file for as long as accept holds it. So there
+accept makes `.lyricsmith.accepting` itself and moves each entry of `.lyricsmith` but the lock
+into it, still under the lock: any `.pruning` leftover first, then each run, oldest first.
+Then it deletes `.lyricsmith.accepting`, still under the lock, so no run can start between
+the judgment and the removal there either. Only once the lock is let go does it remove the
+lock file and `.lyricsmith`, and only when the folder still holds nothing else and is still
+the folder it held. A run that has taken the lock by then keeps it, because Windows will
+not delete a file another holds open, and the folder is that run's. A run caught midway
+does not: one that has made `.lyricsmith` but not yet opened its lock when accept removes
+the folder finds the folder gone, fails to open the lock, and stops with exit `2` before
+anything is backed up, so running it again is all it needs. A `.lyricsmith` kept at this
+step is reported in one line, `.lyricsmith kept: <reason>`, after the records line; it
+is informational and changes no exit. Each run folder moves
+whole, so none is ever half deleted under a run-id name. An accept stopped between two moves
+leaves `.lyricsmith` holding the newer runs, each whole, and `.lyricsmith.accepting` holding
+the older ones: the album then reads as one whose older runs are gone, and the next accept
+finishes the leftover and takes the rest. A folder you made yourself
 named `.lyricsmith.accepting` is taken for a leftover and deleted with `--apply`,
 unjudged.
 
@@ -1251,7 +1342,7 @@ keeps any refusal they met. The detail is one of:
 | `unexpected reply` | A reply in a shape the tool does not know, from any provider but Genius; MusicBrainz's is recorded as Bandcamp's |
 | `reply not JSON`, `reply too large` | A reply that is not JSON from any provider but Genius, or over 2 MiB from any provider; from YouTube Music, a reply not JSON stops it for the run |
 | `redirect refused`, `TooManyRedirects` | A Genius redirect off `https` on Genius's own hosts, or a third in a row |
-| `redirect refused`, `too many redirects` | A Bandcamp or Tekstowo redirect off that provider's own hosts, or a third one (*Bandcamp through MusicBrainz*, *Tekstowo.pl*); from Tekstowo, a third one stops it for the run, a refused one only fails the track |
+| `redirect refused`, `too many redirects` | A Bandcamp or Tekstowo redirect off that provider's own hosts, or a third one (*Bandcamp through MusicBrainz*, *Tekstowo.pl*); from Tekstowo, a third one stops it for the run, a refused one only fails the track; from Bandcamp, one to an `https` URL off its hosts is nothing found instead |
 | `URL refused` | A Bandcamp or Tekstowo address off that provider's own hosts before anything is sent; it stops nothing for the run |
 | `reply not text`, `no track list` | A Bandcamp page that is not UTF-8, or holds no album track list; a Tekstowo page that is not UTF-8 |
 | `challenge page`, `search page not recognized`, `song page not recognized` | A Tekstowo challenge, which stops it for the run, or a page not shaped as expected, which fails only its track until a run of one kind stops it (*Tekstowo.pl*) |
@@ -1373,16 +1464,16 @@ version words included, when it is picked from the page. A compilation credited 
 nothing found.
 
 **The cache.** One lookup serves the whole album: its outcome (the page's tracks, no
-link, no album match, a gone page, or the error) is kept for the rest of the run, so the
-album's later tracks and the stripped-title retry send nothing. It is kept per artist
-and per album tag, the tag's whole title compared with its version words, so tracks
-tagged `Name` and tracks tagged `Name (Deluxe Edition)` are each their own lookup, and
-each tag picks its own edition among same-titled albums. An album-level failure
-(MusicBrainz, a refused redirect, a page that cannot be read) is recorded once on each
-track of the album that reaches the step, with no new request. A call that ran out of
-time is not kept, so the album's next track looks it up again; a slow MusicBrainz is
-asked again for the next track, still at its one-request-a-second pace. Nothing is kept
-between runs.
+link, no album match, a page gone or elsewhere, or the error) is kept for the rest of
+the run, so the album's later tracks and the stripped-title retry send nothing. It is
+kept per artist and per album tag, the tag's whole title compared with its version
+words, so tracks tagged `Name` and tracks tagged `Name (Deluxe Edition)` are each their
+own lookup, and each tag picks its own edition among same-titled albums. An album-level
+failure (MusicBrainz, a refused redirect, a page that cannot be read) is recorded once
+on each track of the album that reaches the step, with no new request. A call that ran
+out of time is not kept, so the album's next track looks it up again; a slow MusicBrainz
+is asked again for the next track, still at its one-request-a-second pace. Nothing is
+kept between runs.
 
 **Pacing and the worst case.** MusicBrainz is asked at most once a second, its own
 documented limit, and a `429` or a server error (5xx) from it is retried as an LRCLIB
@@ -1394,12 +1485,19 @@ seconds, and nine Bandcamp requests, paid once per album tag; a Bandcamp call's 
 is `BANDCAMP_STEP_DEADLINE_S`.
 
 **Redirects.** MusicBrainz's are never followed. A Bandcamp request follows at most two,
-each only to an `https` URL whose host is `bandcamp.com` or ends in `.bandcamp.com`, with
-no login and no port but 443; a redirect to any other target, or a third redirect, is the
-album's error (`redirect refused`, `too many redirects`). The address asked first is held
-to the same rule before anything is sent: one off it is `URL refused`, not `redirect
-refused`. A link MusicBrainz holds as `http` is asked as `https`, by the same host rule,
-and one whose host is not Bandcamp is not taken as a link at all.
+each only to an `https` URL whose host is `bandcamp.com` or ends in `.bandcamp.com`,
+with no login and no port but 443. A redirect to an `https` URL on a host off Bandcamp,
+with no login and no port but 443, is nothing found (`page elsewhere`), as a gone page
+is: Bandcamp lets an artist serve its pages from a domain of its own, the step never
+follows one there, and that domain was seen to redirect straight back to Bandcamp, a
+loop, so the page holds nothing the step could use. It is passed over among same-titled
+entries as a gone page is, and when every entry opened is gone or elsewhere, the first
+one's reading is the album's. A redirect to any other target (plain `http`, another
+port, a login), one naming no target, or a third redirect, is the album's error
+(`redirect refused`, `too many redirects`). The address asked first is held to the same
+rule before anything is sent: one off it is `URL refused`, not `redirect refused`. A
+link MusicBrainz holds as `http` is asked as `https`, by the same host rule, and one
+whose host is not Bandcamp is not taken as a link at all.
 
 **What is sent, and what never is.** To MusicBrainz: the album and artist tags in the
 search, and the ids its own replies gave in each lookup's path (only in MusicBrainz's id
@@ -1814,12 +1912,13 @@ sidecars and the frames went for different reasons, the first one naming a rule
 decides.
 
 After those, a `removal withheld:` line counts the `kept existing` tracks whose removal a
-fix withheld because the album looks spoken (*`--mode fix-text`*), read from the
-outcome's `withheld`; each is counted as `kept existing` too, and the line is left out
-when it counts none:
+fix withheld, read from the outcome's `withheld`: as `spoken word` because the album
+looks spoken, and as `held for Genius` under `--hold-for-genius` (*`--mode fix-text`*),
+each part shown only when it counts one. Each is counted as `kept existing` too, and the
+line is left out when it counts none:
 
 ```text
-removal withheld: spoken word 4
+removal withheld: spoken word 4, held for Genius 2
 ```
 
 After the counts line, a line each says whether the run asked Bandcamp, YouTube Music
@@ -1951,9 +2050,9 @@ The manifest keeps the true names.
 | --- | --- |
 | `0` | Every track was processed with no error. A track with no lyrics found, or one the check flagged, is not an error, and neither is a compare FLAG nor a hint, whatever the count. |
 | `1` | At least one track errored: its backup, sidecar, fetch, strip, embed or check, or its undo. A prune exits `1` when a run folder's rename or removal failed, and an accept when the removal of `.lyricsmith`, or of an earlier accept's leftover, failed. A compare exits `1` when any row is an `ERROR`: a tag or sidecar it cannot read, or every provider asked failing. A fix exits `1` when a track's text could not be written or removed, the guards that keep a wrong text included (*`--mode fix-text`*). A dry run exits `1` when it cannot plan a track: its tag or sidecar unreadable, or, with `--fresh`, or for a track asked again (one holding only placeholder lyrics, or one `--refetch-untimed` or `--refetch-implausible` picks), a sidecar name its strip, or an MP3 its embed, would fail on. |
-| `2` | The run could not start: a bad or misplaced option, no album or no MP3 under it, the album lock held by another run, no run to check or undo or a chosen run whose manifest could not be read (*Which folders are runs*), a prune or an accept on a Python whose `shutil.rmtree` does not protect against links, an accept that refused the album or could not write its records (*`--mode accept`*), a `--track` outside the album or the run or not one of its tracks (*`--track` paths*), a `--heard-dir` that is not a folder, or an unusable `--config` (unreadable, holding none of the three tables, a malformed `[no_lyrics]` table, or an unusable `[musicbrainz] contact`). Also an album-level error before any MP3 changed, as below. |
-| `3` | The work finished, or stopped part-way, but its record could not be written: the run's manifest after a track finished (an OS error, or a write that does not read back as written), or the `--changed-list` file. Each is said on stderr after the report. So is a prune's or an accept's report that could not be written, and so is a report that could not be written once any mode's work began, a dry run's, a check's and a compare's included: a progress line or the summary refused by a closed stderr or stdout (below). It outranks `1` and `130`, since undo depends on the record: a run with track errors, or one a Ctrl-C stopped, whose record also failed exits `3`, its errors still in the summary. |
-| `130` | Interrupted with Ctrl-C. Once the backup is done, the manifest records the tracks that finished; before it, the run stops with no summary and no track changed. An accept stopped after its rename leaves `.lyricsmith.accepting`, which the next accept finishes; stopped before it, none of the album's runs was removed. |
+| `2` | The run could not start: a bad or misplaced option, no album or no MP3 under it, the album lock held by another run, no run to check or undo or a chosen run whose manifest could not be read (*Which folders are runs*), an accept that refused the album or could not write its records (*`--mode accept`*), a `--track` outside the album or the run or not one of its tracks (*`--track` paths*), a `--heard-dir` that is not a folder, or an unusable `--config` (unreadable, holding none of the three tables, a malformed `[no_lyrics]` table, or an unusable `[musicbrainz] contact`). Also an album-level error before any MP3 changed, as below. |
+| `3` | The work finished, or stopped part-way, but its record could not be written: the run's manifest after a track finished (an OS error, or a write that does not read back as written), the `--changed-list` file, or a fix's `--hold-for-genius` file. Each is said on stderr after the report. So is a prune's or an accept's report that could not be written, and so is a report that could not be written once any mode's work began, a dry run's, a check's and a compare's included: a progress line or the summary refused by a closed stderr or stdout (below). It outranks `1` and `130`, since undo depends on the record: a run with track errors, or one a Ctrl-C stopped, whose record also failed exits `3`, its errors still in the summary. |
+| `130` | Interrupted with Ctrl-C. Once the backup is done, the manifest records the tracks that finished; before it, the run stops with no summary and no track changed. An accept stopped after its rename (on Windows, its first move) leaves `.lyricsmith.accepting`, which the next accept finishes; stopped before it, none of the album's runs was removed. |
 
 A shared library or a sibling tool's module that cannot be located, or that a same-named
 module would shadow, also exits `2`, before anything runs: see *Exit codes* in
@@ -2013,7 +2112,10 @@ manifest is being written can leave one of the same form in the run folder, besi
 ## Symbolic links are skipped
 
 Discovery never follows a link. A linked MP3, or a linked folder under the album, is skipped
-with one stderr notice each, so a track missing from the summary is explained. Hidden files
+with one stderr notice each, so a track missing from the summary is explained. A Windows
+junction counts as a linked folder, though it is no symbolic link, and so does a junction
+anywhere the tool reads or deletes a run folder: `.lyricsmith`, its `lock`, an entry under a
+run id's name or a `.pruning` one, and a run's `undo` folder. Hidden files
 and folders, any name starting with `.`, are skipped without a notice, which keeps the run
 folder and the macOS `._` files out. The album
 path itself is resolved once, so `--album` may be a link to the album.
@@ -2049,7 +2151,7 @@ stderr, the path as a manifest names it, relative to the album.
 ## The album lock
 
 One run or one undo changes an album at a time. Each takes a kernel lock, through the shared
-`run_lock` library (`flock` on POSIX), on `<album>/.lyricsmith/lock`, creating the folder
+`run_lock` library (`flock` on POSIX, `msvcrt.locking` on Windows), on `<album>/.lyricsmith/lock`, creating the folder
 and the file when absent. A second run of the same album while the first holds it is exit `2` before anything is
 backed up. The kernel drops the lock when its holder exits, however it exits, so a run
 killed outright leaves a lock file that holds nothing, and the next run simply takes it. The
@@ -2057,14 +2159,18 @@ file itself stays between runs: deleting it would race a second run opening it, 
 could then each hold a lock. The one exception is `--mode accept --apply`, which holds the
 lock while it renames the whole `.lyricsmith` folder, lock inside, out of the way: a run
 that starts afterward creates a fresh folder and lock, sharing no file with the old one, so
-no two holders can meet. Accept's report-only pass takes the lock as prune's dry run does,
+no two holders can meet. On Windows, which cannot rename the folder while the lock is open,
+accept deletes the lock file itself, after letting it go (*On Windows the folder is
+emptied, not renamed*). Windows refuses to delete a file that lyricsmith holds open, so a
+run that took the lock in that moment keeps it, file and folder. Accept's report-only pass takes the lock as prune's dry run does,
 so on a `.lyricsmith` holding no `lock` it creates an empty one, the only change it makes.
 Two accepts started on one album at once cannot both judge it: the second finds the lock
 held, or, once the first has renamed the folder, only its `.lyricsmith.accepting`, which it
 finishes as a leftover. Both may then delete the same folder, so one can report its removal
 as an `ERROR` and exit `1`; the records were already written and nothing is lost.
 
-`.lyricsmith` and its `lock` must be real: a symbolic link at either name would put the
+`.lyricsmith` and its `lock` must be real: a symbolic link or a Windows junction at
+either name would put the
 run folder or the lock outside the album, so run, strip, undo, check, prune and accept refuse it
 with exit `2` before anything is created or read. A run-id folder under the run folder
 that is a link is not a run: it is never listed, never chosen
@@ -2235,7 +2341,27 @@ Every run keeps its backup in a hidden folder inside the album:
   and nothing is ever restored from an export that was not proven.
 - **Every file is written whole.** Each backup file and each manifest is written to a
   temporary file beside it, synced, renamed into place and read back, so a reader sees
-  the old file or the new one, never half of one.
+  the old file or the new one, never half of one. On POSIX the folder is synced after
+  the rename too; Windows cannot open a folder to sync it, so there that step is skipped.
+- **A read that never follows a link holds on Windows too.** Each such read looks at the
+  name first without following it and refuses a symbolic link or a junction there
+  (`a link here is never read through`, the same words on every host), then checks that
+  the file it opened is the one it looked at. POSIX's open also refuses a link itself
+  (`O_NOFOLLOW`). Windows has no such flag, so one race is left there: a link swapped in
+  between the look and the open is followed by the open, which may reach what the link
+  leads to before the check refuses it. Nothing is read from it. A folder where a file
+  is expected is refused before any open, as `not a regular file`, on every host.
+- **A read's link is narrower than the delete's, on purpose.** A read, and every guard
+  that refuses a linked run folder, lock or album folder, takes as a link a symbolic link
+  or, on Windows, a name surrogate: a reparse point that leads elsewhere, as a junction
+  or a mount point does (`lyrics_files.is_link_entry`). The delete takes any reparse
+  point as a link (*The delete that never follows a link*, under `--mode prune`), so it
+  removes the point itself and never enters it: a rule too broad there can stop a delete
+  or remove a name without entering it, but never reach outside the folder. A read that
+  refused every reparse point would refuse every sidecar in a OneDrive files-on-demand or
+  deduplicated library, where each file is a reparse point that is still the file it
+  names, so a read must not. A hard link is no link to either: it is read as the file it
+  is, on every host.
 - **The backup comes first.** Every track is backed up and the manifest written, with
   `state` `backed_up`, before any MP3 or sidecar changes. A track whose backup fails (an
   unreadable tag, an I/O error, a lyrics frame whose export or exact copy would pass the
@@ -2245,7 +2371,8 @@ Every run keeps its backup in a hidden folder inside the album:
   with nothing to undo from. The other tracks go on.
 - **A linked sidecar is backed up as a link.** A sidecar name holding a symbolic link,
   whether it leads to a file, to a folder or nowhere, is recorded by the link's target
-  and nothing is copied; undo recreates the link. The file it points at is never read
+  and nothing is copied; undo recreates the link. On Windows an absolute target reads
+  back as `\\?\C:\...`; the backup records it as `C:\...`, the form it was made in. The file it points at is never read
   for the backup and never changed. A folder, a pipe or a device under a sidecar name
   is not recorded at all.
 
@@ -2647,6 +2774,10 @@ that format can hold (below).
   work succeeded. Refresh such a track by hand.
 - **A list that cannot be written** is reported on stderr after the report, and the exit code
   is `3`, as for a record that could not be written: the lyrics work was done.
+- **The held list.** A fix's `--hold-for-genius <file>` is written in the same format, the
+  same way and at the same moment, listing each track the fix held for Genius instead of
+  the MP3s saved (none of them was). When both lists cannot be written, both are said on
+  one stderr line.
 
 ## Samples
 

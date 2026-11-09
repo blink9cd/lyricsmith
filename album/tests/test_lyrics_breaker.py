@@ -216,7 +216,8 @@ class PathTest(fixtures.IsolatedCase):
     """Each guarded provider's file sits beside the cool-down files."""
 
     def test_the_file_is_in_the_cool_down_folder(self) -> None:
-        environ = {"XDG_STATE_HOME": "/srv/state", "HOME": "/srv/someone"}
+        state = str(fixtures.host_absolute("/srv/state"))
+        environ = {"XDG_STATE_HOME": state, "HOME": "/srv/someone"}
         for source in lbk.GUARDED_SOURCES:
             with self.subTest(source=source):
                 path = lbk.breaker_path(environ, source)

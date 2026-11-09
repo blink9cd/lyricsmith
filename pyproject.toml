@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lyricsmith"
-version = "0.3.0"
+version = "0.4.0"
 description = "Find, check, transcribe and time an album's lyrics: album, sweep, transcribe and sync."
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -148,7 +148,10 @@ ignore_missing_imports = true
 
 [tool.gate_cache]
 # Kept because album/tests/test_env_declared.py reads it: that test fails unless this list
-# and the project's environment reads, by literal or module-level constant, agree. The
-# one variable here is LYRICSMITH_OFFLINE, which skips album's live LRCLIB, NetEase,
-# Bandcamp, YouTube Music and Tekstowo tests, so it changes which tests run.
-env = ["LYRICSMITH_OFFLINE"]
+# and the project's environment reads, by literal or module-level constant, agree. Each
+# variable here changes which tests run: LYRICSMITH_OFFLINE skips album's live LRCLIB,
+# NetEase, Bandcamp, YouTube Music, and Tekstowo tests; CI set to "true" on Windows runs
+# album's guard that the link proofs ran rather than skipped; and LYRICSMITH_TEST_LIBRARY
+# names the library sync's live hearing test copies a track from, so a run without it
+# skips that test.
+env = ["CI", "LYRICSMITH_OFFLINE", "LYRICSMITH_TEST_LIBRARY"]

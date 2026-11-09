@@ -244,10 +244,11 @@ class LedgerTooLargeError(OSError):
 def read_unlinked(path: Path, limit: int) -> bytes:
     """At most *limit* bytes of the regular file at *path*, never through a link.
 
-    `lyrics_files.read_regular` without following a link. The open's own refusal of
-    a link at *path* is an ``ELOOP`` whose text names a loop, not a link, so it is
-    raised as `NotRegularFileError` saying *path* is a symbolic link instead. Any
-    other ``ELOOP`` (a loop in a folder on the way) keeps the OS's own error.
+    `lyrics_files.read_regular` without following a link. Its refusal of a link at
+    *path* is an ``ELOOP`` (on POSIX, one swapped in after its look is the kernel's,
+    whose text names a loop, not a link), so it is raised as `NotRegularFileError`
+    saying *path* is a symbolic link instead. Any other ``ELOOP`` (a loop in a folder
+    on the way) keeps the OS's own error.
     """
     try:
         return read_regular(path, limit, follow=False)

@@ -68,7 +68,8 @@ def sum_categories(entries: Iterable[LedgerEntry]) -> OutcomeCategories:
         _add(written, counts.written_by)
         _add(removed, counts.removed_by)
     withheld = sum(counts.withheld for counts in counted)
-    return OutcomeCategories(written, removed, withheld)
+    held = sum(counts.held for counts in counted)
+    return OutcomeCategories(written, removed, withheld, held)
 
 
 def total_lines(entries: Sequence[LedgerEntry]) -> list[str]:

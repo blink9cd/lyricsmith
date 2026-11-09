@@ -19,7 +19,6 @@ Every lyric here is invented.
 
 from __future__ import annotations
 
-import errno
 import os
 import shutil
 import sys
@@ -34,6 +33,7 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent), str(_HERE.parent / "src")]
 import album  # noqa: E402 - import follows the sys.path bootstrap above
 import cli_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
+import host_shapes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_backup  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_files  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
@@ -56,7 +56,7 @@ def _loops(path: Path) -> bool:
     try:
         os.stat(path)
     except OSError as error:
-        return error.errno == errno.ELOOP
+        return host_shapes.is_link_loop(error)
     return False
 
 

@@ -80,15 +80,31 @@ class PlanTest(sy_cases.IsolatedCase):
         self.assertIs(planned.action, Action.ERROR_TEXT)
         self.assertIn("01 A.txt", planned.detail)
 
-    @unittest.skipIf(sy_cases.IS_ROOT, "root reads a mode-000 file")
+    @unittest.skipUnless(sy_cases.FILE_LOCKS, sy_cases.NO_MODE_000_LOCK)
     def test_a_txt_that_cannot_be_opened_is_an_error_naming_it(self) -> None:
+        sidecar = self.locked_txt()
+        sidecar.chmod(0)
+        self.addCleanup(sidecar.chmod, 0o600)
+        self.assert_refused_txt(sidecar)
+
+    def test_a_txt_whose_open_is_refused_is_an_error_naming_it(self) -> None:
+        # The portable twin of the mode-000 test: the open is refused directly, so the
+        # row is proven where chmod cannot lock a file.
+        sidecar = self.locked_txt()
+        refused = sy_cases.permission_denied(sidecar)
+        with mock.patch.object(sy_plan, "plan_sidecars", side_effect=refused):
+            self.assert_refused_txt(sidecar)
+
+    def locked_txt(self) -> Path:
+        """The .txt of a one-track album, built for a refused-open case."""
         (audio,) = fixtures.build_album(
             self.tmp, (fixtures.TrackSpec("01 A.mp3", seconds=1.0, txt="la\n"),)
         )
-        sidecar = audio.with_suffix(".txt")
-        sidecar.chmod(0)
-        self.addCleanup(sidecar.chmod, 0o600)
-        planned = sy_plan.plan_track(audio, overwrite=False)
+        return audio.with_suffix(".txt")
+
+    def assert_refused_txt(self, sidecar: Path) -> None:
+        """Planning *sidecar*'s track is an error naming it and the refusal."""
+        planned = sy_plan.plan_track(sidecar.with_suffix(".mp3"), overwrite=False)
         expected = f"01 A.txt: {os.strerror(errno.EACCES)}"
         self.assertEqual(
             (planned.action, planned.detail), (Action.ERROR_TEXT, expected)

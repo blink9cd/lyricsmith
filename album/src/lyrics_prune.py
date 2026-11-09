@@ -12,17 +12,18 @@ module's rules (`classify`, `judge`) are pure; `scan`, `remove_folder` and
 from __future__ import annotations
 
 import os
-import shutil
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 
 from lyrics_album import AcquireLock, album_lock
+from lyrics_delete import chosen_delete
 from lyrics_manifest import read_manifest
 from lyrics_model import ManifestSchemaError
 from lyrics_records import Manifest, RunState
 from lyrics_run_folders import (
+    is_link_or_junction,
     manifest_present,
     refuse_linked_run_folder,
     run_order,
@@ -179,7 +180,9 @@ def _read_entry(
 ) -> Found:
     """What one run-id entry is: its kind, and a readable run's state and set-asides."""
     parent = entry.parent
-    if entry.is_symlink() or not entry.is_dir():
+    # A junction reads as a folder, so it is tested for as a link is: either one under
+    # a run id or a .pruning name is never read, nor deleted, as a run.
+    if is_link_or_junction(entry) or not entry.is_dir():
         return Found(entry.name, order, Kind.NOT_FOLDER, parent=parent)
     if leftover:
         return Found(entry.name, order, Kind.LEFTOVER, parent=parent)
@@ -207,15 +210,15 @@ def _read_entry(
 def _holds_displaced(run_dir: Path, manifest: Manifest) -> bool:
     """Whether undo set anything aside: a track lists one, or ``undo`` is not empty.
 
-    An ``undo`` entry that is a link or a file is not a folder undo made, so it counts
-    as holding something, and so does one that cannot be listed.
+    An ``undo`` entry that is a link, a junction or a file is not a folder undo made, so
+    it counts as holding something, and so does one that cannot be listed.
     """
     if any(track.displaced for track in manifest.tracks):
         return True
     undo = run_dir / UNDO_DIR
     if not os.path.lexists(undo):
         return False
-    if undo.is_symlink() or not undo.is_dir():
+    if is_link_or_junction(undo) or not undo.is_dir():
         return True
     try:
         return any(undo.iterdir())
@@ -289,10 +292,10 @@ def prune_album(
     An album with no run folder has nothing to prune, and nothing is created. A
     dry run holds the lock too, so its table is the one a pass would act on. Leftovers
     go first, so none blocks the rename of the run it is named for.
-    *delete* None is `shutil.rmtree`, looked up now rather than bound at definition.
+    *delete* None is `lyrics_delete.chosen_delete`'s, chosen now, not at import.
     Raises `RunFolderLinkError`, `LockHeldError` and the listing's `OSError`.
     """
-    delete = shutil.rmtree if delete is None else delete
+    delete = chosen_delete() if delete is None else delete
     refuse_linked_run_folder(album)
     parent = run_parent(album)
     if parent is None:

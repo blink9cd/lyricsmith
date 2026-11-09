@@ -38,8 +38,10 @@ def bundled_sample() -> Path | None:
 
 SAMPLE = bundled_sample()
 MODEL_DIR = at_models.default_model_dir(sys.platform, os.environ, Path.home())
+#: The default run's two models: no transcribe run hears with large-v3.
 MODELS_PRESENT = all(
-    (MODEL_DIR / model_file.name).is_file() for model_file in at_models.MANIFEST
+    (MODEL_DIR / model_file.name).is_file()
+    for model_file in at_models.run_models(at_models.WHISPER_MODEL_NAME)
 )
 
 

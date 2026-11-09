@@ -11,21 +11,31 @@ from __future__ import annotations
 import contextlib
 import io
 import sys
-from collections.abc import Iterable, Sequence
+import unittest
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent)]
+# album's test helpers, last, so none of them shadows a module of this tool's own.
+sys.path.append(str(_HERE.parents[1] / "album" / "tests"))
 
 import sweep  # noqa: E402 - its bootstrap puts src/ and the album tool on the path
 import album  # noqa: E402 - import follows the sys.path bootstrap above
+import fixtures as album_fixtures  # noqa: E402 - album's test helpers, appended above
+import lyrics_album  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_changed  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_changed  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_child  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_run  # noqa: E402 - import follows the sys.path bootstrap above
 
+#: A track name holding a linefeed, which the list cannot hold, and the name its twin
+#: builds in its place, since NTFS cannot hold a linefeed either.
+_LINEFEED_NAME = "04 Line\nBreak.mp3"
+_STAND_IN_NAME = "04 Line Break.mp3"
 #: The tracks `sweep_fixtures.needy_album` makes, in album order.
 _NEEDY = ("01 Timed.mp3", "02 Plain.mp3", "03 Bare.mp3")
 
@@ -164,8 +174,31 @@ class UnknownChangesTest(ChangedCase):
             )
         )
 
+    @unittest.skipUnless(
+        album_fixtures.host_holds_name(_LINEFEED_NAME),
+        "this file system holds no linefeed",
+    )
     def test_an_mp3_the_list_cannot_hold_is_left_out_and_said(self) -> None:
-        odd = sf.add_track(self.a1, "04 Line\nBreak.mp3")
+        self.assert_left_out_and_said(sf.add_track(self.a1, _LINEFEED_NAME))
+
+    def test_an_mp3_listed_with_a_linefeed_is_left_out_and_said(self) -> None:
+        # NTFS cannot hold a linefeed in a name, so the track is built under a stand-in
+        # name and the album's listing hands the linefeed name on in its place: every
+        # stage but the listing is real, on every host.
+        built = sf.add_track(self.a1, _STAND_IN_NAME)
+        named = built.with_name(_LINEFEED_NAME)
+        real = lyrics_album.discover_tracks
+
+        def listed(album_dir: Path) -> lyrics_album.Discovery:
+            found = real(album_dir)
+            tracks = tuple(named if t == built else t for t in found.tracks)
+            return replace(found, tracks=tracks)
+
+        with mock.patch.object(lyrics_album, "discover_tracks", listed):
+            self.assert_left_out_and_said(named)
+
+    def assert_left_out_and_said(self, odd: Path) -> None:
+        """A1's child leaves no list: *odd*, among its MP3s, is left out and said."""
         self.fake.scripts["A1"] = sf.Script(changed=None)
         self.fake.scripts["A2"] = sf.Script(changed=())
         _, stderr = self.sweep()
@@ -225,11 +258,17 @@ class KeptCurrentTest(ChangedCase):
         real = sweep_changed.ChangedUnion.absorb
         calls: list[Path] = []
 
-        def absorb(union: sweep_changed.ChangedUnion, album: Path) -> None:
+        def absorb(
+            union: sweep_changed.ChangedUnion,
+            album: Path,
+            *,
+            started: bool = True,
+            made_nothing: Callable[[], bool] = sweep_changed.made_something,
+        ) -> None:
             calls.append(album)
             if len(calls) == 1:
                 raise KeyboardInterrupt
-            real(union, album)
+            real(union, album, started=started, made_nothing=made_nothing)
 
         with mock.patch.object(sweep_changed.ChangedUnion, "absorb", absorb):
             code, _ = self.sweep()
@@ -279,15 +318,17 @@ class ArgvTest(sf.IsolatedCase):
     """The child's command line carries the per-album list when there is one."""
 
     def test_the_list_follows_the_album_options(self) -> None:
+        # Host-absolute, so the path is handed on in the host's own spelling.
+        listed = album_fixtures.host_absolute("/t/1.list")
         argv = sweep_child.album_argv(
-            Path("/e/album.py"),
-            Path("/l/a"),
+            album_fixtures.host_absolute("/e/album.py"),
+            album_fixtures.host_absolute("/l/a"),
             lang=None,
             offline=False,
-            changed_list=Path("/t/1.list"),
+            changed_list=listed,
             interpreter="python",
         )
-        self.assertEqual(argv[-2:], ["--changed-list", "/t/1.list"])
+        self.assertEqual(argv[-2:], ["--changed-list", str(listed)])
 
 
 class UnionMechanicsTest(ChangedCase):
@@ -333,11 +374,14 @@ class UnionMechanicsTest(ChangedCase):
             pending: sweep_changed._Pending,
             *,
             started: bool,
+            made_nothing: Callable[[], bool],
         ) -> Iterable[str]:
             calls.append(album)
             if len(calls) == 1:
                 raise KeyboardInterrupt
-            return real(union, album, pending, started=started)
+            return real(
+                union, album, pending, started=started, made_nothing=made_nothing
+            )
 
         with (
             mock.patch.object(sweep_changed.ChangedUnion, "_read_child", read_child),

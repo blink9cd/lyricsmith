@@ -11,7 +11,7 @@ from __future__ import annotations
 import enum
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Final
 
 #: The second header line of every .lrc this tool writes, and the mark of "ours".
@@ -97,6 +97,8 @@ class Options:
     vad_model: Path
     model_dir: Path
     whisper_cli: Path | None  # None: find it on PATH
+    #: The pinned whisper model whose run's files fetch-models fetches.
+    whisper_model: str
 
 
 @dataclass(frozen=True)
@@ -123,6 +125,12 @@ def has_timestamp(text: str) -> bool:
     return any(TIMESTAMP_LINE.match(line) for line in split_lines(text))
 
 
-def shown_path(audio: Path, root: Path) -> Path:
-    """The path relative to the walk root, or whole when it is not under it."""
-    return audio.relative_to(root) if audio.is_relative_to(root) else audio
+def shown_path(audio: PurePath, root: PurePath) -> str:
+    """The path relative to the walk root, or whole when it is not under it.
+
+    A relative path reads with ``/`` on every host, as the album tool's manifests name
+    a track; a whole one stays as the host names it, so it can be pasted back.
+    """
+    if audio.is_relative_to(root):
+        return audio.relative_to(root).as_posix()
+    return str(audio)

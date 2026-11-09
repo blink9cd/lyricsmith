@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import stat
 import sys
+import unittest
 from pathlib import Path
 from unittest import mock
 
@@ -29,10 +31,12 @@ settings.register_profile(
 )
 settings.load_profile("fuzz_gate_deterministic")
 
-LOW = bh.Row("/m/Artist/Album/01 A.mp3", bh.REASON_LOW, "0.08")
-FIRST = bh.Row("/m/Artist/Album/02 B.mp3", bh.REASON_FIRST, "[00:00.280]")
-UNSUNG = bh.Row("/m/Artist/Album/04 D.mp3", bh.REASON_NOT_SUNG, "0.04")
-LITTLE = bh.Row("/m/Artist/Album/05 E.mp3", bh.REASON_LITTLE, "12 pairs")
+#: The album of the listed tracks, absolute on the host as the walk names it.
+ALBUM = sy_cases.host_absolute("/m/Artist/Album")
+LOW = bh.Row(str(ALBUM / "01 A.mp3"), bh.REASON_LOW, "0.08")
+FIRST = bh.Row(str(ALBUM / "02 B.mp3"), bh.REASON_FIRST, "[00:00.280]")
+UNSUNG = bh.Row(str(ALBUM / "04 D.mp3"), bh.REASON_NOT_SUNG, "0.04")
+LITTLE = bh.Row(str(ALBUM / "05 E.mp3"), bh.REASON_LITTLE, "12 pairs")
 #: A field's text: anything a row's field can hold, no tab, line break or NUL in it.
 FIELD = hs.text(
     alphabet=hs.characters(
@@ -42,7 +46,7 @@ FIELD = hs.text(
 )
 ROW = hs.builds(
     bh.Row,
-    FIELD.map(lambda text: "/" + text),
+    FIELD.map(lambda text: str(sy_cases.HOST_ROOT) + text),
     hs.sampled_from(bh.REASONS),
     FIELD,
 )
@@ -54,10 +58,12 @@ class FormatTest(sy_cases.IsolatedCase):
     def test_rows_are_written_one_per_line(self) -> None:
         self.assertEqual(
             bh.format_rows((LOW, FIRST, UNSUNG, LITTLE)),
-            b"/m/Artist/Album/01 A.mp3\tlow confidence\t0.08\n"
-            b"/m/Artist/Album/02 B.mp3\tfirst line\t[00:00.280]\n"
-            b"/m/Artist/Album/04 D.mp3\tnot sung\t0.04\n"
-            b"/m/Artist/Album/05 E.mp3\tlittle heard\t12 pairs\n",
+            (
+                f"{LOW.path}\tlow confidence\t0.08\n"
+                f"{FIRST.path}\tfirst line\t[00:00.280]\n"
+                f"{UNSUNG.path}\tnot sung\t0.04\n"
+                f"{LITTLE.path}\tlittle heard\t12 pairs\n"
+            ).encode(),
         )
 
     def test_a_path_the_format_cannot_hold_is_named_with_why(self) -> None:
@@ -135,7 +141,9 @@ class ReadTest(sy_cases.IsolatedCase):
             bh.read_by_hand_list(self.target)
         self.assertIn(f"{self.target}: line 1:", str(raised.exception))
 
-    def test_a_link_a_fifo_or_an_oversized_file_is_refused(self) -> None:
+    # The link, the FIFO and the oversized file are three tests, not one: a host with
+    # no named pipes skips the FIFO, and must still prove the size cap.
+    def test_a_link_is_refused(self) -> None:
         self.target.parent.mkdir()
         real = self.tmp / "real.tsv"
         real.write_bytes(bh.format_rows((LOW,)))
@@ -143,13 +151,17 @@ class ReadTest(sy_cases.IsolatedCase):
         with self.assertRaises(bh.ByHandListError) as raised:
             bh.read_by_hand_list(self.target)
         self.assertIn("cannot be read", str(raised.exception))
-        self.target.unlink()
+
+    def test_a_fifo_is_refused(self) -> None:
+        self.target.parent.mkdir()
         make_pipe(self.target)
         with self.assertRaises(bh.ByHandListError):
             within_deadline(
                 self, self.target, lambda: bh.read_by_hand_list(self.target)
             )
-        self.target.unlink()
+
+    def test_an_oversized_file_is_refused(self) -> None:
+        self.target.parent.mkdir()
         self.target.write_bytes(bh.format_rows((LOW,)))
         with mock.patch.object(bh, "MAX_LIST_BYTES", 8):
             with self.assertRaises(bh.ByHandListError) as raised:
@@ -172,7 +184,7 @@ class RecorderTest(sy_cases.IsolatedCase):
     def setUp(self) -> None:
         super().setUp()
         self.target = self.tmp / "new" / "deeper" / "by-hand.tsv"
-        self.audio = Path("/m/Artist/Album/03 C.mp3")
+        self.audio = ALBUM / "03 C.mp3"
 
     def low(self, audio: Path | None = None) -> TrackResult:
         """A low-confidence result for *audio*, by default the case's own track."""
@@ -183,13 +195,17 @@ class RecorderTest(sy_cases.IsolatedCase):
             confidence="0.05",
         )
 
-    def test_a_low_confidence_track_is_saved_private(self) -> None:
+    def test_a_low_confidence_track_is_saved(self) -> None:
         recorder = bh.Recorder(self.target, (LOW,))
         result = self.low()
         self.assertEqual(recorder.record(result), result)
         rows = bh.read_by_hand_list(self.target)
         self.assertEqual(rows, (LOW, bh.Row(str(self.audio), bh.REASON_LOW, "0.05")))
         self.assertEqual(recorder.added, 1)
+
+    @unittest.skipIf(os.name == "nt", sy_cases.NO_POSIX_MODES)
+    def test_the_saved_list_and_the_folders_made_for_it_are_private(self) -> None:
+        bh.Recorder(self.target, ()).record(self.low())
         self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o600)
         for folder in (self.target.parent, self.target.parent.parent):
             self.assertEqual(stat.S_IMODE(folder.stat().st_mode), 0o700)
@@ -333,7 +349,9 @@ class RecorderTest(sy_cases.IsolatedCase):
         self.target.symlink_to(aimed)
         self.assert_refused_through("link")
         self.assertTrue(self.target.is_symlink())
-        self.assertEqual(self.target.readlink(), aimed)
+        # Read through album's reader: Windows' readlink gives the target back
+        # extended-length (\\?\C:\...), not as the link was made.
+        self.assertEqual(lyrics_files.read_link(self.target), str(aimed))
         self.assertEqual(aimed.read_bytes(), b"theirs\n")
 
     def test_a_fifo_at_the_name_is_refused_and_left_as_it_is(self) -> None:

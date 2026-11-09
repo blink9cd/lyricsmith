@@ -6,8 +6,11 @@ is planned (`read_store`), so a track with a record that is not skipped (its tex
 changed, or its row was removed) is judged against what was heard of it instead of
 being heard again (`sy_plan`). At the
 start of a run, never a dry run, `clean` removes each record whose track, under the
-run's --path, is gone or now holds a timed ``.lrc``: such a record can serve nothing. A
-path with a ``..`` part is never under --path, so no sidecar outside it is read.
+run's --path, is gone, or now holds a timed ``.lrc`` that releases it: one this tool
+timed, or one whose words are not the record's (`_is_released`). Such a record can
+serve nothing. A provider's timed text heard not sung keeps its record until it is
+fixed, so a timing run between the hearing and the fix never erases it. A path with a
+``..`` part is never under --path, so no sidecar outside it is read.
 Records outside --path are left alone, so a run over one folder never empties the store
 of a library that is not there to look at. A file in the store that is not a record
 this tool can read is reported, never removed.
@@ -34,8 +37,10 @@ from typing import Final
 
 import sy_located  # noqa: F401 - puts the other tools and libraries on sys.path
 import sy_by_hand
+import sy_kind
 import sy_plan
 from lyrics_heard import text_fingerprint
+from lyrics_hearing_log import HeardKind
 from lyrics_heard_store import (
     MAX_TRANSCRIPT_BYTES,
     STORE_ERRORS,
@@ -45,6 +50,7 @@ from lyrics_heard_store import (
     list_records,
     write_record,
 )
+from lyrics_sidecar import UNREADABLE
 from sy_types import WRITTEN, Action, Outcome, Planned, TrackResult
 
 #: The option's name, as each line it adds to the output starts.
@@ -131,10 +137,33 @@ def _is_under(track: Path, scope: Path) -> bool:
     return track == scope or scope in track.parents
 
 
+def _is_released(track: Path, fingerprint: str) -> bool:
+    """True when *track*'s timed text no longer needs the record of *fingerprint*.
+
+    A text this tool timed was heard sung to be timed, so it releases the record as
+    ever; any other timed text, a provider's, releases it only once its words are
+    not the record's: fixed, then timed. A provider's text heard not sung, still in
+    place, keeps its record for the fix. A text that cannot be read releases nothing.
+    """
+    try:
+        found = sy_kind.text_kind(track)
+    except (*UNREADABLE, OSError):
+        return False
+    if found is None or found.kind is HeardKind.UNTIMED:
+        return False
+    if found.kind is HeardKind.MACHINE_TIMED:
+        return True
+    return text_fingerprint(found.lines) != fingerprint
+
+
 def _is_spent(record: HeardRecord, scope: Path) -> bool:
-    """True when *record*'s track, under *scope*, is gone or already timed."""
+    """True when *record*'s track, under *scope*, is gone, or timed and released."""
     track = record.path
-    return _is_under(track, scope) and (_is_gone(track) or _is_timed(track))
+    if not _is_under(track, scope):
+        return False
+    if _is_gone(track):
+        return True
+    return _is_timed(track) and _is_released(track, record.fingerprint)
 
 
 def _removal_failure(track: Path, error: Exception) -> str:

@@ -197,6 +197,22 @@ class RedirectTest(fixtures.IsolatedCase):
         self.assertEqual(caught.exception.detail, lh.REDIRECT_REFUSED)
         self.assertEqual(len(server.requests), 1)
 
+    def test_a_refused_redirect_names_the_location_it_refused(self) -> None:
+        # Resolved against the page that answered it, as the next hop would have been;
+        # None when the redirect named no Location at all.
+        cases: tuple[tuple[object, str | None], ...] = (
+            (bf.Redirect("https://example.com/x"), "https://example.com/x"),
+            (bf.Redirect("//example.com/y"), "https://example.com/y"),
+            (302, None),
+        )
+        for answer, refused in cases:
+            with self.subTest(answer=answer):
+                server = bf.BandcampServer({(HOST, "/album/x"): answer})
+                with self.assertRaises(lh.RedirectRefused) as caught:
+                    _get(server)
+                self.assertEqual(caught.exception.location, refused)
+                self.assertEqual(caught.exception.detail, lh.REDIRECT_REFUSED)
+
 
 def _redirect_setting_a_cookie() -> bf.BandcampServer:
     """A 302 that sets a cookie for every Bandcamp host, then the page it names."""

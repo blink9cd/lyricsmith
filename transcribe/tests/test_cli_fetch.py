@@ -7,6 +7,7 @@ import hashlib
 import io
 import os
 import sys
+from dataclasses import replace
 
 import transcribe
 import at_models
@@ -23,16 +24,51 @@ TINY = at_models.ModelFile(
 )
 
 
+#: The pinned names, each an invented file, as the real manifest orders them.
+PINNED = tuple(
+    replace(TINY, name=name, url=f"https://example.invalid/{name}")
+    for name in (
+        at_models.WHISPER_MODEL_NAME,
+        at_models.VAD_MODEL_NAME,
+        at_models.LARGE_MODEL_NAME,
+    )
+)
+
+
 class FetchModeTest(IsolatedCase):
-    def run_main(self, opener: FakeOpener) -> tuple[int, str]:
+    def run_main(
+        self,
+        opener: FakeOpener,
+        *argv: str,
+        manifest: tuple[at_models.ModelFile, ...] = (TINY,),
+    ) -> tuple[int, str]:
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             code = transcribe.main(
-                ["--mode", "fetch-models", "--model-dir", str(self.root / "models")],
+                [
+                    "--mode",
+                    "fetch-models",
+                    "--model-dir",
+                    str(self.root / "models"),
+                    *argv,
+                ],
                 opener=opener,
-                manifest=(TINY,),
+                manifest=manifest,
             )
         return code, out.getvalue()
+
+    def test_large_v3_is_fetched_only_when_named(self) -> None:
+        turbo, vad, large = (model.name for model in PINNED)
+        for argv, expected in (
+            ((), [turbo, vad]),
+            (("--whisper-model", large), [vad, large]),
+        ):
+            with self.subTest(argv=argv):
+                code, out = self.run_main(FakeOpener(data=DATA), *argv, manifest=PINNED)
+                self.assertEqual(code, EXIT_OK)
+                self.assertEqual(
+                    [line.split()[1] for line in out.splitlines()], expected
+                )
 
     def test_download_then_present(self) -> None:
         self.assertEqual(

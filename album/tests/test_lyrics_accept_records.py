@@ -238,7 +238,6 @@ class WriteRecordsTest(RunsCase):
         self.assertIn(written[0].name, str(caught.exception))
         self.assert_album_untouched()
 
-    @unittest.skipIf(not getattr(os, "O_NOFOLLOW", 0), "no O_NOFOLLOW to refuse a link")
     def test_a_copy_swapped_for_a_link_is_refused_on_read_back(self) -> None:
         written: list[Path] = []
 
@@ -310,7 +309,19 @@ class ManifestSwapTest(RunsCase):
 
 
 class RemoveLyricsmithTest(RunsCase):
-    """Renamed to ``.lyricsmith.accepting``, then deleted; the album's files stay."""
+    """Renamed to ``.lyricsmith.accepting``, then deleted; the album's files stay.
+
+    The whole-folder rename is pinned on every host. Windows' rule
+    (`RENAMES_HELD_FOLDERS` false) exists only because accept holds the album lock open
+    inside the folder; here no file in it is open, so the rename is Windows' too. The
+    entry-by-entry path that host takes under a held lock is
+    ``test_lyrics_accept_held_rename``'s.
+    """
+
+    def setUp(self) -> None:
+        """The two runs, removed by renaming the folder whole on any host."""
+        super().setUp()
+        self.enterContext(mock.patch.object(lar, "RENAMES_HELD_FOLDERS", True))
 
     def test_rename_then_delete_leaves_only_the_album_files(self) -> None:
         self.assertIsNone(lar.remove_lyricsmith(self.album))

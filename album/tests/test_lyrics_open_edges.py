@@ -27,6 +27,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
+import host_shapes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_album  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_backup  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_files  # noqa: E402 - import follows the sys.path bootstrap above
@@ -48,6 +49,8 @@ _TEXT_MODE_BAIT = b"A first line\r\nA second\x1a line after the stop\n"
 _OLD = "An older verse the backup kept\n"
 #: Invented words a swapped-in link leads to, inside the album.
 _SWAPPED = "Words a link swapped in after the check leads to\n"
+#: Windows' ERROR_FILE_NOT_FOUND: what opening through a link to itself raises there.
+_WINDOWS_NOT_FOUND = 2
 
 
 @contextmanager
@@ -110,10 +113,22 @@ class IntermediateLoopTest(rb.UndoCase):
         assert before is not None
         with self.assertRaises(OSError) as caught:
             lyrics_backup.load_before_frames(run_dir, before)
-        self.assertEqual(caught.exception.errno, errno.ELOOP)
+        if sys.platform == "win32":
+            # Windows resolves a link to itself as a name that is not there, so the
+            # open fails as a missing file (ERROR_FILE_NOT_FOUND), not as a loop.
+            error = caught.exception  # pragma: only-on win32
+            self.assertEqual(  # pragma: only-on win32
+                getattr(error, "winerror", None), _WINDOWS_NOT_FOUND, error
+            )
+            undo_type = "FileNotFoundError"  # pragma: only-on win32
+        else:
+            self.assertTrue(  # pragma: only-on posix
+                host_shapes.is_link_loop(caught.exception), caught.exception
+            )
+            undo_type = "OSError"  # pragma: only-on posix
         (result,) = self.undo().tracks
         self.assertEqual(result.status, lr.UndoStatus.ERROR)
-        self.assertTrue(rb.undo_error(result).startswith("OSError: "))
+        self.assertTrue(rb.undo_error(result).startswith(f"{undo_type}: "))
 
 
 def _swap_after_check(swapped_to: Path) -> Callable[[Path, Path], Path | None]:
@@ -161,11 +176,13 @@ class SwappedSidecarTest(fixtures.IsolatedCase):
         return lyrics_album.discover_tracks(self.album).tracks
 
     def assert_link_error(self, error: lr.StageError | None) -> None:
-        """Assert *error* is the sidecar stage's refusal of the link, ELOOP."""
+        """Assert *error* is the sidecar stage's refusal of the link, worded alike everywhere."""
         assert error is not None
         self.assertEqual(error.stage, lr.ErrorStage.SIDECAR)
         self.assertEqual(error.exc_type, "OSError")
-        self.assertIn(os.strerror(errno.ELOOP), error.message)
+        self.assertIn(
+            f"[Errno {errno.ELOOP}] {lyrics_files.LINK_REFUSED}", error.message
+        )
 
     def test_the_run_records_that_tracks_sidecar_error(self) -> None:
         report = lyrics_run.run_album(

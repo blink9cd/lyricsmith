@@ -11,6 +11,12 @@ text the store can keep (`lyrics_heard_store.transcript_fits`). Every field of a
 is checked before the parent trusts it, so a child that dies half-way or writes nonsense
 is that track's error, and a reply timing a text the verdict calls not sung is refused,
 as is a not-sung reply whose verdict says otherwise.
+
+**A hearing.** A request with *align* false asks the child to stop once it has heard:
+it replies `HeardOnly`, the verdict, what was heard and the transcript, for a text sung,
+not sung or too little heard alike, read by `load_heard`, which refuses a status the
+verdict does not reach, as `load_reply` does. A request also names the whisper model it
+hears with, one of the transcribe tool's pinned two.
 """
 
 from __future__ import annotations
@@ -19,10 +25,13 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import sy_located  # noqa: F401 - puts album's modules on sys.path
-from lyrics_heard import Heard, not_sung
+from at_models import WHISPER_MODEL_NAME, WHISPER_MODEL_NAMES
+from lyrics_heard import Heard, little_heard, not_sung
+from lyrics_hearing_log import HeardVerdict
 from lyrics_heard_store import MAX_TRANSCRIPT_BYTES, transcript_fits
 from sy_lines import Span
 from sy_text import NO_LINE
@@ -32,6 +41,16 @@ STATUS_OK: Final = "ok"
 STATUS_TOO_LONG: Final = "too_long"
 #: whisper-cli heard the vocals, and too little of it was the text: nothing is aligned.
 STATUS_NOT_SUNG: Final = "not_sung"
+#: A hearing's statuses, one a verdict: it aligned nothing, whatever it found.
+HEARD_STATUSES: Final = MappingProxyType(
+    {
+        "heard_sung": HeardVerdict.SUNG,
+        "heard_not_sung": HeardVerdict.NOT_SUNG,
+        "heard_little": HeardVerdict.LITTLE_HEARD,
+    }
+)
+#: Each verdict's status, the other way round.
+_STATUS_OF: Final = MappingProxyType({v: k for k, v in HEARD_STATUSES.items()})
 
 
 class ReplyError(ValueError):
@@ -44,8 +63,9 @@ class Request:
 
     A separator's line is `NO_LINE`. The child reads the second line's start from the
     lines before it looks for a break after it. It hears the vocals with *whisper_cli*,
-    absolute, and the whisper models in *whisper_model_dir*, unless *transcript* holds
-    what whisper-cli heard of the track before: then that is judged, and nothing heard.
+    absolute, and the whisper model *whisper_model* in *whisper_model_dir*, unless
+    *transcript* holds what whisper-cli heard of the track before: then that is
+    judged, and nothing heard. With *align* false it stops once it has heard.
     """
 
     audio: Path
@@ -55,6 +75,8 @@ class Request:
     whisper_cli: Path
     whisper_model_dir: Path
     transcript: str | None = None
+    align: bool = True
+    whisper_model: str = WHISPER_MODEL_NAME
 
 
 @dataclass(frozen=True)
@@ -81,6 +103,30 @@ class NotSung:
 
     heard: Heard
     transcript: str | None
+
+
+@dataclass(frozen=True)
+class HeardOnly:
+    """The reply to a hearing: the verdict, what was heard, and the transcript.
+
+    *transcript* is None when it is longer than the store keeps, as a `NotSung`'s is.
+    """
+
+    verdict: HeardVerdict
+    heard: Heard
+    transcript: str | None
+
+
+def verdict_of(heard: Heard) -> HeardVerdict:
+    """What *heard* found, by `lyrics_heard`'s rule: too little to judge, not sung, sung."""
+    if little_heard(heard):
+        return HeardVerdict.LITTLE_HEARD
+    return HeardVerdict.NOT_SUNG if not_sung(heard) else HeardVerdict.SUNG
+
+
+def heard_only(heard: Heard, transcript: str | None) -> HeardOnly:
+    """The reply to a hearing that heard *heard*, its verdict reached by the rule."""
+    return HeardOnly(verdict_of(heard), heard, transcript)
 
 
 def _object(text: str) -> dict[str, object]:
@@ -112,6 +158,8 @@ def dump_request(request: Request) -> str:
             "whisper_cli": str(request.whisper_cli),
             "whisper_model_dir": str(request.whisper_model_dir),
             "transcript": request.transcript,
+            "align": request.align,
+            "whisper_model": request.whisper_model,
         }
     )
 
@@ -140,7 +188,23 @@ def load_request(text: str) -> Request:
         Path(str(cli)),
         Path(str(whisper)),
         None if kept is None else _transcript(kept),
+        _align(data.get("align")),
+        _whisper_model(data.get("whisper_model")),
     )
+
+
+def _align(value: object) -> bool:
+    """*value* as the request's align flag: a bool, never a stand-in for one."""
+    if not isinstance(value, bool):
+        raise ReplyError("a request needs align, true or false")
+    return value
+
+
+def _whisper_model(value: object) -> str:
+    """*value* as one of the pinned whisper models' file names, never another name."""
+    if not isinstance(value, str) or value not in WHISPER_MODEL_NAMES:
+        raise ReplyError("a request's whisper_model is not a pinned whisper model")
+    return value
 
 
 def _transcript(value: object) -> str:
@@ -177,12 +241,16 @@ def _heard_fields(heard: Heard) -> dict[str, object]:
     return {"heard_pairs": heard.pairs, "heard_share": heard.share}
 
 
-def dump_reply(reply: Reply | NotSung) -> str:
+def dump_reply(reply: Reply | NotSung | HeardOnly) -> str:
     """*reply* as JSON."""
-    if isinstance(reply, NotSung):
+    if not isinstance(reply, Reply):
         return json.dumps(
             {
-                "status": STATUS_NOT_SUNG,
+                "status": (
+                    _STATUS_OF[reply.verdict]
+                    if isinstance(reply, HeardOnly)
+                    else STATUS_NOT_SUNG
+                ),
                 **_heard_fields(reply.heard),
                 "transcript": reply.transcript,
             }
@@ -276,3 +344,19 @@ def _timed(
     if len(spans) != expected:
         raise ReplyError(f"{len(spans)} spans for {expected} tokens")
     return Reply(status, frames, float(frame_seconds), spans, heard)
+
+
+# fuzz-target
+def load_heard(text: str) -> HeardOnly:
+    """The reply to a hearing in *text*; raises `ReplyError` when it is not one.
+
+    Its status must be a hearing's, and the verdict the rule reaches on what was heard.
+    """
+    data = _object(text)
+    verdict = HEARD_STATUSES.get(str(data.get("status")))
+    if verdict is None:
+        raise ReplyError("unknown status for a hearing")
+    heard = _heard(data)
+    if verdict_of(heard) is not verdict:
+        raise ReplyError("the status and the verdict disagree on what was heard")
+    return HeardOnly(verdict, heard, _sent_transcript(data))

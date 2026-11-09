@@ -3,16 +3,19 @@
 A walked FIFO, device or link named like a track is judged as the transcribe tool
 judges it before any sidecar is read, so no child ever decodes one. A relative --path
 is made absolute, so ffmpeg is never handed a name it reads as a protocol. A link at a
-track's .lrc name is never replaced by a first-time write. A test that could block on
-a FIFO runs under album's `fifo_fakes.within_deadline`.
+track's .lrc name is never replaced by a first-time write, and a folder the walk
+cannot read is a failed row. A test that could block on a FIFO runs under album's
+`fifo_fakes.within_deadline`.
 """
 
 from __future__ import annotations
 
 import contextlib
 import io
+import os
 import subprocess
 import sys
+import unittest
 from collections.abc import Sequence
 from pathlib import Path
 from unittest import mock
@@ -124,6 +127,31 @@ class EntriesTest(sy_cases.IsolatedCase):
         self.assertRegex(out, r"ERROR audio +02 B\.mp3")
         self.assertEqual(len(self.children), 1)
 
+    def test_a_track_swapped_for_a_folder_after_the_walk_is_refused(self) -> None:
+        # The portable twin of the FIFO tests above, which skip where there are no
+        # named pipes: a track replaced by a folder between the walk and its judging
+        # is no regular file on every host.
+        swapped = self.album / "02 B.mp3"
+        swapped.write_bytes(DATA)
+        real = sy_modes.at_discover.find_audio
+
+        def walking_then_swapping(
+            path: Path, extensions: frozenset[str], errors: list[OSError] | None = None
+        ) -> list[Path]:
+            found = real(path, extensions, errors)
+            swapped.unlink()
+            swapped.mkdir()
+            return found
+
+        with mock.patch.object(
+            sy_modes.at_discover, "find_audio", walking_then_swapping
+        ):
+            code, out = self.main("--path", str(self.album), "--dry-run")
+        self.assertEqual(code, 1)
+        self.assertRegex(out, r"ERROR audio +02 B\.mp3")
+        self.assertIn(NOT_REGULAR_DETAIL, out)
+        self.assertRegex(out, r"time +01 A\.mp3")
+
     def test_a_walked_link_to_a_track_is_skipped(self) -> None:
         link = self.album / "02 B.mp3"
         link.symlink_to(self.outside_track())
@@ -165,6 +193,38 @@ class EntriesTest(sy_cases.IsolatedCase):
         self.assertEqual(code, 1)
         self.assertRegex(out, r"ERROR audio +01 A\.mp3")
         self.assertIn("could not read it: refused", out)
+
+    @unittest.skipUnless(sy_cases.FOLDER_LOCKS, sy_cases.NO_MODE_000_LOCK)
+    def test_an_unreadable_folder_is_a_failed_row(self) -> None:
+        locked = self.album / "Locked"
+        locked.mkdir()
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o700)
+        self.assert_locked_folder_is_a_failed_row()
+
+    def test_a_folder_whose_listing_is_refused_is_a_failed_row(self) -> None:
+        # The portable twin of the mode-000 test: the walk's listing of the folder is
+        # refused directly, so the row is proven where chmod cannot lock a folder.
+        locked = self.album / "Locked"
+        locked.mkdir()
+        real_scandir = os.scandir
+
+        def refuse_locked(path: str | int) -> object:
+            # The walk names the folder by its joined text; a cleanup scans by number.
+            if path == str(locked):
+                raise sy_cases.permission_denied(locked)
+            return real_scandir(path)
+
+        with mock.patch.object(os, "scandir", refuse_locked):
+            self.assert_locked_folder_is_a_failed_row()
+
+    def assert_locked_folder_is_a_failed_row(self) -> None:
+        """A run over the album lists its unreadable Locked folder and times the rest."""
+        code, out = self.main("--path", str(self.album))
+        self.assertEqual(code, 1)
+        self.assertRegex(out, r"ERROR text +Locked")
+        self.assertIn("could not read the folder", out)
+        self.assertRegex(out, r"timed +01 A\.mp3")
 
     def test_the_path_and_the_model_folders_are_made_absolute(self) -> None:
         parser = sync.build_parser(self.models, self.whisper)

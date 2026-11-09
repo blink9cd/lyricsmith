@@ -42,7 +42,6 @@ No function here takes the album lock, and nothing here prints.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -275,7 +274,7 @@ def _back_up_sidecar(run_dir: Path, stem: str, sidecar: Path) -> SidecarCopy | N
     if entry is Slot.ABSENT:
         return None
     if entry is Slot.LINK:
-        return SidecarCopy(sidecar.name, None, os.readlink(sidecar))
+        return SidecarCopy(sidecar.name, None, lyrics_files.read_link(sidecar))
     file = f"{_SIDECARS_DIR}/{stem}{sidecar.suffix}"
     # Read as the sidecar stage reads one, bounded: the backup meets every sidecar
     # first, so one past the lyrics cap is refused here, unread, as the track's error.

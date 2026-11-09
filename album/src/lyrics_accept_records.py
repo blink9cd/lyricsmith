@@ -7,6 +7,19 @@ hold no lyrics, only the manifests. Then the album's ``.lyricsmith`` goes: renam
 ``.lyricsmith.accepting`` first, so an accept stopped part-way never leaves a
 half-deleted folder that still reads as the album's runs, then deleted.
 
+**Where a folder holding an open file cannot be renamed.** Windows refuses to rename a
+folder while a file inside it is open, and accept holds the album lock, the ``lock``
+file inside ``.lyricsmith``, through the removal. There (`RENAMES_HELD_FOLDERS` false)
+the folder is not renamed whole: a new ``.lyricsmith.accepting`` is made and each
+entry but the lock is moved into it, still under the lock, oldest run first and any
+``.pruning`` leftover before them, then that folder is deleted. Once the lock is let
+go, `drop_lock_folder` removes the lock and ``.lyricsmith``, unless a run has taken the
+folder since. Each run folder still moves whole, so none is ever half deleted under a
+run-id name; but an accept stopped between two moves leaves ``.lyricsmith`` holding
+the newer runs, each whole, beside a ``.lyricsmith.accepting`` holding the older ones.
+That reads as an album whose older runs are gone, a state undo handles as it handles
+any, and the next accept finishes the leftover and takes the rest.
+
 **The order, so a failure leaves the recoverable state.** The caller makes the folder
 (`make_records_folder`) and writes the records (`write_records`), which reads every file
 back against its source; only once that returns does it call `remove_lyricsmith`. A
@@ -15,17 +28,18 @@ runs are all still there, and the worst left behind is a partial records folder.
 ``.lyricsmith.accepting`` left by an earlier accept killed between its rename and its
 delete is finished first (`finish_leftover`), because the rename never replaces one.
 
-Nothing here re-checks that `shutil.rmtree` resists links: the mode runs
-`lyrics_prune_mode.refuse_unsafe_delete` before any of this, as prune does. What is
-checked here is the one thing rmtree is never given: a ``.lyricsmith.accepting`` (or a
-``.lyricsmith``) that is a link or not a folder is refused, never deleted through.
+The delete is `lyrics_delete.chosen_delete`'s, as prune's is: `shutil.rmtree` where it
+resists links, else a walk that never enters one, so accept runs on every host. What
+is checked here is the one thing that delete is never given: a ``.lyricsmith.accepting``
+(or a ``.lyricsmith``) that is a link, a junction or not a folder is refused, never
+deleted through.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
-import shutil
+import sys
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
@@ -33,12 +47,14 @@ from typing import Final
 
 from lyrics_accept_judge import ACCEPTING_NAME, RunEntry
 from lyrics_backup import run_id_base
+from lyrics_delete import StatLike, chosen_delete, same_folder
 from lyrics_files import inside_run_folder, read_regular, sync_folder
 from lyrics_manifest import MAX_MANIFEST_BYTES
 from lyrics_model import LyricsError, ManifestSchemaError, ReadBackError
 from lyrics_prune import Delete, Kind
 from lyrics_records import MANIFEST_NAME
-from lyrics_run_folders import RUN_FOLDER_NAME, make_exclusive_dir
+from lyrics_run_folders import LOCK_NAME, RUN_FOLDER_NAME, is_link_or_junction
+from lyrics_run_folders import make_exclusive_dir, run_order
 from lyrics_state import (
     STATE_FOLDER_MODE,
     make_state_folder,
@@ -62,6 +78,13 @@ _HASH_DIGITS: Final = 16
 _ENCODING: Final = "utf-8"
 #: The run-id kinds whose folder holds a manifest file, read or not.
 _WITH_MANIFEST: Final = frozenset({Kind.RUN, Kind.UNREADABLE})
+#: Whether this host renames a folder while a file inside it is open. Windows refuses
+#: to, and the album lock is such a file inside ``.lyricsmith`` while accept holds it.
+RENAMES_HELD_FOLDERS: Final = sys.platform != "win32"
+#: Why `drop_lock_folder` kept ``.lyricsmith``: it reads as another folder now.
+KEPT_ANOTHER: Final = "it is another folder than the one accept held"
+#: Why `drop_lock_folder` kept ``.lyricsmith``: it holds more than its lock.
+KEPT_FILLED: Final = "it holds more than its lock"
 
 
 class RecordsReadBackError(ReadBackError):
@@ -69,7 +92,7 @@ class RecordsReadBackError(ReadBackError):
 
 
 class UnsafeAcceptingError(LyricsError):
-    """``.lyricsmith`` or ``.lyricsmith.accepting`` is a link or not a folder."""
+    """``.lyricsmith`` or ``.lyricsmith.accepting`` is a link, a junction, or no folder."""
 
 
 class LeftoverAcceptingError(LyricsError):
@@ -178,14 +201,17 @@ def write_records(
 
 
 def refuse_unsafe_accepting(path: Path) -> None:
-    """Raise `UnsafeAcceptingError` when *path* exists as a link or not as a folder."""
-    if path.is_symlink() or (os.path.lexists(path) and not path.is_dir()):
+    """Raise `UnsafeAcceptingError` when *path* is a link, a junction, or no folder."""
+    if is_link_or_junction(path) or (os.path.lexists(path) and not path.is_dir()):
         raise UnsafeAcceptingError(
-            f"{path.name} in {path.parent} is a link or not a folder; it is not deleted"
+            f"{path.name} in {path.parent} is a symbolic link or junction, or not a "
+            "folder; it is not deleted"
         )
 
 
-def remove_lyricsmith(album: Path, delete: Delete | None = None) -> str | None:
+def remove_lyricsmith(
+    album: Path, delete: Delete | None = None, *, rename_whole: bool | None = None
+) -> str | None:
     """Rename *album*'s ``.lyricsmith`` to ``.lyricsmith.accepting``, then delete it.
 
     Returns the `OSError`'s text when the rename or the delete fails, as
@@ -193,9 +219,14 @@ def remove_lyricsmith(album: Path, delete: Delete | None = None) -> str | None:
     delete leaves ``.lyricsmith.accepting`` for `finish_leftover`. Raises
     `LeftoverAcceptingError` when one is already there, since the rename must never
     replace it, and `UnsafeAcceptingError` for a link or non-folder at either name.
-    *delete* None is `shutil.rmtree`, looked up now rather than bound at definition.
+    *rename_whole* False moves each entry but the lock instead (`_move_entries`),
+    leaving ``.lyricsmith`` holding only its lock for `drop_lock_folder`; None is
+    `RENAMES_HELD_FOLDERS`. *delete* None is `lyrics_delete.chosen_delete`'s, chosen
+    now rather than at import.
     """
-    delete = shutil.rmtree if delete is None else delete
+    delete = chosen_delete() if delete is None else delete
+    if rename_whole is None:
+        rename_whole = RENAMES_HELD_FOLDERS
     folder, renamed = album / RUN_FOLDER_NAME, album / ACCEPTING_NAME
     refuse_unsafe_accepting(renamed)
     if os.path.lexists(renamed):
@@ -204,11 +235,89 @@ def remove_lyricsmith(album: Path, delete: Delete | None = None) -> str | None:
         )
     refuse_unsafe_accepting(folder)
     try:
-        folder.rename(renamed)
+        if rename_whole:
+            folder.rename(renamed)
+        else:
+            _move_entries(folder, renamed)
         delete(renamed)
     except OSError as error:
         return str(error)
     return None
+
+
+def _move_entries(folder: Path, renamed: Path) -> None:
+    """Make *renamed* and move every entry of *folder* but its lock into it.
+
+    *renamed* is made exclusively, so a folder that appeared under the name since the
+    caller's check is never moved into. A ``.pruning`` leftover goes first, then each
+    run oldest first, so a stop part-way leaves the newest runs in place, each whole.
+    """
+    os.mkdir(renamed)
+    names = sorted((n for n in os.listdir(folder) if n != LOCK_NAME), key=_move_order)
+    for name in names:
+        os.rename(folder / name, renamed / name)
+
+
+def _move_order(name: str) -> tuple[bool, tuple[str, int], str]:
+    """*name*'s place in the moves: what is no run id first, then runs oldest first."""
+    order = run_order(name)
+    return order is not None, order or ("", 0), name
+
+
+def drop_lock_folder(album: Path, decided: StatLike) -> str | None:
+    """Remove ``.lyricsmith`` once it holds nothing but its lock, after the lock is let go.
+
+    *decided* is the folder's `os.lstat` taken while the lock was held: a folder that
+    reads as another now, a link included, is left alone (`KEPT_ANOTHER`), and so is
+    one holding anything else (`KEPT_FILLED`). Returns why the folder was kept, an
+    `OSError`'s text included, or None when it went or was already gone. Nothing is
+    raised: a folder this leaves is one holding only its lock, or one a run has taken
+    since, and either is the album's as any other.
+    """
+    folder = album / RUN_FOLDER_NAME
+    try:
+        first = os.lstat(folder)
+    except FileNotFoundError:
+        # Reading is the existence check, so no gap opens between a check and a read.
+        return None
+    except OSError as error:
+        return str(error)
+    try:
+        if not same_folder(first, decided):
+            return KEPT_ANOTHER
+        if os.listdir(folder) != [LOCK_NAME]:
+            return KEPT_FILLED
+        # Each removal re-reads the folder first, as `lyrics_delete.delete_tree` does,
+        # so a folder swapped in since the last read loses neither its lock nor itself.
+        state = _reads_as_decided(folder, decided)
+        if state is not True:
+            return _kept_unless_gone(state)
+        os.unlink(folder / LOCK_NAME)
+        state = _reads_as_decided(folder, decided)
+        if state is not True:
+            return _kept_unless_gone(state)
+        os.rmdir(folder)
+    except OSError as error:
+        # Each failure here means another has the folder now, and the folder is then
+        # theirs to keep: a run that took the lock since holds the file open, which
+        # Windows will not delete, and one that has made its run folder fails the
+        # rmdir. A folder left holding only its lock is harmless, and the next accept
+        # removes it with no table; the reason is reported, never raised.
+        return str(error)
+    return None
+
+
+def _reads_as_decided(folder: Path, decided: StatLike) -> bool | None:
+    """Whether *folder* still reads as *decided*: None when it is gone, as another removed it."""
+    try:
+        return same_folder(os.lstat(folder), decided)
+    except FileNotFoundError:
+        return None
+
+
+def _kept_unless_gone(state: bool | None) -> str | None:
+    """The kept reason for a re-read that failed: none for a folder gone, else `KEPT_ANOTHER`."""
+    return None if state is None else KEPT_ANOTHER
 
 
 def finish_leftover(album: Path, delete: Delete | None = None) -> str | None:
@@ -216,9 +325,9 @@ def finish_leftover(album: Path, delete: Delete | None = None) -> str | None:
 
     Returns the `OSError`'s text when the delete fails, or None when it is gone or
     was never there. Raises `UnsafeAcceptingError` for a link or a non-folder there,
-    which is never deleted through. *delete* None is `shutil.rmtree`.
+    which is never deleted through. *delete* None is `lyrics_delete.chosen_delete`'s.
     """
-    delete = shutil.rmtree if delete is None else delete
+    delete = chosen_delete() if delete is None else delete
     leftover = album / ACCEPTING_NAME
     refuse_unsafe_accepting(leftover)
     if not os.path.lexists(leftover):

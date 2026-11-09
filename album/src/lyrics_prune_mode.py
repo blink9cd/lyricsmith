@@ -1,13 +1,13 @@
-"""`--mode prune`'s entry: the delete guard, the pass, its report and its exit code.
+"""`--mode prune`'s entry: the pass, its report and its exit code.
 
-The rules and the removal are `lyrics_prune`'s; this module refuses to start where a
-delete could follow a link out of the album, prints the report and maps it to an exit.
+The rules and the removal are `lyrics_prune`'s, and the delete that never follows a link
+out of the album is `lyrics_delete`'s, on every host; this module prints the report and
+maps it to an exit.
 """
 
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
@@ -15,28 +15,11 @@ import lyrics_album
 import lyrics_exit
 import lyrics_prune
 from lyrics_exit import EXIT_OK, EXIT_TRACK_ERRORS
-from lyrics_model import LyricsError
 from lyrics_summary import counts_line, header_lines, report_text, table
 from lyrics_wiring import Wiring
 
 #: What a dry run says instead of "removed", in its rows and its counts line.
 _WOULD = "would remove"
-
-
-class UnsafeDeleteError(LyricsError):
-    """This Python's `shutil.rmtree` could follow a link out of the folder it deletes."""
-
-
-def refuse_unsafe_delete(mode: str = "prune") -> None:
-    """Raise `UnsafeDeleteError` where `shutil.rmtree` is not proof against links.
-
-    *mode* names the mode that will not run, in the message: prune, or accept.
-    """
-    if not shutil.rmtree.avoids_symlink_attacks:
-        raise UnsafeDeleteError(
-            "this Python's shutil.rmtree can follow a symbolic link out of the folder "
-            f"it deletes, so {mode} will not run"
-        )
 
 
 def _row(row: lyrics_prune.PruneRow, dry_run: bool) -> tuple[str, str, str]:
@@ -82,7 +65,6 @@ def prune_mode(args: argparse.Namespace, wiring: Wiring, prog: str) -> int:
     written is the lost-report exit, through `lyrics_exit.report_writes`.
     """
     album = lyrics_album.resolve_album(args.album)
-    refuse_unsafe_delete()
     report = lyrics_prune.prune_album(
         album, dry_run=bool(args.dry_run), acquire_lock=wiring.acquire_lock
     )

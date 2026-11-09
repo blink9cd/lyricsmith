@@ -7,17 +7,21 @@ undo; every lyric is invented.
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import hashlib
 import os
 import sys
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
 import lyrics_album  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_backup  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_delete  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_manifest  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_prune as lp  # noqa: E402 - import follows the sys.path bootstrap above
@@ -36,9 +40,9 @@ def later(minutes: int) -> dt.datetime:
 
 
 def tree(folder: Path) -> dict[str, str]:
-    """Every file under *folder*, by relative path, as its SHA-256."""
+    """Every file under *folder*, by relative POSIX path, as its SHA-256."""
     return {
-        str(p.relative_to(folder)): hashlib.sha256(p.read_bytes()).hexdigest()
+        p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in sorted(folder.rglob("*"))
         if p.is_file() and not p.is_symlink()
     }
@@ -245,6 +249,48 @@ class DeniedTest(PruneCase):
         )
 
 
+class RefusedTest(PruneCase):
+    """The portable twins of `DeniedTest`: the refusal is raised, not left to a mode.
+
+    A mode-000 folder still opens to root, and on Windows ``chmod`` sets only the
+    read-only attribute, so there the denied tests skip; these raise the same refusal
+    through the read itself, which happens on every host.
+    """
+
+    def test_a_run_folder_whose_manifest_look_is_refused_is_kept(self) -> None:
+        folder = self.album / lr.RUN_FOLDER_NAME / "20261001T000000Z"
+        folder.mkdir(parents=True)
+        (folder / lr.MANIFEST_NAME).write_text("{}", encoding="utf-8", newline="")
+
+        def refused(run_dir: Path) -> bool:
+            raise PermissionError(errno.EACCES, "Permission denied", str(run_dir))
+
+        with mock.patch.object(lp, "manifest_present", refused):
+            row = self.prune().rows[0]
+        self.assertIs(row.verdict.outcome, lp.Outcome.KEEP_UNREADABLE)
+        self.assertIn("Permission denied", row.verdict.detail or "")
+        self.assertTrue(folder.is_dir())
+
+    def test_an_undo_folder_whose_listing_is_refused_counts_as_displaced(
+        self,
+    ) -> None:
+        run_id = self.made_run()
+        self.undo()
+        undo = lr.run_folder(self.album, run_id) / lyrics_undo.UNDO_DIR
+        undo.mkdir()
+        real_iterdir = Path.iterdir
+
+        def refuse_undo(path: Path) -> Iterator[Path]:
+            if path == undo:
+                raise PermissionError(errno.EACCES, "Permission denied", str(path))
+            return real_iterdir(path)
+
+        with mock.patch.object(Path, "iterdir", refuse_undo):
+            report = self.prune()
+        self.assertEqual(self.outcomes(report), {run_id: lp.Outcome.KEEP_DISPLACED})
+        self.assertTrue(undo.is_dir())
+
+
 class UndoFolderTest(PruneCase):
     """A real ``undo`` folder: empty is nothing set aside, anything in it is."""
 
@@ -407,7 +453,7 @@ class SafetyTest(PruneCase):
         def delete(path: Path) -> None:
             if path.name == failing:
                 raise OSError("invented failure")
-            lp.shutil.rmtree(path)
+            lyrics_delete.chosen_delete()(path)
 
         report = self.prune(delete=delete)
         errors = {r.verdict.name: r.error for r in report.rows if r.error}

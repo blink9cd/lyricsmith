@@ -1,13 +1,14 @@
 """One sweep per library at a time: the lock beside the ledger.
 
-The lock is taken twice in this one process, through two descriptors, which an advisory
-``flock`` keeps apart just as it keeps two processes apart.
+The lock is taken twice in this one process, through two descriptors, which the
+operating system's lock keeps apart just as it keeps two processes apart.
 """
 
 from __future__ import annotations
 
 import errno
 import os
+import stat
 import sys
 import unittest
 from pathlib import Path
@@ -17,13 +18,10 @@ _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 
 import sweep  # noqa: E402, F401 - its bootstrap puts src/ and the album tool on the path
+import denied_fixtures as dn  # noqa: E402 - import follows the sys.path bootstrap above
+import run_lock  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_lock  # noqa: E402 - import follows the sys.path bootstrap above
-
-# os.geteuid exists only off Windows, so it is looked up; root can write into a
-# read-only folder, so the unwritable-folder test skips under it.
-_GETEUID = getattr(os, "geteuid", None)
-_IS_ROOT = _GETEUID is not None and _GETEUID() == 0
 
 
 class LockTest(sf.IsolatedCase):
@@ -60,7 +58,18 @@ class LockTest(sf.IsolatedCase):
         with sweep_lock.held(self.path):
             pass
 
-    @unittest.skipIf(_IS_ROOT, "root can write a read-only folder")
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits are not meaningful on NTFS")
+    def test_the_lock_is_made_for_its_owner_alone(self) -> None:
+        # Under a umask of 0 the modes asked for are the modes made, so a lock file made
+        # at the shared default (0o644) would show here.
+        previous = os.umask(0)
+        self.addCleanup(os.umask, previous)
+        with sweep_lock.held(self.path):
+            pass
+        self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(self.path.parent.stat().st_mode), 0o700)
+
+    @unittest.skipUnless(dn.READ_ONLY_STOPS_A_FILE, dn.NO_READ_ONLY)
     def test_a_lock_that_cannot_be_made_is_named(self) -> None:
         self.path.parent.mkdir(parents=True)
         self.path.parent.chmod(0o500)
@@ -70,13 +79,24 @@ class LockTest(sf.IsolatedCase):
                 self.fail("a lock was made in a read-only folder")
         self.assertIn(str(self.path), str(caught.exception))
 
-    def test_a_lock_that_cannot_be_taken_for_another_reason_is_named(self) -> None:
-        # A file system that keeps no locks answers flock with ENOLCK, which is not
-        # another sweep holding it.
-        no_locks = OSError(errno.ENOLCK, "No locks available")
-        with mock.patch("fcntl.flock", side_effect=no_locks):
+    def test_a_lock_whose_folder_cannot_be_made_is_named(self) -> None:
+        # Patched rather than played by a read-only folder, so it holds on every host.
+        denied = PermissionError(errno.EACCES, "Permission denied")
+        with mock.patch.object(sweep_lock, "make_state_folder", side_effect=denied):
             with self.assertRaises(sweep_lock.SweepLockError) as caught:
                 with sweep_lock.held(self.path):
-                    self.fail("a lock was taken that flock refused")
+                    self.fail("a lock was taken whose folder could not be made")
+        self.assertIn("cannot be made", str(caught.exception))
+        self.assertIn(str(self.path), str(caught.exception))
+
+    def test_a_lock_that_cannot_be_taken_for_another_reason_is_named(self) -> None:
+        # A file system that keeps no locks answers with ENOLCK, which is not another
+        # sweep holding it. The lock's own refusal is played at the lock, on either host.
+        no_locks = OSError(errno.ENOLCK, "No locks available")
+        with mock.patch.object(run_lock, "acquire", side_effect=no_locks):
+            with self.assertRaises(sweep_lock.SweepLockError) as caught:
+                with sweep_lock.held(self.path):
+                    self.fail("a lock was taken that the system refused")
+        self.assertIn("cannot be taken", str(caught.exception))
         self.assertIn(str(self.path), str(caught.exception))
         self.assertNotIn("another sweep", str(caught.exception))

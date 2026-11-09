@@ -55,6 +55,8 @@ import transcribe  # noqa: E402 - import follows the sys.path bootstrap above
 import at_models  # noqa: E402 - import follows the sys.path bootstrap above
 import help_formatter  # noqa: E402 - import follows the sys.path bootstrap above
 import stdio_utf8  # noqa: E402 - import follows the sys.path bootstrap above
+import sy_hear  # noqa: E402 - import follows the sys.path bootstrap above
+import sy_hear_options  # noqa: E402 - import follows the sys.path bootstrap above
 import sy_models  # noqa: E402 - import follows the sys.path bootstrap above
 import sy_modes  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_report  # noqa: E402 - import follows the sys.path bootstrap above
@@ -73,6 +75,7 @@ from sy_types import (  # noqa: E402 - import follows the sys.path bootstrap abo
 ALBUM_ENTRY = Path(album.__file__).resolve()
 
 MODE_RUN, MODE_FETCH = "run", "fetch-models"
+MODE_HEAR = sy_hear_options.MODE_HEAR
 EXTENSION = re.compile(r"^[a-z0-9]+$")
 EPILOG = """\
 Prerequisites:
@@ -89,20 +92,26 @@ Output:
   the line [by:machine timed]. With --embed, lyricsmith album --offline then runs on
   each album that gained one, embedding into its MP3s only: another format's .lrc
   stays a sidecar. Without --embed, the summary prints that command.
+  --mode hear writes no .lrc: it hears each selected track's text and logs the
+  verdict, sung, not sung or little heard, in --hearing-log, one file a track and
+  whisper model; a text not sung is also kept in --heard-dir and listed on
+  --by-hand-list, as a run keeps one.
 
 Exit codes:
   0  every track timed, re-timed, skipped, left low-confidence for timing by hand,
      or left untimed as not sung; under fetch-models, every model present or
      downloaded
-  1  a track's text, alignment or write failed, a --by-hand-list row or a
-     --heard-dir record could not be written or removed, a folder could not be
-     read, or an --embed album run failed, was
+  1  a track's text, alignment, hearing or write failed, a --by-hand-list row, a
+     --heard-dir record or a --hearing-log record could not be written or removed,
+     a folder could not be read, or an --embed album run failed, was
      refused or did not finish, or a written track could not be embedded; under
      fetch-models, any model failed
   2  a setup problem, found before any track was touched, an unreadable or
-     malformed --by-hand-list or a --heard-dir that is no folder among them
+     malformed --by-hand-list or --tracks-from, or a --heard-dir or
+     --hearing-log that is no folder, among them
   130 Ctrl-C while timing: the tracks timed so far keep their .lrc, the footer
-     names the album command for each, and --embed is not run
+     names the album command for each, and --embed is not run; while hearing,
+     every hearing logged so far is kept
 """
 
 
@@ -118,20 +127,21 @@ def build_parser(
     )
     parser.add_argument(
         "--mode",
-        choices=(MODE_RUN, MODE_FETCH),
+        choices=(MODE_RUN, MODE_HEAR, MODE_FETCH),
         default=MODE_RUN,
-        help="run times tracks; fetch-models downloads the pinned models [all modes]",
+        help="run times tracks; hear hears their texts without timing them; "
+        "fetch-models downloads the pinned models [all modes]",
     )
     parser.add_argument(
         "--path",
         type=Path,
-        help="one track, or a folder walked recursively [run; required there]",
+        help="one track, or a folder walked recursively [run, hear; required there]",
     )
     parser.add_argument(
         "--extensions",
         default=DEFAULT_EXTENSIONS,
         help="comma-separated, matched case-insensitively; each one ffmpeg has an audio "
-        "demuxer for here, not lrc or txt [run]",
+        "demuxer for here, not lrc or txt [run, hear]",
     )
     parser.add_argument(
         "--embed",
@@ -154,7 +164,8 @@ def build_parser(
         help="a list file: each low-confidence or not-sung track, each flagged first "
         "line and each written track too little heard to check is added as its track "
         "ends, and a listed low-confidence or not-sung track is skipped, --overwrite "
-        "or not; remove its row to time it again [run]",
+        "or not; remove its row to time it again. A hearing lists each text not "
+        "sung [run, hear]",
     )
     parser.add_argument(
         "--heard-dir",
@@ -162,13 +173,39 @@ def build_parser(
         help="a folder keeping what whisper-cli heard of each track found not sung, "
         "so a track with a record, its text changed or its row removed, is judged "
         "again without hearing it again, and album can replace the text; needs "
-        "--by-hand-list [run]",
+        "--by-hand-list [run, hear]",
+    )
+    parser.add_argument(
+        "--hearing-log",
+        type=Path,
+        help="a folder logging each hearing's verdict and transcript, one file a "
+        "track and whisper model; a track logged for its current text is not heard "
+        "again [hear; required there]",
+    )
+    parser.add_argument(
+        "--kinds",
+        help="comma-separated: which texts to hear, of provider-timed, machine-timed "
+        "and untimed; when omitted, provider-timed [hear]",
+    )
+    parser.add_argument(
+        "--tracks-from",
+        type=Path,
+        help="a list of tracks, one absolute path a line, as album --changed-list "
+        "writes it: only these, of the walk of --path, are heard [hear]",
+    )
+    parser.add_argument(
+        "--whisper-model",
+        choices=at_models.WHISPER_MODEL_NAMES,
+        help="the pinned whisper model to hear with, in --whisper-model-dir; when "
+        f"omitted, {at_models.WHISPER_MODEL_NAME}; any other takes neither "
+        "--heard-dir nor --by-hand-list [hear]",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         default=None,
-        help="print the setup check and each track's plan; time nothing [run]",
+        help="print the setup check and each track's plan; time or hear nothing "
+        "[run, hear]",
     )
     parser.add_argument(
         "--model-dir",
@@ -180,8 +217,8 @@ def build_parser(
         "--whisper-model-dir",
         type=Path,
         default=whisper_model_dir,
-        help="the transcribe tool's model folder, where a run reads the two whisper "
-        "models that hear each track's vocals [run]",
+        help="the transcribe tool's model folder, where a run reads the whisper "
+        "models that hear each track's vocals [run, hear]",
     )
     return parser
 
@@ -214,21 +251,23 @@ def _parse_extensions(text: str) -> frozenset[str]:
 
 
 def resolve_options(namespace: argparse.Namespace) -> Options:
-    """The parsed options; --path is required in run mode.
+    """The parsed options; --path is required in run and hear mode.
 
     --path, both model folders, --by-hand-list and --heard-dir are made absolute
     against the working folder, links and dots kept, as the transcribe tool makes its
     own, so a relative name such as ``http:x.mp3`` or ``pipe:0`` never reaches ffmpeg,
-    which would read it as a protocol.
+    which would read it as a protocol. An option for another mode is refused
+    (`sy_hear_options.refuse_misplaced`).
     """
-    if namespace.mode == MODE_RUN and namespace.path is None:
-        raise SetupError("--path is required in run mode")
+    if namespace.mode != MODE_FETCH and namespace.path is None:
+        raise SetupError(f"--path is required in {namespace.mode} mode")
+    sy_hear_options.refuse_misplaced(namespace)
     by_hand = namespace.by_hand_list
-    if namespace.mode != MODE_RUN and by_hand is not None:
-        raise SetupError("--by-hand-list is for --mode run only")
+    if namespace.mode == MODE_FETCH and by_hand is not None:
+        raise SetupError("--by-hand-list is for --mode run or hear only")
     heard = namespace.heard_dir
-    if namespace.mode != MODE_RUN and heard is not None:
-        raise SetupError("--heard-dir is for --mode run only")
+    if namespace.mode == MODE_FETCH and heard is not None:
+        raise SetupError("--heard-dir is for --mode run or hear only")
     if heard is not None and by_hand is None:
         # A not-sung row and its record go together: the row is what skips the track.
         raise SetupError("--heard-dir needs --by-hand-list")
@@ -243,6 +282,7 @@ def resolve_options(namespace: argparse.Namespace) -> Options:
         whisper_model_dir=namespace.whisper_model_dir.absolute(),
         by_hand_list=None if by_hand is None else by_hand.absolute(),
         heard_dir=None if heard is None else heard.absolute(),
+        whisper_model=namespace.whisper_model,
     )
 
 
@@ -271,16 +311,17 @@ def main(
     whisper_dir = at_models.default_model_dir(sys.platform, os.environ, Path.home())
     parser = build_parser(default_dir, whisper_dir, prog)
     try:
-        options = resolve_options(parser.parse_args(argv))
+        namespace = parser.parse_args(argv)
+        options = resolve_options(namespace)
         if options.mode == MODE_FETCH:
             return sy_modes.fetch_mode(options, opener)
+        seams = seams or sy_modes.real_seams(ALBUM_ENTRY)
+        words = command_words(parser.prog, prog)
+        if options.mode == MODE_HEAR:
+            hear = sy_hear_options.resolve_hear(namespace)
+            return sy_hear.hear_mode(options, hear, seams, prog=words)
         version = lyricsmith_project.project_version()
-        return sy_modes.run_mode(
-            options,
-            seams or sy_modes.real_seams(ALBUM_ENTRY),
-            tool_version=version,
-            prog=command_words(parser.prog, prog),
-        )
+        return sy_modes.run_mode(options, seams, tool_version=version, prog=words)
     except SetupError as error:
         say(f"{parser.prog}: {error}", sys.stderr)
         return EXIT_SETUP

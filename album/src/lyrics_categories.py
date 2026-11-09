@@ -30,9 +30,12 @@ sweep's totals, count the same way from a `ManifestTrack` alone:
   too-many-words detail, recognized by the stable words those details are built from,
   or a fix's ``wrong text removed``, counted as ``wrong text``.
   With both sides removed apart, the first reason that names a rule decides.
-- A fix's kept track whose removal it withheld, the album looking spoken
-  (`TrackOutcome.withheld`), counts on the ``removal withheld:`` line as
-  ``spoken word``, so it is never read as a plain ``kept existing``.
+- A fix's kept track whose removal it withheld (`TrackOutcome.withheld`) counts on
+  the ``removal withheld:`` line, so it is never read as a plain ``kept existing``:
+  as ``held for Genius`` when a fix given ``--hold-for-genius`` held it
+  (`lyrics_outcomes.HELD_FOR_GENIUS`), else as ``spoken word``, the album looking
+  spoken. The held are counted apart (`OutcomeCategories.held`) and among the
+  withheld too, so a count from before the hold existed reads as spoken word alone.
 
 Pure: no I/O, nothing printed. The runtime floor is Python 3.12.
 """
@@ -53,7 +56,7 @@ from lyrics_records import (
     TrackBefore,
     TrackOutcome,
 )
-from lyrics_outcomes import REMOVAL_WITHHELD
+from lyrics_outcomes import HELD_FOR_GENIUS, REMOVAL_WITHHELD
 from lyrics_outcomes import WRONG_TEXT as WRONG_TEXT_REMOVED
 from lyrics_refetch import PLACEHOLDER, REASON_JOINER
 from lyrics_sidecar import MACHINE_LABELS
@@ -111,11 +114,15 @@ _WITHHELD_LABEL = f"{REMOVAL_WITHHELD}:"
 
 @dataclass(frozen=True)
 class OutcomeCategories:
-    """Written tracks by category, removed tracks by reason, and removals withheld."""
+    """Written tracks by category, removed tracks by reason, and removals withheld.
+
+    *withheld* counts every withheld removal; *held*, those of them held for Genius.
+    """
 
     written: dict[WrittenCategory, int] = field(default_factory=dict)
     removed: dict[RemovedReason, int] = field(default_factory=dict)
     withheld: int = 0
+    held: int = 0
 
 
 def _copied(before: TrackBefore, suffix: str) -> bool:
@@ -202,7 +209,7 @@ def count_categories(tracks: Iterable[ManifestTrack]) -> OutcomeCategories:
     """Written tracks by category, removed tracks by reason, removals withheld."""
     written: dict[WrittenCategory, int] = {}
     removed: dict[RemovedReason, int] = {}
-    withheld = 0
+    withheld = held = 0
     for track in tracks:
         category = written_category(track)
         if category is not None:
@@ -212,7 +219,8 @@ def count_categories(tracks: Iterable[ManifestTrack]) -> OutcomeCategories:
             removed[reason] = removed.get(reason, 0) + 1
         if track.after is not None and track.after.withheld is not None:
             withheld += 1
-    return OutcomeCategories(written, removed, withheld)
+            held += track.after.withheld == HELD_FOR_GENIUS
+    return OutcomeCategories(written, removed, withheld, held)
 
 
 def _line[Key: StrEnum](
@@ -234,7 +242,15 @@ def format_removed(counts: OutcomeCategories) -> str | None:
 
 
 def format_withheld(counts: OutcomeCategories) -> str | None:
-    """The ``removal withheld: spoken word <n>`` line, or None when none was withheld."""
+    """The ``removal withheld:`` line, or None when none was withheld.
+
+    ``spoken word <n>``, then ``held for Genius <n>``, each only when it counts one.
+    """
     if not counts.withheld:
         return None
-    return f"{_WITHHELD_LABEL} {SPOKEN_WORD} {counts.withheld}"
+    parts = (
+        (SPOKEN_WORD, counts.withheld - counts.held),
+        (HELD_FOR_GENIUS, counts.held),
+    )
+    shown = _GAP.join(f"{reason} {count}" for reason, count in parts if count)
+    return f"{_WITHHELD_LABEL} {shown}"

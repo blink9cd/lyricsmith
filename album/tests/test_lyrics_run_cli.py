@@ -138,8 +138,8 @@ class ParserTest(fixtures.IsolatedCase):
             "130 interrupted (Ctrl-C); once the backup is done, the manifest "
             "records the tracks that finished",
             "or, in a prune, a run folder whose rename or removal failed",
-            "a prune or an accept on a Python whose shutil.rmtree does not protect "
-            "against links",
+            "a --heard-dir that is not a folder, or an unusable --config; an accept "
+            "refused",
             "or, in an accept, the removal of .lyricsmith",
             "an accept refused (an unfinished run, an unreadable manifest or run "
             "folder, an entry "
@@ -148,6 +148,8 @@ class ParserTest(fixtures.IsolatedCase):
             "or, once a run, a strip, an undo, a prune or an accept began, its report",
         ):
             self.assertIn(part, text)
+        # Prune and accept run on every host now, so no exit names this Python's rmtree.
+        self.assertNotIn("shutil.rmtree", text)
 
     def test_the_epilog_lists_exactly_the_exit_constants(self) -> None:
         listed = set(re.findall(r"^  (\d+) ", lyrics_help.EPILOG, flags=re.MULTILINE))

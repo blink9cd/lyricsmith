@@ -54,6 +54,10 @@ FRAMES, SECONDS = 5, 0.1
 BREAK_TRACK_FRAMES = 40
 QUIET_FRAMES = range(20, 35)
 TRIMMED_BREAK = ((22, 33),)
+#: A track's folder and the track, absolute on the host as the walk names them: a
+#: decode refuses a track that is not.
+MUSIC = sy_cases.host_absolute("/music")
+TRACK = MUSIC / "a.mp3"
 #: Two lines of one letter each, the second sung at frame 2.
 TWO_LINES = rq.Request(
     Path("/music/a.mp3"),
@@ -220,16 +224,16 @@ class ChildTest(sy_cases.IsolatedCase):
                     left.sendmsg([b"x"])
 
     def test_ffmpeg_reads_the_track_as_a_file_and_nothing_else(self) -> None:
-        audio = Path("/music/http:x.mp3")
+        audio = MUSIC / "http:x.mp3"
         argv = sy_child.decode_argv(audio)
         source = argv.index("-i")
-        self.assertEqual(argv[source + 1], "file:/music/http:x.mp3")
+        self.assertEqual(argv[source + 1], f"file:{audio}")
         whitelist = argv.index("-protocol_whitelist")
         self.assertEqual(argv[whitelist + 1], "file")
         self.assertLess(whitelist, source)
 
     def test_ffmpeg_opens_the_track_with_an_audio_demuxer_only(self) -> None:
-        argv = sy_child.decode_argv(Path("/music/a.mp3"))
+        argv = sy_child.decode_argv(TRACK)
         whitelist = argv.index("-format_whitelist")
         allowed = argv[whitelist + 1].split(",")
         self.assertEqual(allowed, sorted(set(sy_child.DEMUXERS.values())))
@@ -239,7 +243,7 @@ class ChildTest(sy_cases.IsolatedCase):
                 self.assertNotIn(playlist, allowed)
 
     def test_ffmpeg_decodes_no_more_than_the_longest_track(self) -> None:
-        argv = sy_child.decode_argv(Path("/music/a.mp3"))
+        argv = sy_child.decode_argv(TRACK)
         limit = argv.index("-t")
         self.assertEqual(argv[limit + 1], str(sy_child.MAX_TRACK_S))
         self.assertLess(limit, argv.index("-i"))
@@ -251,7 +255,7 @@ class ChildTest(sy_cases.IsolatedCase):
                     sy_child.decode_argv(Path(relative))
 
     def test_a_decode_returns_ffmpegs_output(self) -> None:
-        audio = Path("/music/a.mp3")
+        audio = TRACK
         done = subprocess.CompletedProcess(["ffmpeg"], 0, stdout=b"pcm", stderr=b"")
         with mock.patch.object(sy_child.subprocess, "run", return_value=done) as run:
             self.assertEqual(sy_child.decoded_bytes(audio), b"pcm")
@@ -263,7 +267,7 @@ class ChildTest(sy_cases.IsolatedCase):
         failed = subprocess.CalledProcessError(234, ["ffmpeg"], b"", stderr)
         with mock.patch.object(sy_child.subprocess, "run", side_effect=failed):
             with self.assertRaises(sy_child.DecodeError) as caught:
-                sy_child.decoded_bytes(Path("/music/a.mp3"))
+                sy_child.decoded_bytes(TRACK)
         first, *rest = str(caught.exception).splitlines()
         self.assertIn("ffmpeg exit 234", first)
         self.assertEqual(rest, lines[-sy_child.FFMPEG_ERROR_LINES :])
@@ -272,7 +276,7 @@ class ChildTest(sy_cases.IsolatedCase):
         failed = subprocess.CalledProcessError(1, ["ffmpeg"], b"", b"")
         with mock.patch.object(sy_child.subprocess, "run", side_effect=failed):
             with self.assertRaisesRegex(sy_child.DecodeError, "no error output"):
-                sy_child.decoded_bytes(Path("/music/a.mp3"))
+                sy_child.decoded_bytes(TRACK)
 
     def test_text_longer_than_the_frames_is_too_long_with_no_spans(self) -> None:
         reply = self.run_main((2, 3, 4, 5, 6, 7))

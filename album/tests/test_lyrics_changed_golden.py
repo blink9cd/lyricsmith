@@ -20,6 +20,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
+import host_shapes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_changed as lc  # noqa: E402 - import follows the sys.path bootstrap above
 
 #: The golden corpus, in the order it is handed to the writer. A consumer's test suite
@@ -83,20 +84,43 @@ GOLDEN_LEFT_OUT = (
 )
 
 
+def _on_host(paths: tuple[str, ...]) -> tuple[str, ...]:
+    """*paths*, each absolute POSIX one made absolute on this host: *paths* off Windows."""
+    return tuple(host_shapes.on_host(path) for path in paths)
+
+
+def host_golden_bytes() -> bytes:
+    """`GOLDEN_BYTES` as this host writes them: the literal itself off Windows.
+
+    On Windows each line is put on the host's drive with its separators, as the
+    writer writes the corpus `_on_host` makes; the literal stays the contract.
+    """
+    lines = GOLDEN_BYTES.decode("utf-8").split("\n")[:-1]
+    return "".join(f"{host_shapes.as_written(line)}\n" for line in lines).encode()
+
+
 class GoldenFormatTest(fixtures.IsolatedCase):
     """The writer turns the golden corpus into the golden bytes and left-out paths."""
 
     def setUp(self) -> None:
         """Format the golden corpus once per test, inside the isolation."""
         super().setUp()
-        self.data, self.left = lc.format_changed_list(GOLDEN_PATHS)
+        self.data, self.left = lc.format_changed_list(_on_host(GOLDEN_PATHS))
 
     def test_the_bytes_written_are_the_golden_bytes(self) -> None:
-        self.assertEqual(self.data, GOLDEN_BYTES)
+        self.assertEqual(self.data, host_golden_bytes())
+
+    def test_off_windows_the_golden_bytes_are_the_literal_itself(self) -> None:
+        # The literal is the contract a consumer pins: on POSIX it is what is written.
+        same = host_golden_bytes() == GOLDEN_BYTES
+        self.assertEqual(same, not host_shapes.HOST_DRIVE)
 
     def test_the_paths_left_out_and_their_reasons_are_the_golden_ones(self) -> None:
         got = tuple((item.path, item.reason) for item in self.left)
-        self.assertEqual(got, GOLDEN_LEFT_OUT)
+        expected = tuple(
+            (host_shapes.on_host(path), reason) for path, reason in GOLDEN_LEFT_OUT
+        )
+        self.assertEqual(got, expected)
 
     def test_no_paths_make_an_empty_file(self) -> None:
         self.assertEqual(lc.format_changed_list(()), (b"", ()))

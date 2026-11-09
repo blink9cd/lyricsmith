@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
-import os
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 import fixtures
 import lyrics_backup
+import lyrics_files
 import lyrics_manifest
 import lyrics_model as lm
 import lyrics_outcomes
@@ -80,7 +80,7 @@ def sidecars(mp3: Path) -> dict[str, bytes | LinkTo]:
     for path in lyrics_slots.sidecar_paths(mp3):
         entry = lyrics_slots.sidecar_entry(path)
         if entry is lyrics_slots.Slot.LINK:
-            found[path.name] = LinkTo(os.readlink(path))
+            found[path.name] = LinkTo(lyrics_files.read_link(path))
         elif entry is lyrics_slots.Slot.FILE:
             found[path.name] = path.read_bytes()
     return found

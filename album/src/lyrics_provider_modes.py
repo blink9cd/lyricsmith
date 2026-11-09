@@ -49,7 +49,8 @@ def discover(
     album = lyrics_album.resolve_album(args.album)
     found = lyrics_album.discover_tracks(album)
     for link in found.links:
-        notice(f"skipped {link.relative_to(album)}: a symbolic link is not followed")
+        relative = link.relative_to(album)
+        notice(f"skipped {relative}: a symbolic link or junction is not followed")
     return album, found
 
 
@@ -192,10 +193,12 @@ def finish_run(
     notice: Notice,
     *,
     silence: str | None,
+    held: Path | None = None,
 ) -> int:
     """Write the changed list and the run's summary, and return the run's exit code.
 
     *silence* is the silence check's label, None for a run that measures nothing.
+    *held* is a fix's ``--hold-for-genius`` file, written beside the changed list.
     """
     chosen, providers = asked.chosen, asked.table
     with lyrics_exit.report_writes():
@@ -207,6 +210,13 @@ def finish_run(
             lambda: lyrics_changed.run_changed(album, report.tracks),
             notice,
         )
+        held_written = lyrics_changed.write_changed_list(
+            held,
+            lambda: lyrics_changed.held_changed(album, report.tracks),
+            notice,
+            flag=lyrics_changed.HOLD_FLAG,
+        )
+        written = lyrics_changed.joined(written, held_written)
         summary = lyrics_summary.format_run(
             report,
             album=album,

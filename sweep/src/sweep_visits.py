@@ -11,6 +11,7 @@ goes to the caller's *progress*.
 from __future__ import annotations
 
 import dataclasses
+import functools
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,8 +19,9 @@ from pathlib import Path
 
 import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 import sweep_child
-from sweep_changed import ChangedUnion
+from sweep_changed import ChangedUnion, made_something
 from sweep_ledger import DEFAULT_LANG, LedgerEntry, Outcome, SweepPass
+from lyrics_exit import EXIT_OK
 from lyrics_model import Source
 from lyrics_options import MODE_FIX_TEXT, MODE_RUN
 from sweep_ctrl_c import finished_despite_ctrl_c
@@ -40,7 +42,8 @@ class SweepOptions:
     `sweep_child.SKIP_OPTIONS` each child is given, in their order.
     *owe_earlier_runs* owes the debts of earlier runs too (`sweep_earlier`).
     *heard_dir*, the transcript store, makes the sweep its fix pass (`pass_of`):
-    each child runs the album tool's ``--mode fix-text`` on it.
+    each child runs the album tool's ``--mode fix-text`` on it. *hold_for_genius* is
+    the fix pass's ``--hold-for-genius`` file, which the resume command carries.
     """
 
     lang: str | None
@@ -55,6 +58,7 @@ class SweepOptions:
     skip: tuple[str, ...] = ()
     owe_earlier_runs: bool = False
     heard_dir: Path | None = None
+    hold_for_genius: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -62,8 +66,9 @@ class SweepSeams:
     """What a sweep runs with: the child runner, the pause, the clock, the progress line.
 
     *entry* is the album tool's entry point. *changed* is the ``--changed-list`` union,
-    None when no list was asked for. *holds* reads every provider's hold afresh
-    (`sweep_waiting.read_holds`); the default holds none, so passes nothing over.
+    None when no list was asked for, and *held* the ``--hold-for-genius`` one.
+    *holds* reads every provider's hold afresh (`sweep_waiting.read_holds`); the
+    default holds none, so passes nothing over.
     """
 
     run_child: sweep_child.ChildRunner
@@ -73,6 +78,11 @@ class SweepSeams:
     entry: Path
     changed: ChangedUnion | None = None
     holds: Callable[[], HoldsRead] = no_holds
+    held: ChangedUnion | None = None
+
+    def unions(self) -> tuple[ChangedUnion, ...]:
+        """The lists the sweep keeps: the changed one, then the held one, when asked."""
+        return tuple(u for u in (self.changed, self.held) if u is not None)
 
 
 @dataclass(frozen=True)
@@ -161,13 +171,14 @@ def _set_up(
     """What *album*'s album tool runs with: the runs before it, whom it asks, its argv.
 
     A debt the sweep's own ``--no-*`` options drop is said through *progress*. A
-    ``--changed-list`` is handed out for the album while its argv is built.
+    ``--changed-list`` and a ``--hold-for-genius`` list are handed out for the album
+    while its argv is built.
     """
     dropped = dropped_debt(owed, options.skip)
     if dropped:
         seams.progress(dropped_notice(name, dropped))
     before = sweep_child.run_ids(album)
-    changed = seams.changed
+    changed, held = seams.changed, seams.held
     only = revisit_only(owed, offline=options.offline)
     argv = sweep_child.album_argv(
         seams.entry,
@@ -181,6 +192,7 @@ def _set_up(
         skip=options.skip,
         mode=album_mode(options),
         heard_dir=options.heard_dir,
+        hold_list=None if held is None else held.child_list(album, name),
     )
     return before, only, argv
 
@@ -203,8 +215,9 @@ def visit_album(
     `InterruptedBeforeStartError`.
 
     A child left unreaped is named by pid through *progress* (`tally_made_run` says
-    which runs are read). The child's ``--changed-list``, when the sweep keeps one,
-    is merged into the union once the child has ended (`sweep_changed`). Ctrl-C
+    which runs are read). The child's ``--changed-list`` and ``--hold-for-genius``
+    lists, when the sweep keeps them, are each merged into their union once the
+    child has ended (`sweep_changed`). Ctrl-C
     while the entry is made still makes it, as the run read says it ended, and marks
     the result interrupted so the sweep stops after it.
     """
@@ -212,14 +225,13 @@ def visit_album(
     try:
         before, only, argv = _set_up(album, name, options, seams, owed)
     except KeyboardInterrupt:
-        _absorb_unstarted(album, seams)
+        _absorb(album, seams, started=False)
         raise InterruptedBeforeStartError from None
-    changed = seams.changed
     result = seams.run_child(argv, options.timeout_s)
-    if changed is not None:
-        # The child has ended, so its list is final: absorbed even through a Ctrl-C.
-        _, late = finished_despite_ctrl_c(lambda: changed.absorb(album))
-        result = dataclasses.replace(result, interrupted=result.interrupted or late)
+    made_nothing = functools.partial(_made_nothing, album, before, result)
+    # The child has ended, so its lists are final: absorbed even through a Ctrl-C.
+    if _absorb(album, seams, started=True, made_nothing=made_nothing):
+        result = dataclasses.replace(result, interrupted=True)
     if result.exit_code is None:
         seams.progress(
             f"the album tool on {name} (pid {result.pid}) did not stop even when "
@@ -275,18 +287,46 @@ def visit_one(
     except OSError as error:
         name = album.relative_to(library).as_posix()
         seams.progress(f"{name}: could not run: {error}")
-        late = _absorb_unstarted(album, seams)
+        late = _absorb(album, seams, started=False)
         return Visit(album, _could_not_run(name, options, seams), str(error)), late
     return Visit(album, entry), result.interrupted
 
 
-def _absorb_unstarted(album: Path, seams: SweepSeams) -> bool:
-    """Absorb *album*'s list, if one was handed out, as an album tool never started.
+def _made_nothing(
+    album: Path, before: frozenset[str], result: sweep_child.ChildResult
+) -> bool:
+    """True when *album*'s child exited 0 and made no run since *before*.
 
-    True when Ctrl-C reached the sweep meanwhile: the absorb still finished.
+    That is a fix with nothing to fix, which writes no list. A run folder that cannot
+    be listed tells nothing, so it is False: `tally_made_run` says why.
     """
-    changed = seams.changed
-    if changed is None:
+    if result.exit_code != EXIT_OK:
         return False
-    _, late = finished_despite_ctrl_c(lambda: changed.absorb(album, started=False))
+    try:
+        return not sweep_child.new_run_ids(album, before)
+    except OSError:
+        return False
+
+
+def _absorb(
+    album: Path,
+    seams: SweepSeams,
+    *,
+    started: bool,
+    made_nothing: Callable[[], bool] = made_something,
+) -> bool:
+    """Absorb each list handed out for *album*; *started* False for a tool never run.
+
+    *made_nothing* tells whether the child exited 0 having made no run
+    (`ChangedUnion.absorb`). True when Ctrl-C reached the sweep meanwhile: every
+    absorb still finished.
+    """
+    late = False
+    for union in seams.unions():
+        _, cut = finished_despite_ctrl_c(
+            functools.partial(
+                union.absorb, album, started=started, made_nothing=made_nothing
+            )
+        )
+        late = late or cut
     return late

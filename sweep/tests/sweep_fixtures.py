@@ -2,10 +2,10 @@
 
 Every sweep test case derives from `IsolatedCase`, and the tool folder's test
 aggregator fails the run when one does not (`isolation_offenders`). Its `setUp` points
-HOME and every XDG base directory, the state directory the ledger lives in among them,
-at a fresh temporary directory, unsets the Genius key variable, and replaces the socket
-layer's connect and name lookup with a tripwire. So no test can reach a real music
-library, the real ledger, the network or a real config file, even by mistake.
+HOME (and USERPROFILE, Windows' home) and every XDG base directory, the state directory
+the ledger lives in among them, at a fresh temporary directory, unsets the Genius key
+variable, and replaces the socket layer's connect and name lookup with a tripwire. So
+no test can reach a real music library, the real ledger, the network or a real config file, even by mistake.
 
 `FakeAlbumTool` stands in for the album tool child process: called with the argv the
 sweep built, it writes a run folder and a manifest through the album tool's own records
@@ -44,7 +44,9 @@ import sweep_ledger as sl
 import sweep_run as sr
 from lyrics_backup import RUN_ID_FORMAT
 from lyrics_config import GENIUS_TOKEN_ENV
+from lyrics_model import parse_lrc
 from lyrics_provider_states import CoolingState
+from lyrics_tags import write_lyrics
 from sweep_survey import AlbumSurvey
 
 #: The XDG base directories redirected under the temporary HOME, by subdirectory.
@@ -92,7 +94,9 @@ class IsolatedCase(unittest.TestCase):
         self.tmp = Path(self.enterContext(TemporaryDirectory())).resolve()
         self.home = self.tmp / "home"
         self.home.mkdir()
-        values = {"HOME": str(self.home)}
+        # Both spellings: `Path.home()` reads HOME on POSIX and USERPROFILE on Windows,
+        # where HOME alone would leave the real profile folder as every test's home.
+        values = {"HOME": str(self.home), "USERPROFILE": str(self.home)}
         values.update({name: str(self.home / sub) for name, sub in XDG_DIRS.items()})
         self.state = Path(values["XDG_STATE_HOME"])
         stack = self.enterContext(ExitStack())
@@ -163,10 +167,21 @@ def add_track(
     return mp3
 
 
+def embed_sidecar(mp3: Path) -> Path:
+    """Embed *mp3*'s timed ``.lrc`` in its frames, by the album tool's write; return it.
+
+    A timed ``.lrc`` beside frames holding no timed lyrics owes an embed, so a track
+    meant as done needs its frames to hold the file, as a run leaves them.
+    """
+    lrc = mp3.with_suffix(".lrc").read_text(encoding="utf-8")
+    write_lyrics(mp3, parse_lrc(lrc), "eng")
+    return mp3
+
+
 def synced_album(library: Path, artist: str, album: str) -> Path:
-    """An album whose one track is already synced: a run would not visit it."""
+    """An album whose one track is synced and embedded: a run would not visit it."""
     folder = library / artist / album
-    add_track(folder, "01 Done.mp3", lrc=SYNCED_LRC)
+    embed_sidecar(add_track(folder, "01 Done.mp3", lrc=SYNCED_LRC))
     return folder
 
 

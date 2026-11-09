@@ -82,7 +82,8 @@ def _fix_outcome(
     to ask failed, so such a revisit could remove a text those others never answered
     for. A fix exiting 1 kept a wrong text, so it is retried whole; one exiting 0 is
     done, whatever its tally owes, since each of its texts was written or removed, or
-    its removal withheld on an album that looks spoken, which no retry would change.
+    its removal withheld, on an album that looks spoken or as held for Genius, which
+    no retry would change: a held track waits for the later Genius pass.
     """
     if tally is None:
         if no_run and result.exit_code == lyrics_exit.EXIT_OK:

@@ -9,20 +9,27 @@ from __future__ import annotations
 
 import contextlib
 import io
+import shlex
 import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent)]
+# album's test helpers, last, so none of them shadows a module of this tool's own.
+sys.path.append(str(_HERE.parents[1] / "album" / "tests"))
 
 import sweep  # noqa: E402 - its bootstrap puts src/ and the album tool on the path
+import fixtures as album_fixtures  # noqa: E402 - album's test helpers, appended above
 import lyrics_changed  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_report  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_run  # noqa: E402 - import follows the sys.path bootstrap above
 
 #: A path an earlier leg listed, outside the library, so no album lists it again.
-_EARLIER = "/earlier/leg/01 Song.mp3"
+#: Host-absolute: the list holds only absolute paths, and ``/earlier`` has no drive.
+_EARLIER = str(album_fixtures.host_absolute("/earlier/leg/01 Song.mp3"))
+#: A last line cut short, with no line ending, so the list contract refuses it.
+_HALF_WRITTEN = str(album_fixtures.host_absolute("/half/written"))
 
 
 class LegsCase(sf.IsolatedCase):
@@ -86,7 +93,7 @@ class ResumeKeepsTheListTest(LegsCase):
         )
 
     def test_a_list_the_contract_refuses_stops_before_the_first_album(self) -> None:
-        held = f"{_EARLIER}\n/half/written".encode()
+        held = f"{_EARLIER}\n{_HALF_WRITTEN}".encode()
         self.listed.write_bytes(held)
         code, stdout, stderr = self.sweep()
         self.assertEqual(code, sweep_run.EXIT_USAGE)
@@ -115,7 +122,9 @@ class ResumeLineTest(LegsCase):
     def test_the_resume_line_carries_the_changed_list(self) -> None:
         _, stdout, _ = self.sweep("--limit", "1")
         resume = stdout.split("resume: ")[1].splitlines()[0]
-        self.assertTrue(resume.endswith(f"--changed-list {self.listed}"))
+        # Quoted as the printed command quotes it, on every host.
+        quoted = shlex.quote(str(self.listed))
+        self.assertTrue(resume.endswith(f"--changed-list {quoted}"))
 
     def test_no_list_named_puts_none_in_the_resume_line(self) -> None:
         options = sweep_run.SweepOptions(

@@ -21,6 +21,10 @@ transcribed with whisper.cpp before anything is aligned. A text the check finds 
 is `not sung: left untimed` and gets no file; a track with too few word pairs heard to judge
 is timed as before, and listed `little heard` (*The sung check* below).
 
+`--mode hear` runs that check alone, on texts that are already timed as well as on
+untimed ones, and writes no `.lrc`: each verdict goes to a hearing log instead
+(*Hearing without timing* below).
+
 ## Prerequisites
 
 1. **The sync install**, into the interpreter that runs lyricsmith:
@@ -30,12 +34,17 @@ is timed as before, and listed `little heard` (*The sung check* below).
 2. **ffmpeg** on `PATH` (`brew install ffmpeg`), which decodes each track.
 3. **The three models, once:** `python sync.py --mode fetch-models`.
 4. **whisper.cpp's `whisper-cli`** on `PATH` (`brew install whisper.cpp`), found as the
-   transcribe tool finds it and made absolute, and **the transcribe tool's two whisper
+   transcribe tool finds it and made absolute, and **the transcribe tool's turbo and VAD
    models**, fetched once with `lyricsmith transcribe --mode fetch-models`
    (`../transcribe/transcribe.md`) into that tool's model folder, the one this tool's own
-   `sync` folder sits in. `--whisper-model-dir` reads them from elsewhere; they are checked
-   against the transcribe tool's manifest, by size and digest, before any track is touched.
-   That check hashes the 1.6 GB whisper model on every run, which takes a few seconds.
+   `sync` folder sits in. `--whisper-model-dir` reads them from elsewhere. A run reads
+   the VAD model and one whisper model, the turbo unless `--whisper-model` names full
+   large-v3, and checks just those against the transcribe tool's manifest, by size and
+   digest, before any track is touched. Large-v3 is not in that default fetch: a hearing
+   that names it and finds it absent fails its setup check naming
+   `lyricsmith transcribe --mode fetch-models --model-dir <folder> --whisper-model
+   ggml-large-v3.bin`. That check hashes the whisper model on every
+   run, about 1.6 GB for the turbo and 3.1 GB for large-v3, which takes a few seconds.
 
 `fetch-models` downloads into a `sync` folder inside lyricsmith's per-user model folder,
 derived at run time:
@@ -62,16 +71,20 @@ mismatched one is exit `2`, naming `--mode fetch-models`.
 
 | Option | Modes | Default | Meaning |
 | --- | --- | --- | --- |
-| `--mode` | all | `run` | `run` or `fetch-models` |
-| `--path` | run | required there | one track, or a folder walked recursively; made absolute against the working folder |
-| `--extensions` | run | `mp3` | comma-separated, matched case-insensitively; each must be one ffmpeg may open with an audio demuxer (below), so `lrc`, `txt` and any other name are refused |
+| `--mode` | all | `run` | `run`, `hear` or `fetch-models` |
+| `--path` | run, hear | required there | one track, or a folder walked recursively; made absolute against the working folder |
+| `--extensions` | run, hear | `mp3` | comma-separated, matched case-insensitively; each must be one ffmpeg may open with an audio demuxer (below), so `lrc`, `txt` and any other name are refused |
 | `--embed` | run | off | after timing, run `lyricsmith album --offline` on each album that gained or changed a `.lrc` |
 | `--overwrite` | run | off | re-time a track whose `.lrc` this tool wrote |
-| `--by-hand-list` | run | none | a list file: each low-confidence or not-sung track, each flagged first line and each written track too little heard to check is added as its track ends, and a listed low-confidence or not-sung track is skipped, `--overwrite` or not; remove a track's row to time it again. Made absolute against the working folder; *The by-hand list* below |
-| `--heard-dir` | run | none | a folder keeping what `whisper-cli` heard of each track found not sung, so a track with a record whose text has changed, or whose row was removed, is judged again without hearing it again, and album can replace the text. Needs `--by-hand-list`; made absolute against the working folder; a name holding anything but a folder is a setup error. *The transcript store* below |
-| `--dry-run` | run | off | print the setup check and each track's planned action; time nothing |
+| `--by-hand-list` | run, hear | none | a list file: each low-confidence or not-sung track, each flagged first line and each written track too little heard to check is added as its track ends, and a listed low-confidence or not-sung track is skipped, `--overwrite` or not; remove a track's row to time it again. A hearing lists each text not sung. Made absolute against the working folder; *The by-hand list* below |
+| `--heard-dir` | run, hear | none | a folder keeping what `whisper-cli` heard of each track found not sung, so a track with a record whose text has changed, or whose row was removed, is judged again without hearing it again, and album can replace the text. Needs `--by-hand-list`; made absolute against the working folder; a name holding anything but a folder is a setup error. *The transcript store* below |
+| `--dry-run` | run, hear | off | print the setup check and each track's planned action; time or hear nothing |
 | `--model-dir` | all | lyricsmith's model folder, then `sync` | where `fetch-models` writes and a run reads; made absolute against the working folder |
-| `--whisper-model-dir` | run | lyricsmith's model folder, the transcribe tool's | where a run reads the two whisper models that hear each track's vocals; made absolute against the working folder |
+| `--whisper-model-dir` | run, hear | lyricsmith's model folder, the transcribe tool's | where a run reads the whisper models that hear each track's vocals; made absolute against the working folder |
+| `--hearing-log` | hear | required there | the folder each hearing's verdict is logged in, made absolute against the working folder; *Hearing without timing* below |
+| `--kinds` | hear | `provider-timed` | comma-separated, the kinds of text heard: any of `provider-timed`, `machine-timed` and `untimed` |
+| `--tracks-from` | hear | every track the walk finds | a list file, one absolute track path a line as album's changed list writes it, naming the only tracks under `--path` heard |
+| `--whisper-model` | hear | `ggml-large-v3-turbo.bin` | the whisper model that hears: the turbo, or full large-v3, `ggml-large-v3.bin`, fetched only when named (*The second model*); any but the turbo takes neither `--heard-dir` nor `--by-hand-list` |
 
 The walk is the transcribe tool's: it skips every file and folder whose name starts with `.`,
 does not follow a symlinked folder, and takes a `--path` naming one file as named. Each name
@@ -398,8 +411,16 @@ the child is handed the transcript: it still separates the vocals, to align agai
 but does not run `whisper-cli`.
 
 **Cleaning itself.** At the start of a run, never a dry run, each record whose track lies
-under `--path` and is gone, or now holds a timed `.lrc`, is removed, and the run says
-`--heard-dir: removed <n> record(s) of tracks gone or timed from <folder>`. Records of
+under `--path` and is gone, or now holds a timed `.lrc` that releases it, is removed,
+and the run says
+`--heard-dir: removed <n> record(s) of tracks gone or timed from <folder>`. A `.lrc`
+this tool timed releases its record, since its text was heard sung to be timed. A
+provider's timed `.lrc` releases it only once its words differ from the ones the record
+was judged against, by the same fingerprint: a provider's text the hearing found not
+sung keeps its record through any plain run until the text is fixed. A `not sung` record
+a hearing writes under `--kinds machine-timed` is the exception that does not last: its
+track's `.lrc` is one this tool timed, which releases it, so the next run's start-of-run
+clean, hearing or plain, removes it. The hearing log keeps that verdict. Records of
 tracks outside `--path` are left alone, so a run over one folder never empties the store
 of a library that is not there to look at. A record path holding a `..` part is never read
 as under `--path`, since the store keeps a path as written and `..` could climb out of it,
@@ -413,6 +434,68 @@ would judge again, even one the run then finds still not sung, since only the ru
 fix that follows it. Once that run is done and the fix has been applied, the folder may be
 deleted. Each track listed `not sung` stays skipped by its row; once its row is removed,
 a later run hears it again.
+
+## Hearing without timing
+
+`--mode hear` asks of each track's text only whether it is sung there. It separates the
+vocals and transcribes them with `whisper-cli`, as a timing run does, judges the text by
+the same rule (*The sung check*), and stops: nothing is aligned, and no `.lrc`, frame or
+sidecar is written. It hears texts already timed too, which a timing run never checks,
+so a provider's timed text that belongs to another song can be found. The setup check,
+the walk and the reading and cleaning of `--heard-dir` are the timing run's; `--embed` and
+`--overwrite` are refused, since a hearing writes no `.lrc`.
+
+**What is heard.** A track's kind comes from its sidecars, read as album reads them: a
+timed `.lrc` with no `[by:machine timed]` line is `provider-timed`, one with it
+`machine-timed`, and a `.txt` or untimed `.lrc` `untimed`. `--kinds` names which are heard,
+a provider's timed texts alone by default; another kind is `skip: kind not asked for`, its
+kind beneath it. An unlabeled timed `.lrc` a person wrote is counted a provider's: the file
+says nothing to tell them apart. A track with no sidecar text is `skip: no .lrc or .txt`:
+any lyrics it has are in its frames, which this tool does not read. A text with no words
+is `skip: no words to hear`. `--tracks-from` narrows the walk of `--path` to the tracks its
+list names; a listed track the walk does not find is an `ERROR audio` row, never dropped.
+A listed track is logged by its path as the list spells it, made lexically normal, not as
+the walk of a `--path` holding `..` reaches it, so a reader keyed by the list finds it.
+A listed track also matches below `--path` resolved, since `sweep` resolves `--library`
+and its draw names each track that way: a `--path` reaching the library through a link
+still finds them.
+A list that cannot be read, is over 64 MiB or breaks its format is a setup error.
+
+**The hearing log.** Every verdict, `heard: sung`, `heard: not sung` or `heard: little
+heard`, is kept in the `--hearing-log` folder: one file a track and whisper model, holding
+the track's path, the text's fingerprint and kind, the model, the word pairs heard and
+their share, the verdict and the transcript. The log is album's
+(`../album/src/lyrics_hearing_log.py`), written `0o600` and read back, as the transcript
+store is, and its files are as private: never committed and never sent anywhere. A
+transcript over 64 KB is logged as empty, its verdict kept, with the note `--hearing-log:
+what was heard is over 64 KB and was not kept; its verdict was logged` beneath the row. A record that cannot be
+written is said beneath the row and the run exits `1`. A file in the log this tool cannot
+read is reported and its track heard again.
+
+**Resume.** A track the log holds a hearing of, by this run's whisper model, for the
+fingerprint of the text it holds now, is `skip: heard before`; a changed text, or another
+model, is heard again. So a run stopped by Ctrl-C (exit `130`, every hearing so far kept)
+is finished by running it again.
+
+**A text not sung** is also kept as a timing run keeps one: under `--by-hand-list` its
+`not sung` row is added, and under `--heard-dir` its record, in the same Ctrl-C hold as its
+log record. A child that fails, times out or replies malformed is that track's `ERROR hear`
+row: nothing is logged or listed for it, so the next run hears it again, and the run exits
+`1`.
+
+**The second model.** `--whisper-model ggml-large-v3.bin` hears with full large-v3, about
+3.1 GB, pinned in the transcribe tool's manifest from the turbo's source but fetched only
+when named: `lyricsmith transcribe --mode fetch-models --whisper-model ggml-large-v3.bin`.
+Each model's hearings are logged apart, so the two can be compared on the same tracks. Its
+`whisper-cli` bound takes its own factor, about twice the turbo's (*Fixed settings*). Such a
+comparison hearing writes only the log: `--heard-dir` and `--by-hand-list` are refused with
+it, as a setup error. The store keeps one transcript a track, so large-v3's would replace
+the turbo's, and a later plain run would judge a fixed text against the large-v3 one; and
+its `not sung` row would skip a timing on another model's verdict than the timing run's.
+
+The footer counts each outcome, then says `logged <n> hearing(s) in <folder>`, and the by-hand
+list's and the store's lines as a timing run does. `--dry-run` prints the setup check and
+each track's planned action (`hear`, or the skip or error), and hears nothing.
 
 ## The label
 
@@ -476,7 +559,8 @@ Each is a named constant beside the code that uses it, with its reason:
 | First-line flag | the first line's span over 2 times the track's median line span | Flagged the one bad first line on the reference tracks and one more, and no others |
 | Longest track | an hour, `MAX_TRACK_S` | The decoded track is held in memory, about 705 KB a second as 32-bit stereo and twice that while separating |
 | Per-track bound | 60 s plus twice the track's length, then the `whisper-cli` bound on top, the length counted up to the longest track's, and the longest track's when it cannot be read | Timing ran at about 0.2 times the track's length; loading both models takes most of a minute; a tag's length is a claim a crafted header can inflate |
-| `whisper-cli` bound | 60 s plus half the track's decoded length, `WHISPER_BASE_S` and `WHISPER_PER_SECOND` | It ran a median 7.8 s a track, about 0.036 of its length, model load included |
+| `whisper-cli` bound | 60 s plus half the track's decoded length with the turbo, or all of it with large-v3: `WHISPER_BASE_S` and the model's own factor in `WHISPER_PER_SECOND_BY_MODEL` | The turbo ran a median 7.8 s a track, about 0.036 of its length, model load included; on five test-library tracks at low load large-v3 took about 0.068 s a second of audio against the turbo's about 0.040 (paired ratios 1.3 to 2.5, median about 1.7), so its 1.0 keeps about the turbo's headroom |
+| Hearing bound | 60 s plus the track's length, then the `whisper-cli` bound on top, `SEPARATE_PER_SECOND` | A hearing loads no wav2vec2 and aligns nothing; separation ran a median 59 s a track, about 0.27 of its length. Derived from those figures, not measured on its own |
 | Sung share | 0.25, `MIN_HEARD_SHARE` | Wrong texts scored at most 0.16 on about 190 test-library tracks, right ones at least 0.34 |
 | Fewest pairs judged | 20 distinct word pairs heard, `MIN_HEARD_PAIRS` | Under 20, a wrong text could score 0.5 by chance; about 1 track in 11 fell under it |
 | Hearing language | English, the transcribe tool's fixed call otherwise | The alignment model's one language; a song in another still scored 0.34 against its own text |
@@ -492,8 +576,8 @@ None is an option: a new value needs a new measurement on the same reference tra
 ## Output and progress
 
 A run prints one row per track to stdout as each finishes: the outcome, padded to a fixed
-column, then the track's path relative to the `--path` folder (or a named file's own folder).
-A row's detail lines are indented beneath it. The run ends with a footer: one count line naming
+column, then the track's path relative to the `--path` folder (or a named file's own folder),
+written with `/` on every host. A row's detail lines are indented beneath it. The run ends with a footer: one count line naming
 each outcome seen, then, without `--embed`, the album command for each album that gained a
 `.lrc` (the folders `--embed` would run it on) and, as `embed it:`, the one-track command for
 each written track in no album, then, as `stays a sidecar:`, each written `.lrc` beside a track
@@ -532,10 +616,10 @@ can neither steer the terminal nor print as another name.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | every track timed, re-timed, skipped, left low-confidence for timing by hand, or left untimed as not sung; under `fetch-models`, every model present or downloaded |
-| `1` | a track's text, alignment or write failed, a `--by-hand-list` row could not be written, a `--heard-dir` record could not be written or removed, a found name was no regular file, a folder could not be read, or an `--embed` album run failed, was refused or did not finish, or a written track could not be embedded; under `fetch-models`, any model failed |
-| `2` | a setup problem found before any track is touched: a missing sync install (naming `pip install -r` and `requirements-sync.txt`), no ffmpeg, a missing or mismatched model (naming `--mode fetch-models`), no `whisper-cli` on `PATH`, a missing or mismatched whisper model (naming `lyricsmith transcribe --mode fetch-models`), a `--path` that does not exist, a missing `--path`, an unusable `--extensions`, `lrc`, `txt` and any extension with no listed demuxer included, a `--by-hand-list` that cannot be read or breaks its format (naming the file and the line), `--by-hand-list` or `--heard-dir` given with `--mode fetch-models`, `--heard-dir` without `--by-hand-list`, or a `--heard-dir` naming something that is not a folder, or a folder that cannot be listed |
-| `130` | Ctrl-C while timing: the tracks timed so far keep their `.lrc`, the footer names the album command for each, and `--embed` is not run |
+| `0` | every track timed, re-timed, skipped, left low-confidence for timing by hand, or left untimed as not sung; under `hear`, every track heard or skipped and its hearing logged; under `fetch-models`, every model present or downloaded |
+| `1` | a track's text, alignment or write failed, a `--by-hand-list` row could not be written, a `--heard-dir` record could not be written or removed, a found name was no regular file, a folder could not be read, or an `--embed` album run failed, was refused or did not finish, or a written track could not be embedded; under `hear`, an `ERROR hear` row or a hearing that could not be logged; under `fetch-models`, any model failed |
+| `2` | a setup problem found before any track is touched: a missing sync install (naming `pip install -r` and `requirements-sync.txt`), no ffmpeg, a missing or mismatched model (naming `--mode fetch-models`), no `whisper-cli` on `PATH`, a missing or mismatched whisper model (naming `lyricsmith transcribe --mode fetch-models`), a `--path` that does not exist, a missing `--path`, an unusable `--extensions`, `lrc`, `txt` and any extension with no listed demuxer included, a `--by-hand-list` that cannot be read or breaks its format (naming the file and the line), `--by-hand-list` or `--heard-dir` given with `--mode fetch-models`, `--heard-dir` without `--by-hand-list`, or a `--heard-dir` naming something that is not a folder, or a folder that cannot be listed; under `hear`, a missing `--hearing-log` or one naming something that is not a folder, a `--kinds` naming no known kind, a `--tracks-from` that cannot be read or breaks its format, and `--embed` or `--overwrite` given, or `--heard-dir` or `--by-hand-list` given with a `--whisper-model` other than the turbo; any of `--hearing-log`, `--kinds`, `--tracks-from` and `--whisper-model` given outside `hear` |
+| `130` | Ctrl-C while timing: the tracks timed so far keep their `.lrc`, the footer names the album command for each, and `--embed` is not run; while hearing, every hearing so far is kept in the log |
 
 A shared library or a sibling tool's module that cannot be located, or that a same-named
 module would shadow, also exits `2`, before anything runs: see *Exit codes* in
@@ -572,3 +656,13 @@ It skips unless the interpreter running it has the sync install, ffmpeg is on `P
 models are fetched, sync's and the transcribe tool's, and `jfk.wav` sits beside
 `whisper-cli`. The parent runs under the same socket tripwire, so a pass
 also proves the run made no network call. `samples/README.md` documents the same run by hand.
+
+`tests/test_sy_hear_live.py` hears one short provider-timed track of a test library
+through the real child with `--mode hear`. It finds the track at run time, never naming
+one: the first MP3, in sorted order, beside a provider's timed `.lrc` and at most four
+minutes long. The track and its `.lrc` are copied into the test's temporary folder and
+heard there, so the library is only read. The test checks that the log's record agrees
+with the sung check's rule, that the `.lrc` and the folder are left as they were, and
+that a second run skips the track as heard. The library is the folder
+`LYRICSMITH_TEST_LIBRARY` names; the test skips without one, when the live timing suite
+would, or when that library holds no such track.

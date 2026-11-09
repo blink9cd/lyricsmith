@@ -34,6 +34,16 @@ named it. The list is written with the default mode: it is the operator's file, 
 the sweep's state. That, and a private folder that cannot be made (`ScratchFolderError`), are
 raised before any album is visited, as a `ChangedListError`, so the caller says so as
 itself. Nothing here prints.
+
+A fix pass's ``--hold-for-genius`` list is kept the same way, by a union of its own
+(`HELD`, through `sweep_lists`): each child is handed a private list, merged in visit
+order, and a resumed sweep adds to the list already there. Only a child that left no
+readable list differs: none of its album's tracks is added, and *notice* says so. A
+held track keeps its text and its transcript record, so the album's retry, or a later
+fix, holds it again; listing every MP3 would send tracks no fix held to the later pass.
+A fix with nothing to fix exits 0 having made no run and written no list, so it held
+nothing: the caller tells the union so (``absorb(made_nothing=...)``), and nothing
+is said.
 """
 
 from __future__ import annotations
@@ -66,6 +76,38 @@ _NO_LIST = "the album tool left no readable list of what it changed"
 _NOT_STARTED = "the album tool could not start"
 
 
+def made_something() -> bool:
+    """`ChangedUnion.absorb`'s default: the child is not known to have made nothing."""
+    return False
+
+
+@dataclass(frozen=True)
+class ListKind:
+    """Which list a union keeps: its option, and what an album with no list adds.
+
+    *every_mp3* lists an album's every MP3 when its child left no readable list;
+    False adds none. *advice* closes the notice of an existing list the contract
+    refuses, saying what to do with it.
+    """
+
+    flag: str
+    every_mp3: bool
+    advice: str
+
+
+#: The list of the MP3s the albums saved, and the list of the tracks a fix held.
+CHANGED = ListKind(
+    lyrics_changed.CHANGED_FLAG,
+    every_mp3=True,
+    advice="refresh what it names, then remove it or name another file",
+)
+HELD = ListKind(
+    lyrics_changed.HOLD_FLAG,
+    every_mp3=False,
+    advice="hold what it names apart, then remove it or name another file",
+)
+
+
 class ChangedListError(Exception):
     """The list could not be set up, so no album is visited."""
 
@@ -90,12 +132,14 @@ class _Pending:
 class ChangedUnion:
     """The union of the albums' lists so far, and where it is written.
 
-    *folder* holds each child's own list; *notice* takes each stderr line.
+    *folder* holds each child's own list; *notice* takes each stderr line; *kind* is
+    which list it keeps.
     """
 
     target: Path
     folder: Path
     notice: Callable[[str], None]
+    kind: ListKind = CHANGED
     #: Every path listed so far, in visit order, each once.
     paths: dict[str, None] = field(default_factory=dict)
     #: Why the last write failed, or None when it landed.
@@ -112,20 +156,30 @@ class ChangedUnion:
         self._pending[album] = _Pending(path, name)
         return path
 
-    def absorb(self, album: Path, *, started: bool = True) -> None:
+    def absorb(
+        self,
+        album: Path,
+        *,
+        started: bool = True,
+        made_nothing: Callable[[], bool] = made_something,
+    ) -> None:
         """Merge *album*'s child's list, or its every MP3, then rewrite the union.
 
         *started* is False for a child whose album tool could not start, which its
-        notice says. Held against Ctrl-C until the write lands. The album stays
-        pending until then, so an absorb a Ctrl-C cut short is done whole when tried
-        again; an album no longer pending is left alone, so a repeat after it landed
-        changes nothing.
+        notice says. *made_nothing* is asked only when a held list is unread: True
+        when the child exited 0 having made no run, so nothing is said. Held against
+        Ctrl-C until the write lands. The album stays pending until then, so an absorb
+        a Ctrl-C cut short is done whole when tried again; an album no longer pending
+        is left alone, so a repeat after it landed changes nothing.
         """
         pending = self._pending.get(album)
         if pending is None:
             return
         with lyrics_album.deferred_interrupt():
-            self._add(self._read_child(album, pending, started=started))
+            listed = self._read_child(
+                album, pending, started=started, made_nothing=made_nothing
+            )
+            self._add(listed)
             self.write()
             del self._pending[album]
             self._remove_child(pending)
@@ -151,7 +205,7 @@ class ChangedUnion:
         try:
             lyrics_files.replace_atomically(self.target, data)
         except OSError as error:
-            self.error = f"could not write --changed-list {self.target}: {error}"
+            self.error = f"could not write {self.kind.flag} {self.target}: {error}"
         else:
             self.error = None
 
@@ -167,14 +221,20 @@ class ChangedUnion:
             shutil.rmtree(self.folder, ignore_errors=True)
 
     def _read_child(
-        self, album: Path, pending: _Pending, *, started: bool
+        self,
+        album: Path,
+        pending: _Pending,
+        *,
+        started: bool,
+        made_nothing: Callable[[], bool],
     ) -> Iterable[str]:
         """The paths *album*'s child listed, or the album's every MP3 when unknown.
 
         The MP3s are found as the album tool finds them: under the album folder as it
         resolves it, each track's own path never resolved, as the child would list it.
         A child that never *started* wrote no list, so its every MP3 is listed too:
-        its notice says why.
+        its notice says why. A held list unread adds nothing, said unless the child
+        *made_nothing*.
         """
         try:
             listed = lyrics_changed.parse_changed_list(pending.path.read_bytes())
@@ -183,6 +243,12 @@ class ChangedUnion:
         if listed is not None:
             return listed
         why = _NO_LIST if started else _NOT_STARTED
+        if not self.kind.every_mp3:
+            # A fix with nothing to fix writes no list and holds nothing, so saying
+            # none of its tracks is added would only alarm.
+            if not (started and made_nothing()):
+                self.notice(self._none_added(pending.name, started=started))
+            return ()
         try:
             found = lyrics_album.discover_tracks(lyrics_album.resolve_album(album))
         except (LyricsError, OSError) as error:
@@ -192,10 +258,18 @@ class ChangedUnion:
             )
             return ()
         self.notice(
-            f"{pending.name}: every MP3 of the album is listed in --changed-list, as "
-            f"{why}"
+            f"{pending.name}: every MP3 of the album is listed in {self.kind.flag}, "
+            f"as {why}"
         )
         return (str(track) for track in found.tracks)
+
+    def _none_added(self, name: str, *, started: bool) -> str:
+        """The notice for album *name*, its child's list unread, adding no track."""
+        flag = self.kind.flag
+        why = (
+            f"the album tool left no readable {flag} list" if started else _NOT_STARTED
+        )
+        return f"{name}: {why}, so none of the album's tracks is added to {flag}"
 
     def _add(self, paths: Iterable[str]) -> None:
         """Add each path the list can hold, normalized; say each it cannot.
@@ -209,10 +283,10 @@ class ChangedUnion:
                 self.paths.setdefault(normal, None)
             else:
                 left = lyrics_changed.LeftOut(path, reason)
-                self.notice(lyrics_changed.left_out_notice(left))
+                self.notice(lyrics_changed.left_out_notice(left, flag=self.kind.flag))
 
 
-def existing_paths(target: Path) -> tuple[str, ...]:
+def existing_paths(target: Path, kind: ListKind = CHANGED) -> tuple[str, ...]:
     """The paths the list file *target* already holds; none when there is no file.
 
     A folder on its path that is a file is no file either: the write reports that.
@@ -221,51 +295,55 @@ def existing_paths(target: Path) -> tuple[str, ...]:
     `MAX_CHANGED_LIST_BYTES`, or that the list file contract refuses (a last line
     with no linefeed, a relative path), which is never replaced: only the user can
     tell what it was meant to hold. A link is followed, as the operator named it.
+    Every message names the list by *kind*'s option.
     """
+    flag = kind.flag
     try:
         data = lyrics_files.read_regular(target, MAX_CHANGED_LIST_BYTES + 1)
     except (FileNotFoundError, NotADirectoryError):
         return ()
     except OSError as error:
-        raise ExistingListError(
-            f"could not read --changed-list {target}: {error}"
-        ) from error
+        raise ExistingListError(f"could not read {flag} {target}: {error}") from error
     if len(data) > MAX_CHANGED_LIST_BYTES:
         raise ExistingListError(
-            f"--changed-list {target} is more than {MAX_CHANGED_LIST_BYTES} bytes, "
+            f"{flag} {target} is more than {MAX_CHANGED_LIST_BYTES} bytes, "
             "so it is left as it was"
         )
     paths = lyrics_changed.parse_changed_list(data)
     if paths is None:
         raise ExistingListError(
-            f"--changed-list {target} is not a readable list, so it is left as it "
-            "was: refresh what it names, then remove it or name another file"
+            f"{flag} {target} is not a readable list, so it is left as it "
+            f"was: {kind.advice}"
         )
     return paths
 
 
 @contextmanager
 def changed_union(
-    target: Path | None, notice: Callable[[str], None], *, restart: bool = False
+    target: Path | None,
+    notice: Callable[[str], None],
+    *,
+    restart: bool = False,
+    kind: ListKind = CHANGED,
 ) -> Iterator[ChangedUnion | None]:
     """A union writing to *target* for the block, closed however it ends; None for None.
 
     The union starts from the list *target* already holds (`existing_paths`), or empty
     for a *restart*, and is written at once, so a sweep stopped before its first album
     still leaves a list. A private folder that cannot be made raises
-    `ScratchFolderError`, naming the error.
+    `ScratchFolderError`, naming the error. *kind* is which list it keeps.
     """
     if target is None:
         yield None
         return
-    earlier = () if restart else existing_paths(target)
+    earlier = () if restart else existing_paths(target, kind)
     try:
         folder = Path(tempfile.mkdtemp(prefix=_FOLDER_PREFIX))
     except OSError as error:
         raise ScratchFolderError(
-            f"could not make the --changed-list scratch folder: {error}"
+            f"could not make the {kind.flag} scratch folder: {error}"
         ) from error
-    union = ChangedUnion(target, folder, notice)
+    union = ChangedUnion(target, folder, notice, kind)
     union.paths.update(dict.fromkeys(earlier))
     try:
         with lyrics_album.deferred_interrupt():
@@ -273,3 +351,30 @@ def changed_union(
         yield union
     finally:
         union.close()
+
+
+@contextmanager
+def sweep_lists(
+    changed: Path | None,
+    held: Path | None,
+    notice: Callable[[str], None],
+    *,
+    restart: bool = False,
+) -> Iterator[tuple[ChangedUnion | None, ChangedUnion | None]]:
+    """The ``--changed-list`` union and the ``--hold-for-genius`` one, for the block.
+
+    Each is `changed_union`'s, None for a list not asked for; the held one is opened
+    second, so an existing changed list that cannot be read is said first.
+    """
+    with (
+        changed_union(changed, notice, restart=restart) as changed_kept,
+        changed_union(held, notice, restart=restart, kind=HELD) as held_kept,
+    ):
+        yield changed_kept, held_kept
+
+
+def list_errors(*unions: ChangedUnion | None) -> list[str]:
+    """Why each of *unions* asked for failed its last write, in their order."""
+    return [
+        union.error for union in unions if union is not None and union.error is not None
+    ]

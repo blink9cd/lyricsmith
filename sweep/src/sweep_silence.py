@@ -34,7 +34,6 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
-import stat
 import sys
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -44,10 +43,10 @@ from pathlib import Path
 from typing import IO, Protocol
 
 import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
+import lyrics_files
 import lyrics_silence
 import sweep_report
 import sweep_run
-from lyrics_files import NotRegularFileError
 from lyrics_state import STATE_FILE_MODE, make_state_folder
 from stdio_utf8 import ENCODING, spell_unsafe
 from sweep_silence_album import AlbumMeasure, album_name, measure_album
@@ -77,6 +76,7 @@ RESUME_HELP = (
 #: mode and each LF lands as CRLF, a line the list's own parser then refuses.
 _SHARED_FLAGS = ("O_CLOEXEC", "O_BINARY")
 #: What a resumed list adds: never through a link, never blocking on a FIFO pipe.
+#: Windows has neither, so there the look before the open and its identity check hold.
 _RESUME_ONLY_FLAGS = ("O_NOFOLLOW", "O_NONBLOCK")
 #: The verdicts the summary counts, in the order it prints them.
 _JUDGED = (Verdict.LIKELY_MEANT, Verdict.RIPPING_MISTAKE, Verdict.UNSURE)
@@ -209,14 +209,19 @@ def _new_list(path: Path) -> int:
 def _resumed_list(path: Path, keep: int) -> int:
     """A descriptor appending to the list at *path*, cut back to *keep* bytes.
 
-    Opened without following a link and without blocking, then told by the opened
-    descriptor itself, so a link, a FIFO pipe or a device swapped in since the list
-    was read is an error at once, and nothing is cut or written through it.
+    The name is looked at first without following it, so a link under it (a junction
+    included) or anything but a regular file is refused unopened, on every host. It
+    is then opened without following a link and without blocking where the host has
+    those flags (Windows has neither), and told by the opened descriptor itself: it
+    must be a regular file and the very file the look saw, so a link, a FIFO pipe or
+    a device swapped in since is an error before anything is cut or written through
+    it. On Windows an open that follows a link swapped in after the look reaches what
+    it leads to before the identity check refuses it; nothing is cut or written.
     """
+    looked = lyrics_files._look(path, follow=False)
     descriptor = os.open(path, _resume_flags())
+    lyrics_files._refuse_unless_regular(descriptor, path, looked=looked)
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise NotRegularFileError(f"{path.name} is not a regular file")
         os.ftruncate(descriptor, keep)
     except BaseException:
         os.close(descriptor)

@@ -25,7 +25,8 @@ class CliCase(IsolatedCase):
     def setUp(self) -> None:
         """Write the fake, the empty models and the empty audio files."""
         super().setUp()
-        write_fake_whisper(self.bin)
+        #: The file that runs the fake: whisper-cli on POSIX, its .cmd shim on Windows.
+        self.fake = write_fake_whisper(self.bin)
         self.models = self.root / "models"
         self.models.mkdir()
         for name in MODEL_NAMES:

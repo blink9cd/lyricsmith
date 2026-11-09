@@ -178,8 +178,9 @@ class AlbumCacheTest(_Case):
                 self.assertIs(self.raised(server, query("Lantern Light")), first)
                 self.assertEqual(len(server.requests), 3)
 
-    def test_a_redirect_off_bandcamp_is_refused(self) -> None:
-        moved = bf.Redirect("https://example.com/")
+    def test_a_plain_http_redirect_off_bandcamp_is_refused(self) -> None:
+        # An https one is no match instead (test_lyrics_bandcamp_elsewhere).
+        moved = bf.Redirect("http://example.com/")
         server = self.server(routes(SEARCH, LINKED, page=moved))
         self.assertEqual(
             lp.error_detail(self.raised(server, QUERY)), lh.REDIRECT_REFUSED

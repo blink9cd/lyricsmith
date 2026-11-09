@@ -30,6 +30,7 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent), str(_HERE.parent / "src")]
 import album  # noqa: E402 - import follows the sys.path bootstrap above
 import cli_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
+import host_shapes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_exit  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_album  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_manifest  # noqa: E402 - import follows the sys.path bootstrap above
@@ -117,8 +118,15 @@ class AlbumLevelOSErrorTest(StopCase):
 
     def test_an_album_that_cannot_hold_its_run_folder_exits_2(self) -> None:
         (self.album / lr.RUN_FOLDER_NAME).write_bytes(b"")
+        # The host's own words for a folder made where a file is: "[Errno 17] File
+        # exists" on POSIX, "[WinError 183] Cannot create a file when that file
+        # already exists" on Windows. One error; only its wording is the host's.
+        blocker = self.tmp / "blocker"
+        blocker.write_bytes(b"")
+        with self.assertRaises(FileExistsError) as made:
+            blocker.mkdir(exist_ok=True)
         result = self.run_album()
-        self.assert_one_line_error(result, "[Errno 17] File exists")
+        self.assert_one_line_error(result, host_shapes.os_error_text(made.exception))
         self.assertIn(lr.RUN_FOLDER_NAME, result.stderr)
         self.assertEqual((result.stdout, self.folder.backed_up), ("", []))
 
@@ -199,11 +207,17 @@ class AlbumLevelOSErrorTest(StopCase):
 
     def test_a_manifest_missing_from_a_run_folder_is_an_unreadable_run(self) -> None:
         # The run is still there, so this is a damaged run, not a missing one.
-        (self.album / lr.RUN_FOLDER_NAME / run_fakes.RUN_ID).mkdir(parents=True)
+        run_dir = self.album / lr.RUN_FOLDER_NAME / run_fakes.RUN_ID
+        run_dir.mkdir(parents=True)
+        # The host's own words for the missing file: "[Errno 2] No such file or
+        # directory" on POSIX, "[WinError 2] The system cannot find the file
+        # specified" on Windows. One error; only its wording is the host's.
+        with self.assertRaises(FileNotFoundError) as missing:
+            lyrics_manifest.read_manifest(run_dir)
         self.overrides["read_manifest"] = lyrics_manifest.read_manifest
         result = self.run_album("--mode", "undo")
         self.assert_one_line_error(result, _UNREADABLE)
-        self.assertIn("[Errno 2]", result.stderr)
+        self.assertIn(host_shapes.os_error_text(missing.exception), result.stderr)
         self.assertIn(lr.MANIFEST_NAME, result.stderr)
 
 

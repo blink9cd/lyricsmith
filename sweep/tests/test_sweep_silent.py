@@ -45,6 +45,23 @@ _BUILDER = sweep.ALBUM_ENTRY.parent / "samples" / "build_sample_album.py"
 _FAKE_FFMPEG = (
     '#!/bin/sh\necho "[Parsed_volumedetect_0 @ 0x0] max_volume: -91.0 dB" >&2\n'
 )
+#: The same fake as a batch file. A Windows PATH search finds only a name carrying a
+#: PATHEXT extension, and Windows runs no shebang script, so the POSIX fake is never
+#: found there; ``cmd`` runs this one, with CRLF line ends as batch files expect.
+_FAKE_FFMPEG_CMD = (
+    "@echo off\r\necho [Parsed_volumedetect_0 @ 0x0] max_volume: -91.0 dB 1>&2\r\n"
+)
+
+
+def write_fake_ffmpeg(bin_dir: Path) -> None:
+    """Put a fake ffmpeg in *bin_dir* that a PATH search on this host finds."""
+    if sys.platform == "win32":
+        fake = bin_dir / "ffmpeg.cmd"  # pragma: only-on win32
+        fake.write_bytes(_FAKE_FFMPEG_CMD.encode())  # pragma: only-on win32
+    else:
+        fake = bin_dir / "ffmpeg"  # pragma: only-on posix
+        fake.write_bytes(_FAKE_FFMPEG.encode())  # pragma: only-on posix
+        fake.chmod(0o755)  # pragma: only-on posix
 
 
 class TallyTest(sf.IsolatedCase):
@@ -128,9 +145,7 @@ class FakeFfmpegEndToEndTest(sf.IsolatedCase):
         )
         bin_dir = self.tmp / "fake-bin"
         bin_dir.mkdir()
-        fake = bin_dir / "ffmpeg"
-        fake.write_bytes(_FAKE_FFMPEG.encode())
-        fake.chmod(0o755)
+        write_fake_ffmpeg(bin_dir)
         self.enterContext(mock.patch.dict(os.environ, {"PATH": str(bin_dir)}))
         with (
             contextlib.redirect_stdout(io.StringIO()),

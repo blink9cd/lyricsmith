@@ -15,8 +15,15 @@ speech, and the tool was chosen and checked on spoken audio.
 
 1. **whisper.cpp**, MIT-licensed: `brew install whisper.cpp` puts `whisper-cli` on `PATH`.
    Elsewhere, build it from source and pass the program with `--whisper-cli`.
-2. **The two models, once:** `python3.12 transcribe.py --mode fetch-models`. Any Python
-   3.12 or later runs the tool, which imports the standard library only.
+2. **The models, once:** `python3.12 transcribe.py --mode fetch-models`. Any Python
+   3.12 or later runs the tool, which imports the standard library only. It fetches the two
+   files every transcribe run uses: the turbo Whisper model and the voice-activity model. A
+   third file is pinned, full large-v3, about 3.1 GB, which no transcribe run uses: the sync
+   tool's hearing mode re-hears a sample with it (`../sync/sync.md`, *Hearing without
+   timing*). It is fetched only when named, with
+   `python3.12 transcribe.py --mode fetch-models --whisper-model ggml-large-v3.bin`, which
+   fetches it and the voice-activity model, so a default fetch never spends the time or the
+   disk on it.
 
 `fetch-models` downloads into the per-user model folder, derived at run time:
 
@@ -26,17 +33,20 @@ speech, and the tool was chosen and checked on spoken audio.
 | Windows | `%LOCALAPPDATA%\lyricsmith\models` |
 | Linux and the rest | `${XDG_DATA_HOME:-$HOME/.local/share}/lyricsmith/models` |
 
-`--model-dir` moves it, and `--help` prints the live value and both file names. The two
-files are pinned by name, size and SHA-256 in the manifest in `src/at_models.py`, the one
+`--model-dir` moves it, and `--help` prints the live value and both default file names. All
+three files are pinned by name, size and SHA-256 in the manifest in `src/at_models.py`, the one
 place those values are written; read them there.
 
 Each file is streamed into a temporary partial beside its target, hashed and size-bounded on
 the way in, and renamed into place only when its digest matches. Every redirect on the way
 must stay on HTTPS: urllib would otherwise follow a hop to plain HTTP mid-chain, which a check
 of the final URL alone cannot see. Each file's whole download is bounded by a deadline
-(`DOWNLOAD_DEADLINE_SECONDS` in `src/at_models.py`, sized generously for the largest model on
-a slow line), checked after every read, because the socket timeout bounds only one read and a
-server trickling a byte a minute would otherwise never be cut off. A file already present with
+(`download_deadline` in `src/at_models.py`), checked after every read, because the socket
+timeout bounds only one read and a server trickling a byte a minute would otherwise never be
+cut off. The deadline scales with the file: `DOWNLOAD_DEADLINE_SECONDS`, which every file of
+the default fetch gets, or, for a file too large to arrive inside it on a slow line
+(`SLOWEST_LINE_BYTES_PER_SECOND`), its size at that line, so only a fetch naming large-v3
+waits longer. A file already present with
 the right digest is reported `present` and not downloaded again; one with the wrong digest is
 downloaded again, and replaced only once the new one matches. A download that stops short
 fails naming how many of the pinned bytes arrived, not as a digest mismatch. A transcribe run never touches
@@ -62,8 +72,11 @@ already reaches everything the run could protect.
 | `--vad-model` | transcribe | `<model dir>/ggml-silero-v6.2.0.bin` | the voice-activity model file |
 | `--model-dir` | all | the per-user data folder | where `fetch-models` writes and the model defaults point |
 | `--whisper-cli` | transcribe | found on `PATH` | the `whisper-cli` executable |
+| `--whisper-model` | fetch-models | `ggml-large-v3-turbo.bin` | fetch the files a run hearing with this pinned whisper model reads; `ggml-large-v3.bin` fetches large-v3 |
 
-`fetch-models` neither reads nor validates the transcribe options. `--path`, `--output-dir`,
+`fetch-models` neither reads nor validates the transcribe options. A transcribe run refuses a
+`--whisper-model` other than the default as a setup error: it hears with `--model`, and
+naming large-v3 there would read as a run that hears with it. `--path`, `--output-dir`,
 `--model` and `--vad-model` are made absolute against the working folder (links and `..`
 kept), and so is the `whisper-cli` the setup check finds, whether named by `--whisper-cli` or
 found on `PATH`: the file checked is the file run, and no path handed to `whisper-cli` can
@@ -195,7 +208,7 @@ key exported in the shell for `lyricsmith album` never reaches it.
 
 A transcribe run prints its rows to stdout as each file finishes: the outcome, padded to a
 fixed column, then the audio's path relative to the `--path` folder (or a named file's own
-folder). A failed file's row is followed by indented lines saying why: for an engine failure
+folder), written with `/` on every host. A failed file's row is followed by indented lines saying why: for an engine failure
 (a non-zero exit, a timeout, or no `.lrc` and `.txt` left behind), what went wrong and the
 last five non-blank lines of `whisper-cli`'s error output. The run ends with one count line
 naming every outcome:
@@ -256,9 +269,14 @@ a model or reads a real library.
 The black-box suites run `main()` against a stand-in `whisper-cli` that `write_fake_whisper`
 writes: a script whose shebang is the running interpreter, which logs each call and writes an
 invented `.lrc` and `.txt`, steered per test through environment variables to fail, to leave an
-untimed `.lrc` or to print another version. Being a shebang script, it runs on POSIX only, so
-those suites skip on Windows with that reason; every unit suite runs everywhere. Their shared
-fixture is `CliCase` in `tests/_cli.py`. The unreadable-path cases patch `Path.exists` and
+untimed `.lrc` or to print another version. Windows runs no shebang, so there the same body is
+written as a Python file beside a `whisper-cli.cmd` shim that runs it with the running
+interpreter, and the isolated `PATHEXT` is pinned to `.cmd`, so the `PATH` search finds the shim
+by its exact name. The black-box suites therefore run on every host. Only a case whose fixture
+Windows cannot make (a FIFO, a symlink, a control character in a name, a folder locked by mode
+0) skips there, and the code each such case reaches is reached on every host too, by a twin
+through a patched seam or by a unit suite.
+Their shared fixture is `CliCase` in `tests/_cli.py`. The unreadable-path cases patch `Path.exists` and
 `Path.is_file` to raise, as Python 3.12 does under a folder that cannot be searched, because a
 newer Python answers `False` there and a real locked folder would not exercise the 3.12 path.
 

@@ -45,16 +45,20 @@ NOT_SUNG: Final = (
 )
 
 
-def _shown(audio: Path, root: Path) -> str:
-    """*audio* relative to *root*, or its name when it is *root* itself or outside it."""
+def shown_path(audio: Path, root: Path) -> str:
+    """*audio* relative to *root*, or its name when it is *root* itself or outside it.
+
+    The relative path reads with ``/`` on every host, as the album tool's manifests
+    name a track, so a row reads the same from a Windows run as from any other.
+    """
     if audio != root and audio.is_relative_to(root):
-        return str(audio.relative_to(root))
+        return audio.relative_to(root).as_posix()
     return audio.name
 
 
 def _row(label: str, audio: Path, root: Path) -> str:
     """One row: the label padded to the shared width, then the path."""
-    return f"{label:<{LABEL_WIDTH + LABEL_GAP}}{_shown(audio, root)}"
+    return f"{label:<{LABEL_WIDTH + LABEL_GAP}}{shown_path(audio, root)}"
 
 
 def plan_lines(planned: Planned, root: Path) -> list[str]:

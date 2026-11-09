@@ -392,6 +392,9 @@ IMPLAUSIBLE = "implausible old lyrics"
 WRONG_TEXT = "wrong text removed"
 #: How a fix's kept track whose removal it withheld names it, after ``kept existing``.
 REMOVAL_WITHHELD = "removal withheld"
+#: Why a fix given ``--hold-for-genius`` withheld a removal: every source it asked
+#: answered, none sang, and Genius, never asked, might still have the track.
+HELD_FOR_GENIUS = "held for Genius"
 
 
 def _split_genre(
@@ -420,7 +423,7 @@ def describe_status(outcome: TrackOutcome) -> str:
     (``kept existing (FLAG: lyrics on a no-lyrics genre (<genre>))``). A silent track
     names its peak, and a miss whose silence check failed names why. A fix's removal
     of a wrong text says so alone (``wrong text removed``): it was not implausible.
-    One a fix withheld on an album that looks spoken says why
+    One a fix withheld on an album that looks spoken, or held for Genius, says why
     (``kept existing: removal withheld, spoken word (genre Comedy)``).
     """
     if outcome.status is OutcomeStatus.REMOVED and outcome.implausible == WRONG_TEXT:

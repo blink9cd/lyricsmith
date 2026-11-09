@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import signal
 import sys
-from collections.abc import Sequence
+import unittest
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from unittest import mock
 
@@ -31,6 +32,10 @@ import run_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import tag_builders  # noqa: E402 - import follows the sys.path bootstrap above
 from fixtures import TrackSpec  # noqa: E402 - import follows the sys.path bootstrap above
 
+#: A track name holding a linefeed, which the list cannot hold, and the name its twin
+#: builds in its place, since NTFS cannot hold a linefeed either.
+_LINEFEED_NAME = "01 Line\nBreak.mp3"
+_STAND_IN_NAME = "01 Line Break.mp3"
 #: One track found synced, one served by its own plain sidecar (so its frames are
 #: written from it), and one nobody has words for, which the run never saves.
 TRACKS = (
@@ -189,23 +194,47 @@ class RunListTest(ChangedListCase):
 
 
 class LeftOutTest(cli_fakes.RealWiringCliCase):
-    """A path the list cannot hold is left out and said, and the exit is unchanged."""
+    """A path the list cannot hold is left out and said, and the exit is unchanged.
+
+    NTFS cannot hold a linefeed in a name, so here the track is built under a stand-in
+    name and the run's listing hands the linefeed name on in its place: every stage but
+    the listing is real, on every host. `LeftOutOnDiskTest` builds the real name where
+    the host can hold it.
+    """
+
+    def setUp(self) -> None:
+        """One track the providers answer, named with a linefeed as the list sees it."""
+        super().setUp()
+        self.providers = run_fakes.table({"The Keeper": fixtures.LIGHTHOUSE_LRC})
+        self.mp3 = self.build_track()
+
+    def build_track(self) -> Path:
+        """Build the track under `_STAND_IN_NAME`; list it as `_LINEFEED_NAME`."""
+        (built,) = fixtures.build_album(
+            self.album, (TrackSpec(_STAND_IN_NAME, title="The Keeper"),)
+        )
+        named = built.with_name(_LINEFEED_NAME)
+        renames = {str(built): str(named)}
+        real = lyrics_changed.run_changed
+
+        def listed(
+            album_dir: Path, tracks: Iterable[lr.ManifestTrack]
+        ) -> tuple[str, ...]:
+            return tuple(renames.get(path, path) for path in real(album_dir, tracks))
+
+        self.enterContext(mock.patch.object(lyrics_changed, "run_changed", listed))
+        return named
 
     def test_a_track_whose_name_holds_a_linefeed_is_left_out(self) -> None:
-        track = TrackSpec("01 Line\nBreak.mp3", title="The Keeper")
-        (mp3,) = fixtures.build_album(self.album, (track,))
-        self.providers = run_fakes.table({"The Keeper": fixtures.LIGHTHOUSE_LRC})
         listed = self.tmp / "changed.txt"
         result = self.run_album("--changed-list", str(listed))
         self.assertEqual(result.code, album.EXIT_OK)
         self.assertEqual(listed.read_bytes(), b"")
-        left = lyrics_changed.LeftOut(str(mp3), lyrics_changed.REASON_LINEFEED)
+        left = lyrics_changed.LeftOut(str(self.mp3), lyrics_changed.REASON_LINEFEED)
         self.assertIn(lyrics_changed.left_out_notice(left), result.stderr)
 
     def test_a_retried_write_says_each_left_out_path_once(self) -> None:
-        track = TrackSpec("01 Line\nBreak.mp3", title="The Keeper")
-        (mp3,) = fixtures.build_album(self.album, (track,))
-        self.providers = run_fakes.table({"The Keeper": fixtures.LIGHTHOUSE_LRC})
+        mp3 = self.mp3
         listed = self.tmp / "changed.txt"
         real = lyrics_files.replace_atomically
         raised_once: list[Path] = []
@@ -222,6 +251,19 @@ class LeftOutTest(cli_fakes.RealWiringCliCase):
         self.assertEqual(result.code, album.EXIT_INTERRUPTED)
         left = lyrics_changed.LeftOut(str(mp3), lyrics_changed.REASON_LINEFEED)
         self.assertEqual(result.stderr.count(lyrics_changed.left_out_notice(left)), 1)
+
+
+@unittest.skipUnless(
+    fixtures.host_holds_name(_LINEFEED_NAME), "this file system holds no linefeed"
+)
+class LeftOutOnDiskTest(LeftOutTest):
+    """The same, the track's real file named with the linefeed, and nothing faked."""
+
+    def build_track(self) -> Path:
+        """Build the track under `_LINEFEED_NAME` itself."""
+        track = TrackSpec(_LINEFEED_NAME, title="The Keeper")
+        (mp3,) = fixtures.build_album(self.album, (track,))
+        return mp3
 
 
 class StripAndUndoListTest(ChangedListCase):

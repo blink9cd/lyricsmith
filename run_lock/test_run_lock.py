@@ -78,6 +78,34 @@ class AcquireTests(_TempDirCase):
         lock.release()
         self.assertTrue(self.lock_path.is_file())
 
+    def test_the_lock_file_is_opened_with_the_mode_asked_for(self) -> None:
+        """The mode reaches the open itself, the default and an asked one alike."""
+        modes: list[int] = []
+        real_open = os.open
+
+        def recording_open(path: Path, flags: int, mode: int = 0o777) -> int:
+            modes.append(mode)
+            return real_open(path, flags, mode)
+
+        with mock.patch.object(run_lock.os, "open", side_effect=recording_open):
+            default = run_lock.acquire(self.lock_path)
+            assert default is not None
+            default.release()
+            private = run_lock.acquire(self.lock_path, mode=0o600)
+            assert private is not None
+            private.release()
+        self.assertEqual(modes, [0o644, 0o600])
+
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits are not meaningful on NTFS")
+    def test_a_new_lock_file_takes_the_mode_asked_for(self) -> None:
+        """A caller keeping private state makes its lock file private too."""
+        old_umask = os.umask(0)
+        self.addCleanup(os.umask, old_umask)
+        lock = run_lock.acquire(self.lock_path, mode=0o600)
+        assert lock is not None
+        lock.release()
+        self.assertEqual(self.lock_path.stat().st_mode & 0o777, 0o600)
+
     def test_an_error_other_than_contention_raises_and_closes_the_descriptor(
         self,
     ) -> None:

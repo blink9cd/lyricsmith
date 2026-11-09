@@ -38,7 +38,6 @@ HAND = "[ar:someone]\n[00:01.00] An invented hand-made line.\n"
 HOSTILE = "bad\x1b[2Jname.mp3"
 
 
-@unittest.skipIf(sys.platform == "win32", "the fake whisper-cli is a shebang script")
 class TranscribeTest(CliCase):
     def test_a_folder_is_transcribed_and_labeled(self) -> None:
         code, out, _ = self.run_main("--path", str(self.lib))
@@ -102,7 +101,7 @@ class TranscribeTest(CliCase):
         code, out, _ = self.run_main("--path", str(self.lib), "--dry-run")
         self.assertEqual(code, EXIT_OK)
         self.assertIn("version not read in a dry run", out)
-        self.assertIn(f"transcribe             {Path('a') / 'one.mp3'}", out)
+        self.assertIn("transcribe             a/one.mp3", out)
         self.assertEqual(self.calls(), [])
         self.assertEqual(
             sorted(p.suffix for p in self.lib.rglob("*") if p.is_file()),
@@ -131,14 +130,12 @@ class TranscribeTest(CliCase):
         # Regression: one.mp3 and one.m4a both map to one.lrc; the second replaced
         # the first's pair without --overwrite while the count said "transcribed 2".
         (self.lib / "a" / "one.m4a").write_bytes(b"")
-        claimed = (
-            f"another audio file, {Path('a') / 'one.m4a'}, already writes this .lrc"
-        )
+        claimed = "another audio file, a/one.m4a, already writes this .lrc"
         code, out, _ = self.run_main(
             "--path", str(self.lib), "--extensions", "mp3,m4a", "--dry-run"
         )
         self.assertEqual(code, EXIT_FILE_FAILED)
-        self.assertIn(f"failed                 {Path('a') / 'one.mp3'}", out)
+        self.assertIn("failed                 a/one.mp3", out)
         self.assertIn(f"    {claimed}", out)
         self.assertEqual(self.calls(), [])
         code, out, _ = self.run_main("--path", str(self.lib), "--extensions", "mp3,m4a")
@@ -163,7 +160,7 @@ class TranscribeTest(CliCase):
 
     def test_setup_errors_touch_no_file(self) -> None:
         cases = {
-            "brew install whisper.cpp": lambda: (self.bin / "whisper-cli").unlink(),
+            "brew install whisper.cpp": lambda: self.fake.unlink(),
             "--mode fetch-models": lambda: (
                 self.models / at_models.WHISPER_MODEL_NAME
             ).unlink(),
@@ -196,7 +193,12 @@ class TranscribeTest(CliCase):
             "--path", str(self.lib), "--whisper-cli", str(plain)
         )
         self.assertEqual(code, EXIT_SETUP)
-        self.assertIn("is not an executable file", err)
+        if sys.platform == "win32":
+            # Windows has no execute bit: os.access passes any file for X_OK, so the
+            # refusal comes from the --version read, which cannot start the file.
+            self.assertIn(f"{plain} --version printed no version", err)
+        else:
+            self.assertIn("is not an executable file", err)
 
     def test_a_failed_placement_is_that_files_row(self) -> None:
         with mock.patch.object(
@@ -252,6 +254,9 @@ class TranscribeTest(CliCase):
         )
         self.assertEqual(upper.read_text(encoding="utf-8"), "hand words\n")
 
+    @unittest.skipIf(
+        sys.platform == "win32", "Windows forbids control characters in file names"
+    )
     def test_a_control_character_in_a_name_is_escaped(self) -> None:
         # A hostile file name cannot write a raw control character to the terminal.
         (self.lib / "a" / HOSTILE).write_bytes(b"")
@@ -305,7 +310,7 @@ class TranscribeTest(CliCase):
         elsewhere = self.root / "elsewhere"
         elsewhere.mkdir()
         fake = write_fake_whisper(elsewhere)
-        (self.bin / "whisper-cli").unlink()
+        self.fake.unlink()
         code, _, _ = self.run_main("--path", str(self.lib), "--whisper-cli", str(fake))
         self.assertEqual(code, EXIT_OK)
 

@@ -11,6 +11,7 @@ import json
 import os
 import stat
 import sys
+import unittest
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -74,6 +75,7 @@ class WriteTest(StoreCase):
         data = hs.record_path(self.store, self.track).read_bytes()
         self.assertEqual(json.loads(data), self.document())
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_the_file_and_the_folder_are_private(self) -> None:
         hs.write_record(self.store, self.record())
         path = hs.record_path(self.store, self.track)

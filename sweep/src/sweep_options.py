@@ -11,29 +11,35 @@
   --heard-dir;
 - survey or run is given --apply;
 - any mode but silence is given --resume;
-- any mode but the fix is given --heard-dir;
+- any mode but the fix is given --heard-dir or --hold-for-genius;
+- --hold-for-genius is given with --no-genius, or names the same file as
+  --changed-list;
 - a refetch is given with --offline, or --owe-earlier-runs with --restart or
   --offline.
 
 `build_options` turns the parsed command line into the sweep's `SweepOptions`. The
 options themselves are declared in the entry point, beside its parser, those only a run
-or the fix uses among them. The album tool's exit codes come from its
-own `lyrics_exit`, not its entry point, so nothing here imports either entry point.
-Nothing here prints.
+or the fix uses among them; `HOLD_FOR_GENIUS` holds the fix's --hold-for-genius
+declaration, kept here so the entry point stays short. The album tool's exit codes
+come from its own `lyrics_exit`, not its entry point, so nothing here imports either
+entry point. Nothing here prints.
 """
 
 from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
+import lyrics_options
 import sweep_child
 import sweep_report
 import sweep_run
 from lyrics_exit import EXIT_OK, EXIT_RECORD_NOT_WRITTEN
+from sweep_more_modes import OptionSpec
 
 MODE_SURVEY, MODE_RUN, MODE_ACCEPT = "survey", "run", "accept"
 MODE_SILENCE, MODE_FIX_TEXT = "silence", "fix-text"
@@ -58,8 +64,10 @@ _NOT_ACCEPT = (
 )
 #: The option only the silence pass takes, refused by every other mode.
 _SILENCE_ONLY = (("resume", "--resume"),)
-#: The option only the fix takes, refused by every other mode.
-_FIX_ONLY = (("heard_dir", "--heard-dir"),)
+#: The fix's list of the tracks it held for Genius, as (the parsed attribute, the option).
+_HOLD = ("hold_for_genius", sweep_child.HOLD_OPTION)
+#: The options only the fix takes, refused by every other mode.
+_FIX_ONLY = (("heard_dir", "--heard-dir"), _HOLD)
 #: What accept and silence each refuse: every option but their own. Silence takes
 #: --limit, and --apply is accept's.
 _REFUSED_BY = {
@@ -104,8 +112,21 @@ FLAG_HELP: Final[Mapping[str, str]] = MappingProxyType(
         "it names and each provider its run left out by a cool-down that could still "
         "answer a track; a run asks it only those. Not with --restart, --offline or "
         "--mode accept.",
+        sweep_child.HOLD_OPTION: "fix-text only: pass the album tool's "
+        "--hold-for-genius to each album, which then never asks Genius and keeps, "
+        "instead of removing, a wrong text every source asked answered without "
+        "singing; add each track so held to this file, one absolute path per line, "
+        "rewritten after each album as --changed-list is; --restart starts it empty. "
+        "Not with --no-genius, nor naming the --changed-list file; no list, and "
+        "such a text removed, when omitted.",
     }
 )
+#: The --hold-for-genius option's declaration, as the entry point adds it.
+HOLD_FOR_GENIUS: Final[OptionSpec] = {
+    "type": Path,
+    "default": None,
+    "help": FLAG_HELP[sweep_child.HOLD_OPTION],
+}
 
 
 EPILOG = f"""\
@@ -113,8 +134,7 @@ Prerequisites:
   The album tool beside this one, with the project's dependencies installed
   (its pyproject.toml's [project].dependencies); the album tool's own prerequisites
   apply to every album a run visits. The library is a folder of Artist/Album
-  folders. A run or accept needs a POSIX system (macOS, Linux); one run or accept
-  per library at a time.
+  folders. One run or accept per library at a time.
 
 Output:
   A survey prints each album's synced, untimed-only and no-lyrics tracks, the totals,
@@ -139,7 +159,8 @@ Output:
   Fix-text visits only the albums holding a record in --heard-dir, each with the
   album tool's --mode fix-text, and reports as a run does, with an errors line for
   the tracks whose wrong text a fix kept, and a removal withheld line for those it
-  kept on an album that looks spoken; its done albums are its own in the ledger.
+  kept on an album that looks spoken or held for Genius (--hold-for-genius, which
+  also lists them); its done albums are its own in the ledger.
   Silence needs ffmpeg on PATH. It measures every track of every album, whatever its
   lyrics, writing nothing in the library, and appends each album's silent and
   unmeasured tracks, judged, to a list under $XDG_STATE_HOME/lyricsmith/silence/ or
@@ -166,11 +187,10 @@ Exit codes:
        page that could not be written
   2    a usage problem, a library that is missing or cannot be listed, a ledger that
        cannot be read or written (a run still prints its report so far), another
-       sweep already running on the library or its lock not taken, a run or fix on Windows,
+       sweep already running on the library or its lock not taken,
        a --heard-dir that is not a folder or cannot be listed,
-       a --changed-list file whose last write failed, an existing one that cannot be
-       read as a list, or its scratch folder not made;
-       accept: a Python whose rmtree can follow a link;
+       a --changed-list or --hold-for-genius file whose last write failed, an
+       existing one that cannot be read as a list, or its scratch folder not made;
        silence: no ffmpeg, a --resume list unreadable, malformed or another
        library's, or the list not opened
   3    stopped after --stop-after consecutive albums whose providers only refused;
@@ -188,6 +208,14 @@ def refuse_misplaced(parser: argparse.ArgumentParser, args: argparse.Namespace) 
         _refuse_set(parser, args, _FIX_ONLY)
     elif args.heard_dir is None:
         parser.error(f"--heard-dir is required with --mode {MODE_FIX_TEXT}")
+    # The album tool refuses the pair too, so every album would only fail to run.
+    if getattr(args, _HOLD[0]) is not None and args.no_genius:
+        parser.error(f"{_HOLD[1]} cannot be used with --no-genius")
+    # Both unions would rewrite the one file, the changed list last, so the held
+    # tracks would be lost while their albums are recorded done.
+    lyrics_options.refuse_one_list_file(
+        parser, args.changed_list, getattr(args, _HOLD[0])
+    )
     if args.mode == MODE_SURVEY:
         _refuse_set(parser, args, _RUN_ONLY)
     if args.mode not in CHILD_MODES:
@@ -244,4 +272,5 @@ def build_options(args: argparse.Namespace) -> sweep_run.SweepOptions:
             flag for attr, flag in sweep_child.SKIP_OPTIONS if getattr(args, attr)
         ),
         heard_dir=args.heard_dir,
+        hold_for_genius=args.hold_for_genius,
     )

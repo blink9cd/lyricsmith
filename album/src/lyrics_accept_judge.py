@@ -39,7 +39,7 @@ from lyrics_manifest import read_manifest
 from lyrics_prune import Found, Kind, scan
 from lyrics_records import Manifest, ManifestTrack, OutcomeStatus, RunState
 from lyrics_records import TrackBefore, TrackOutcome
-from lyrics_run_folders import LOCK_NAME, RUN_FOLDER_NAME
+from lyrics_run_folders import LOCK_NAME, RUN_FOLDER_NAME, is_link_or_junction
 from lyrics_stages import ReadManifest
 from lyrics_undo import UNDO_DIR
 
@@ -176,7 +176,7 @@ def read_contents(album: Path, read: ReadManifest = read_manifest) -> Contents:
     folder = album / RUN_FOLDER_NAME
     # Defense in depth: accept_album cannot reach this, since album_lock refuses a
     # linked .lyricsmith first, but any other caller is still never listed through.
-    if folder.is_symlink():
+    if is_link_or_junction(folder):
         return Contents(folder_linked=True, leftover=leftover)
     if not os.path.lexists(folder):
         return Contents(leftover=leftover)
@@ -216,8 +216,10 @@ def _others(folder: Path, scanned: set[str]) -> tuple[bool, tuple[str, ...]]:
     for entry in sorted(folder.iterdir()):
         if entry.name in scanned:
             continue
-        if entry.name == LOCK_NAME and (entry.is_symlink() or not entry.is_dir()):
-            linked = entry.is_symlink()
+        if entry.name == LOCK_NAME and (
+            is_link_or_junction(entry) or not entry.is_dir()
+        ):
+            linked = is_link_or_junction(entry)
         else:
             unknown.append(entry.name)
     return linked, tuple(unknown)
@@ -251,14 +253,15 @@ def _undo_files(album: Path, run_dir: Path) -> tuple[str, ...]:
 def _files_under(path: Path) -> Iterator[Path]:
     """*path* itself when it is a link or no folder, else every such entry below it.
 
-    A link is never followed: an ``undo`` entry that is one is listed, as a file is.
+    A link or a junction is never followed: an ``undo`` entry that is one is listed,
+    as a file is.
     The walk keeps its own stack of folders still to list, so a folder nested
     however deep is listed, never a `RecursionError`.
     """
     pending = [path]
     while pending:
         entry = pending.pop()
-        if entry.is_symlink() or not entry.is_dir():
+        if is_link_or_junction(entry) or not entry.is_dir():
             yield entry
         else:
             pending.extend(entry.iterdir())
@@ -287,7 +290,7 @@ def _refusals(contents: Contents, runs: Sequence[RunEntry]) -> tuple[Refusal, ..
         (contents.lock_linked, f"{RUN_FOLDER_NAME}/{LOCK_NAME}"),
     )
     refusals.extend(
-        Refusal(RefusalKind.LINKED, f"{name} is a symbolic link")
+        Refusal(RefusalKind.LINKED, f"{name} is a symbolic link or junction")
         for is_link, name in linked
         if is_link
     )

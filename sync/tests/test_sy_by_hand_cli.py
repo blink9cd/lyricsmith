@@ -233,7 +233,7 @@ class ByHandCliTest(sy_cases.IsolatedCase):
     def test_fetch_models_refuses_the_option(self) -> None:
         code, _, err = self.main("--mode", "fetch-models")
         self.assertEqual(code, 2)
-        self.assertIn("--by-hand-list is for --mode run only", err)
+        self.assertIn("--by-hand-list is for --mode run or hear only", err)
 
     def test_help_names_the_option(self) -> None:
         out = io.StringIO()

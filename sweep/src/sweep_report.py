@@ -19,7 +19,12 @@ import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 from lyrics_model import Source
 from stdio_utf8 import spell_unsafe
 
-from sweep_child import HEARD_DIR_OPTION, IMPLAUSIBLE_OPTION, REFETCH_OPTION
+from sweep_child import (
+    HEARD_DIR_OPTION,
+    HOLD_OPTION,
+    IMPLAUSIBLE_OPTION,
+    REFETCH_OPTION,
+)
 from sweep_ledger import LedgerEntry, Outcome
 from sweep_run import StopReason, SweepOptions, SweepReport
 from sweep_survey import AlbumSurvey, VisitPlan
@@ -344,11 +349,14 @@ def resume_command(
 
     It carries *changed_list* when there is one, so the next leg adds to the same list,
     and ``--owe-earlier-runs`` when given, so it still owes what it has not revisited.
-    A fix pass's resumes the fix, on the same ``--heard-dir``.
+    A fix pass's resumes the fix, on the same ``--heard-dir``, adding to the same
+    ``--hold-for-genius`` list when it keeps one.
     """
     parts = [*prog, "--mode", _sweep_mode(options), "--library", str(library)]
     if options.heard_dir is not None:
         parts += [HEARD_DIR_OPTION, str(options.heard_dir)]
+    if options.hold_for_genius is not None:
+        parts += [HOLD_OPTION, str(options.hold_for_genius)]
     if options.lang is not None:
         parts += ["--lang", options.lang]
     if options.offline:

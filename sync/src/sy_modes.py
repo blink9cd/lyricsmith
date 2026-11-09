@@ -154,19 +154,17 @@ def _whisper_problems(
     problems = []
     if whisper_cli is None:
         problems.append(f"{WHISPER_CLI} is not on PATH: brew install whisper.cpp")
-    # Read at call time, as sync's own manifest is, so the tests' stand-in counts.
-    models = sy_models.model_problems(options.whisper_model_dir, at_models.MANIFEST)
+    # Only the models this run hears with; read at call time, so a stand-in counts.
+    hears_with = options.whisper_model or at_models.WHISPER_MODEL_NAME
+    models = sy_models.model_problems(
+        options.whisper_model_dir, at_models.run_models(hears_with)
+    )
     if models:
-        fetch = shlex.join(
-            [
-                *transcribe_prog(prog),
-                "--mode",
-                "fetch-models",
-                "--model-dir",
-                str(options.whisper_model_dir),
-            ]
-        )
-        problems += [*models, f"fetch them: {fetch}"]
+        words = [*transcribe_prog(prog), "--mode", "fetch-models", "--model-dir"]
+        words.append(str(options.whisper_model_dir))
+        if hears_with != at_models.WHISPER_MODEL_NAME:  # fetched only when named
+            words += ["--whisper-model", hears_with]
+        problems += [*models, f"fetch them: {shlex.join(words)}"]
     return problems
 
 
@@ -201,7 +199,7 @@ def setup_problems(
     return problems + _whisper_problems(options, whisper_cli, prog)
 
 
-def _unreadable_folder(error: OSError, root: Path) -> Planned:
+def unreadable_folder(error: OSError, root: Path) -> Planned:
     """The row of a folder the walk could not read; it names the root when unnamed."""
     folder = root if error.filename is None else Path(str(error.filename))
     reason = error.strerror or str(error)
@@ -210,7 +208,7 @@ def _unreadable_folder(error: OSError, root: Path) -> Planned:
     )
 
 
-def _entry_row(track: Path, named: bool) -> Planned | None:
+def entry_row(track: Path, named: bool) -> Planned | None:
     """The row of a found name that is no track to time; None when it is one.
 
     Judged exactly as the transcribe tool judges it (`at_discover.classify`), before
@@ -242,7 +240,7 @@ def _plan_one(
     to time a track whose transcript is kept (*heard*) carries it, unless its ``not
     sung`` row holds for its unchanged text (`sy_plan.listed_by_hand`).
     """
-    row = _entry_row(track, named=track == path)
+    row = entry_row(track, named=track == path)
     planned = row or sy_plan.plan_track(track, overwrite=overwrite)
     return sy_plan.listed_by_hand(planned, listed, heard)
 
@@ -265,7 +263,7 @@ def plan_all(
     plans = [
         _plan_one(track, path, options.overwrite, listed, heard) for track in audio
     ]
-    folders = [_unreadable_folder(error, root) for error in errors]
+    folders = [unreadable_folder(error, root) for error in errors]
     tracks = [plan.audio for plan in plans if plan.action not in sy_plan.UNCLAIMED]
     return folders + sy_plan.claim_lrcs(plans), tracks
 

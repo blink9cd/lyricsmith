@@ -2,15 +2,19 @@
 
 Every album test case derives from `IsolatedCase`, and the tool folder's test
 aggregator fails the run when one does not (`isolation_offenders`). Its `setUp` points
-HOME and the XDG directories at a fresh temporary directory, unsets the Genius key
-variable, and replaces the socket layer's connect and name lookup with a tripwire. So no
-test can reach a real music library, the network, or a real config file, even by mistake.
-Before the isolation is left, each test waits for the threads it started to end, and
-fails if one is still running or one reached the tripwire (`unsettled`): a provider call
-abandoned at its deadline must finish while the fakes it was given still stand.
+HOME (and USERPROFILE, Windows' home) and the XDG directories at a fresh temporary
+directory, unsets the Genius key variable, and replaces the socket layer's connect and
+name lookup with a tripwire. So no test can reach a real music library, the network, or
+a real config file, even by mistake. Before the isolation is left, each test waits for
+the threads it started to end, and fails if one is still running or one reached the
+tripwire (`unsettled`): a provider call abandoned at its deadline must finish while the
+fakes it was given still stand.
 
 Albums are built from silent MP3s at test time: no audio binary is committed. Every
 lyric here is invented for these tests; no real song's words appear anywhere.
+`host_absolute` and `host_holds_name` shape a made-up path or name for the host: a
+POSIX-absolute path rooted at the host's drive, and whether a real file can hold a name
+(NTFS cannot hold a control character or a device name).
 
 Not discovered as a suite (no ``test_`` prefix). Suites import it by bare name with this
 directory on ``sys.path``.
@@ -90,7 +94,8 @@ class IsolatedPaths:
 def isolated_environment(root: Path) -> Iterator[IsolatedPaths]:
     """Redirect HOME and XDG under *root*, unset the Genius key, trip the network, hide ffmpeg.
 
-    Yields the paths it set, the very values written into the environment, so a test
+    USERPROFILE is redirected beside HOME, to the same folder, since Windows reads the
+    home from it and ignores HOME. Yields the paths it set, the very values written into the environment, so a test
     can assert on them without reading the environment back by name. Everything is
     restored on exit, the socket layer included, so the redirect cannot leak into a
     later test.
@@ -100,7 +105,9 @@ def isolated_environment(root: Path) -> Iterator[IsolatedPaths]:
         {name: root / "home" / sub for name, sub in _XDG_DIRS.items()},
     )
     paths.home.mkdir()
-    values = {"HOME": str(paths.home)}
+    # Both spellings: `Path.home()` reads HOME on POSIX and USERPROFILE on Windows, where
+    # HOME alone would leave the real profile folder as every test's home.
+    values = {"HOME": str(paths.home), "USERPROFILE": str(paths.home)}
     values.update({name: str(path) for name, path in paths.xdg.items()})
     with ExitStack() as stack:
         stack.enter_context(mock.patch.dict(os.environ, values))
@@ -138,8 +145,8 @@ class IsolatedCase(unittest.TestCase):
     """The base of every album test case: each test runs isolated.
 
     ``self.tmp`` is the test's own temporary directory, removed when it ends,
-    ``self.home`` the redirected HOME inside it, and ``self.xdg`` each redirected XDG
-    base directory by variable name.
+    ``self.home`` the redirected HOME inside it (USERPROFILE too, which Windows reads
+    as the home), and ``self.xdg`` each redirected XDG base directory by variable name.
     """
 
     tmp: Path
@@ -187,6 +194,59 @@ def isolation_offenders(suite: unittest.TestSuite) -> list[str]:
         if not isinstance(test, IsolatedCase)
         and type(test).__module__ != unittest.loader.__name__
     ]
+
+
+# --- Host-shaped paths and names ---------------------------------------------------
+
+# The one home of the host-path helpers: album's `host_shapes` and sync's `sy_cases`
+# name these, never a copy, so every suite roots an invented path the same way.
+
+#: The root of the drive the suites run on: ``/`` off Windows, a drive's own root on it.
+#: ``/srv/state`` has no drive on Windows, so it is not absolute there.
+HOST_ROOT = Path(os.path.abspath(os.sep))
+#: The drive the suites run on: ``""`` off Windows, ``C:`` or the like on it.
+HOST_DRIVE = HOST_ROOT.drive
+#: Why a POSIX mode check skips on Windows (the tree's NTFS skip).
+NO_POSIX_MODES = "POSIX mode bits are not meaningful on NTFS"
+
+
+def on_host(posix: str) -> str:
+    """*posix*, an invented path, made absolute on this host when it is absolute on POSIX.
+
+    Off Windows *posix* itself, byte for byte. On Windows a path starting at ``/`` is
+    put on `HOST_DRIVE`, keeping its ``/`` separators, which Windows reads as its own;
+    a relative path is kept as it is, relative on every host.
+    """
+    return HOST_DRIVE + posix if posix.startswith("/") else posix
+
+
+def as_written(posix: str) -> str:
+    r"""How the list writer writes *posix*, an already normal path, on this host.
+
+    Off Windows *posix* itself, byte for byte; on Windows each ``/`` becomes ``\``, as
+    lexical normalization makes it there.
+    """
+    return on_host(posix).replace("/", os.sep)
+
+
+def host_absolute(posix: str) -> Path:
+    """The absolute POSIX path *posix*, rooted at `HOST_ROOT`: *posix* itself off Windows."""
+    return Path(on_host(posix))
+
+
+def host_holds_name(name: str) -> bool:
+    """Whether this host's file system can hold a file named *name*, by making one.
+
+    Probed rather than inferred from the platform, so a real-file test runs wherever it
+    can. NTFS refuses a control character, and opening a device name such as ``NUL``
+    succeeds without making a file, so the name must also be listed afterward.
+    """
+    with TemporaryDirectory() as scratch:
+        try:
+            (Path(scratch) / name).touch(exist_ok=False)
+        except (OSError, ValueError):
+            return False
+        return name in os.listdir(scratch)
 
 
 # --- Silent MP3s and albums --------------------------------------------------------

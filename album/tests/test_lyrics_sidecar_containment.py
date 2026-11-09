@@ -15,7 +15,6 @@ Every lyric here is invented.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -25,6 +24,7 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent), str(_HERE.parent / "src")]
 import album  # noqa: E402 - import follows the sys.path bootstrap above
 import cli_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_files  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_sidecar  # noqa: E402 - import follows the sys.path bootstrap above
@@ -92,7 +92,7 @@ class OutsideLinkTest(_ContainedCase):
         target = self.outside("secret.lrc", _OUTSIDE_LRC)
         mp3.with_suffix(".lrc").symlink_to(target)
         self.assert_both_modes(mp3, _ignored("01 Track.lrc"))
-        self.assertEqual(os.readlink(mp3.with_suffix(".lrc")), str(target))
+        self.assertEqual(lyrics_files.read_link(mp3.with_suffix(".lrc")), str(target))
 
     def test_a_link_climbing_out_with_dot_dot_is_not_read(self) -> None:
         mp3 = self.track()

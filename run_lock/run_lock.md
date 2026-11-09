@@ -14,7 +14,7 @@ recycle fast on a busy machine.
 
 | Name | What it does |
 | --- | --- |
-| `acquire(path) -> Lock \| None` | Takes the lock without waiting. Returns `None` when another holder has it. Creates `path` and its parents. Any other failure raises `OSError`. |
+| `acquire(path, *, mode=0o644) -> Lock \| None` | Takes the lock without waiting. Returns `None` when another holder has it. Creates `path` and its parents, the file with `mode` (less the umask; an existing file keeps its own), so a caller keeping private state passes `0o600`. Any other failure raises `OSError`. |
 | `Lock.release()` | Drops the lock if still held; a second call is a no-op. |
 | `with lock:` | Releases on exit, whether or not the block raised. |
 | `is_held(path) -> bool` | Probes without waiting and without creating the file. An absent file is free. An existing file that cannot be opened raises `OSError`. |
@@ -53,7 +53,8 @@ with lock:
 
 ## Tests
 
-`test_run_lock.py` covers contention, release, probing held and free, the descriptor closed both
-on a refused acquire and on a non-contention error, and a live boundary test: a second process
+`test_run_lock.py` covers contention, release, probing held and free, the mode a new lock file is
+opened with, the descriptor closed both on a refused acquire and on a non-contention error, and a
+live boundary test: a second process
 takes the lock, is SIGKILLed, and the probe then reads the lock free (on Windows, polled for
 until it does, for the late release above).

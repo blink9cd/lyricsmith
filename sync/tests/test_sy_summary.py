@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import shlex
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from typing import cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -21,7 +22,11 @@ from sy_types import (  # noqa: E402 - import follows the sys.path bootstrap abo
     TrackResult,
 )
 
-ROOT = Path("/music")
+#: The walk's root, absolute on the host as the walk names it.
+ROOT = sy_cases.host_absolute("/music")
+#: The root as a printed command names it: quoted as a POSIX shell reads it, on every
+#: host, so a Windows drive's backslashes are kept whole.
+SHOWN_ROOT = shlex.quote(str(ROOT))
 A = ROOT / "One" / "01 A.mp3"
 B = ROOT / "Two" / "01 B.mp3"
 #: The album tool's words when sync is run through the dispatcher.
@@ -31,6 +36,14 @@ DISPATCHED = ("lyricsmith", "album")
 class SummaryTest(sy_cases.IsolatedCase):
     def test_a_plan_row_names_the_action_and_the_relative_path(self) -> None:
         (row,) = ss.plan_lines(Planned(A, Action.TIME), ROOT)
+        self.assertEqual(row.split(), ["time", "One/01", "A.mp3"])
+
+    def test_a_relative_path_reads_with_slashes_on_every_host(self) -> None:
+        # A Windows path, as a run there names it: the row still reads One/01 A.mp3,
+        # as the album tool's manifests name a track. Cast, since a run hands a Path.
+        root = cast(Path, PureWindowsPath("C:/music"))
+        audio = cast(Path, PureWindowsPath("C:/music/One/01 A.mp3"))
+        (row,) = ss.plan_lines(Planned(audio, Action.TIME), root)
         self.assertEqual(row.split(), ["time", "One/01", "A.mp3"])
 
     def test_a_track_given_as_the_root_or_outside_it_shows_its_name(self) -> None:
@@ -92,11 +105,10 @@ class SummaryTest(sy_cases.IsolatedCase):
     def test_without_embed_the_footer_prints_each_folders_album_command(self) -> None:
         timed = [TrackResult(A, Outcome.TIMED)]
         footer = ss.footer_lines(timed, album=DISPATCHED, units=(ROOT,), loose=(B,))
-        command = f"embed them: lyricsmith album --offline --album {ROOT}"
+        command = f"embed them: lyricsmith album --offline --album {SHOWN_ROOT}"
         track = shlex.quote(str(B))
-        loose = (
-            f"embed it: lyricsmith album --offline --album {B.parent} --track {track}"
-        )
+        folder = shlex.quote(str(B.parent))
+        loose = f"embed it: lyricsmith album --offline --album {folder} --track {track}"
         self.assertEqual(footer[1:], [command, loose])
         embedded = ss.footer_lines(timed, album=DISPATCHED)
         self.assertFalse(any("embed them" in line for line in embedded))
@@ -154,7 +166,7 @@ class SummaryTest(sy_cases.IsolatedCase):
         self.assertIn("run: lyricsmith album --offline --album", lines[2])
         loose_command = (
             f"Artist/Album folder): {ROOT / '01 L.mp3'};"
-            f" run: lyricsmith album --offline --album {ROOT}"
+            f" run: lyricsmith album --offline --album {SHOWN_ROOT}"
             f" --track {shlex.quote(str(ROOT / '01 L.mp3'))}"
         )
         self.assertIn(loose_command, lines[3])
@@ -171,9 +183,9 @@ class SummaryTest(sy_cases.IsolatedCase):
 
     def test_the_album_command_names_the_album_tool_as_given(self) -> None:
         alone = ss.album_command(("album.py",), ROOT)
-        self.assertEqual(alone, f"album.py --offline --album {ROOT}")
+        self.assertEqual(alone, f"album.py --offline --album {SHOWN_ROOT}")
         spaced = ss.album_command(("my album.py",), ROOT)
-        self.assertEqual(spaced, f"'my album.py' --offline --album {ROOT}")
+        self.assertEqual(spaced, f"'my album.py' --offline --album {SHOWN_ROOT}")
 
     def test_the_exit_code_is_1_for_a_track_error_or_an_embed_not_done(self) -> None:
         low = [TrackResult(A, Outcome.LOW_CONFIDENCE), TrackResult(B, Outcome.NOT_SUNG)]

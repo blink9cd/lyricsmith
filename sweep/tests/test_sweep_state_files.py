@@ -16,7 +16,8 @@ import errno
 import os
 import stat
 import sys
-from collections.abc import Iterator
+import unittest
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
@@ -27,6 +28,7 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 sys.path.append(str(_HERE.parents[1] / "album" / "tests"))
 
 import sweep  # noqa: E402, F401 - its bootstrap puts src/ and the album tool on the path
+import lyrics_files as lf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_changed  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_ledger as sl  # noqa: E402 - import follows the sys.path bootstrap above
@@ -81,6 +83,20 @@ def recorded_open_flags() -> Iterator[list[int]]:
         mock.patch.object(os, "open", recording_open),
     ):
         yield seen
+
+
+@contextmanager
+def swapped_after_the_look(swap: Callable[[], None]) -> Iterator[None]:
+    """Run *swap* right after the resume's look at the list, before its open."""
+    real_look = lf._look
+
+    def look_then_swap(path: Path, *, follow: bool) -> os.stat_result:
+        looked = real_look(path, follow=follow)
+        swap()
+        return looked
+
+    with mock.patch.object(lf, "_look", look_then_swap):
+        yield
 
 
 class StateCase(sf.IsolatedCase):
@@ -155,6 +171,31 @@ class ResumeListReadTest(StateCase):
             sweep_silence.open_list(link, point)
         self.assertEqual(real.read_bytes(), data)
 
+    @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "the host has no O_NOFOLLOW")
+    def test_a_link_swapped_in_after_the_look_meets_the_kernel_no_follow(
+        self,
+    ) -> None:
+        # The look saw a regular file, so only the open's own O_NOFOLLOW stands
+        # between the link swapped in and its target: without the flag the open
+        # follows it and the identity check is what refuses, as on Windows.
+        data = a_list("Artist/Album") + b"an unfinished album's line"
+        path = self.tmp / "silent.tsv"
+        path.write_bytes(data)
+        target = self.tmp / "target.tsv"
+        target.write_bytes(data)
+
+        def swap_for_a_link() -> None:
+            path.unlink()
+            path.symlink_to(target)
+
+        point = sil.parse_resume(data)
+        with swapped_after_the_look(swap_for_a_link):
+            with self.assertRaises(OSError) as caught:
+                sweep_silence.open_list(path, point)
+        self.assertEqual(caught.exception.errno, errno.ELOOP)
+        self.assertNotIsInstance(caught.exception, lf.SwappedFileError)
+        self.assertEqual(target.read_bytes(), data)
+
     def test_a_resume_refuses_a_fifo_without_waiting(self) -> None:
         pipe = self.tmp / "silent.tsv"
         make_pipe(pipe)
@@ -164,15 +205,81 @@ class ResumeListReadTest(StateCase):
 
     def test_a_resume_refuses_a_fifo_with_a_reader_by_its_descriptor(self) -> None:
         pipe = self.tmp / "silent.tsv"
-        make_pipe(pipe)
-        # A reader on the other end lets the open for writing succeed at once, so
-        # the refusal is the opened descriptor's own check.
-        reader = os.open(pipe, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-        self.addCleanup(os.close, reader)
+        pipe.write_bytes(a_list("Artist/Album"))
+        readers: list[int] = []
+
+        def swap_for_a_pipe() -> None:
+            # A reader on the other end lets the open for writing succeed at once, so
+            # the refusal is the opened descriptor's own check.
+            pipe.unlink()
+            make_pipe(pipe)
+            readers.append(os.open(pipe, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)))
+
         point = sil.parse_resume(a_list("Artist/Album"))
-        with self.assertRaises(OSError) as caught:
-            within_deadline(self, pipe, lambda: sweep_silence.open_list(pipe, point))
+        with swapped_after_the_look(swap_for_a_pipe):
+            with self.assertRaises(OSError) as caught:
+                within_deadline(
+                    self, pipe, lambda: sweep_silence.open_list(pipe, point)
+                )
+        for reader in readers:
+            os.close(reader)
         self.assertIn("not a regular file", str(caught.exception))
+
+
+class ResumeWithoutNoFollowTest(StateCase):
+    """A resume on a host without ``O_NOFOLLOW`` or ``O_NONBLOCK``, as Windows is.
+
+    Both flags are 0 there, so the open alone would follow a link: the look before it
+    refuses a link under the name, and the descriptor's identity one swapped in after.
+    """
+
+    def setUp(self) -> None:
+        """Open every resumed list without the two flags Windows lacks."""
+        super().setUp()
+        patcher = mock.patch.object(sweep_silence, "_RESUME_ONLY_FLAGS", ())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_link_is_refused_and_its_target_never_cut(self) -> None:
+        data = a_list("Artist/Album") + b"an unfinished album's line"
+        link, real = self.linked_to(data, "silent.tsv")
+        point = sil.parse_resume(data)
+        with self.assertRaises(OSError) as caught:
+            sweep_silence.open_list(link, point)
+        self.assertEqual(caught.exception.errno, errno.ELOOP)
+        self.assertEqual(real.read_bytes(), data)
+
+    def test_a_cut_that_fails_closes_the_list_and_raises(self) -> None:
+        data = a_list("Artist/Album")
+        path = self.tmp / "silent.tsv"
+        path.write_bytes(data)
+        failed = OSError(errno.EIO, "invented: the cut failed")
+        with (
+            mock.patch.object(os, "ftruncate", side_effect=failed),
+            mock.patch.object(os, "close", wraps=os.close) as close,
+        ):
+            with self.assertRaises(OSError) as caught:
+                sweep_silence.open_list(path, sil.parse_resume(data))
+        self.assertIs(caught.exception, failed)
+        close.assert_called_once()
+        self.assertEqual(path.read_bytes(), data)
+
+    def test_a_link_swapped_in_after_the_look_is_refused_by_identity(self) -> None:
+        data = a_list("Artist/Album") + b"an unfinished album's line"
+        path = self.tmp / "silent.tsv"
+        path.write_bytes(data)
+        other = self.tmp / "other.tsv"
+        other.write_bytes(data)
+
+        def swap_for_a_link() -> None:
+            path.unlink()
+            path.symlink_to(other)
+
+        point = sil.parse_resume(data)
+        with swapped_after_the_look(swap_for_a_link):
+            with self.assertRaises(lf.SwappedFileError):
+                sweep_silence.open_list(path, point)
+        self.assertEqual(other.read_bytes(), data)
 
 
 class ListBinaryOpenTest(StateCase):
@@ -271,8 +378,12 @@ class ChangedListReadTest(StateCase):
         self.assertIn(f"more than {_SMALL_CAP} bytes", str(caught.exception))
 
 
+@unittest.skipIf(os.name == "nt", "POSIX mode bits are not meaningful on NTFS")
 class StateModeTest(StateCase):
-    """What the sweep writes under the state folder is private; nothing else changes."""
+    """What the sweep writes under the state folder is private; nothing else changes.
+
+    Every check here is of mode bits alone, so the whole class waits for a POSIX host.
+    """
 
     def assert_private(self, path: Path, folders: int) -> None:
         """*path* is 0o600, and so are the *folders* folders above it 0o700."""

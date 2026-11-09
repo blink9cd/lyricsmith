@@ -10,7 +10,6 @@ from silent MP3s under the test's own directory, and every lyric is invented.
 
 from __future__ import annotations
 
-import os
 import shlex
 import signal
 import sys
@@ -23,6 +22,7 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent), str(_HERE.parent / "src")]
 import album  # noqa: E402 - import follows the sys.path bootstrap above
 import cli_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_files  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_manifest  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_outcomes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
@@ -268,7 +268,7 @@ class StripLinkTest(StripCliCase):
         self.assertEqual(target.read_text(encoding="utf-8"), _LRC)
         result = self.main("--album", str(self.album), "--mode", "undo")
         self.assertEqual(result.code, album.EXIT_OK, result.stdout)
-        self.assertEqual(os.readlink(link), str(target))
+        self.assertEqual(lyrics_files.read_link(link), str(target))
         self.assertEqual(target.read_text(encoding="utf-8"), _LRC)
 
 

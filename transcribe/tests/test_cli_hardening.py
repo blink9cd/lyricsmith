@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import at_discover
 import at_engine
 import at_models
 import at_types
@@ -78,6 +79,51 @@ class NotRegularTest(CliCase):
         self.assertEqual(self.calls(), [])
 
 
+class NotRegularPathTest(CliCase):
+    """NotRegularTest's --path refusal, reached on every host: Windows has no FIFO."""
+
+    def test_a_path_that_is_neither_file_nor_folder_is_a_setup_error(self) -> None:
+        # A regular file the check is told is no file: what a FIFO or device answers.
+        named = self.lib / "a" / "one.mp3"
+        real = Path.is_file
+
+        def is_file(path: Path) -> bool:
+            return False if path == named else real(path)
+
+        with mock.patch.object(Path, "is_file", autospec=True, side_effect=is_file):
+            code, _, err = self.run_main("--path", str(named))
+        self.assertEqual(code, EXIT_SETUP)
+        self.assertIn(NOT_REGULAR, err)
+        self.assertEqual(self.calls(), [])
+
+
+class WalkedEntrySeamTest(CliCase):
+    """The walk's linked and not-regular rows, reached on every host through classify.
+
+    Windows has no FIFO and needs a privilege to make a link, so there NotRegularTest
+    and LinkedFileTest skip; these rows are told by the classifier's answer alone.
+    """
+
+    def test_a_linked_and_a_not_regular_entry_get_their_rows(self) -> None:
+        real = transcribe.at_modes.at_discover.classify
+        answers = {
+            self.lib / "a" / "one.mp3": at_discover.Entry.LINKED,
+            self.lib / "b" / "two.mp3": at_discover.Entry.NOT_REGULAR,
+        }
+
+        def classify(path: Path, *, named: bool) -> object:
+            return answers.get(path) or real(path, named=named)
+
+        with mock.patch.object(transcribe.at_modes.at_discover, "classify", classify):
+            code, out, _ = self.run_main("--path", str(self.lib))
+        self.assertEqual(code, EXIT_FILE_FAILED)
+        self.assertIn(f"{LINKED_ROW}       a/one.mp3", out)
+        self.assertIn(f"failed{' ' * 17}b/two.mp3", out)
+        self.assertIn(NOT_REGULAR, out)
+        self.assertIn("linked 1", out)
+        self.assertEqual(self.transcriptions(), [])
+
+
 class VanishedEntryTest(CliCase):
     def test_a_file_that_vanishes_before_its_stat_is_a_failed_row(self) -> None:
         # A file removed between the walk and its stat: its row says why, the run goes on.
@@ -90,7 +136,9 @@ class VanishedEntryTest(CliCase):
             return real(path, named=named)
 
         with mock.patch.object(transcribe.at_modes.at_discover, "classify", classify):
-            code, out, _ = self.run_main("--path", str(self.lib), "--dry-run")
+            code, out, _ = self.run_main(
+                "--path", str(self.lib), "--dry-run", "--whisper-cli", str(self.fake)
+            )
         self.assertEqual(code, EXIT_FILE_FAILED)
         self.assertIn("could not read it: ", out)
         self.assertIn("transcribe             a/one.mp3", out)
@@ -138,27 +186,26 @@ class LinkedFileTest(CliCase):
         self.assertIn("linked 2", out)
 
 
-@unittest.skipIf(sys.platform == "win32", "the fake whisper-cli is a shebang script")
 class AbsolutePathTest(CliCase):
     def test_a_relative_whisper_cli_runs_the_file_the_check_found(self) -> None:
         elsewhere = self.root / "elsewhere"
         elsewhere.mkdir()
-        write_fake_whisper(elsewhere)
-        (self.bin / "whisper-cli").unlink()
+        fake = write_fake_whisper(elsewhere)
+        self.fake.unlink()
         _chdir(self, elsewhere)
         code, _, err = self.run_main(
-            "--path", str(self.lib), "--whisper-cli", "whisper-cli"
+            "--path", str(self.lib), "--whisper-cli", fake.name
         )
         self.assertEqual(code, EXIT_OK, err)
         self.assertEqual(len(self.transcriptions()), 2)
 
     def test_the_setup_check_answers_an_absolute_program(self) -> None:
         here = _chdir(self, self.bin)
-        options = self.options(whisper_cli=Path("whisper-cli"))
+        options = self.options(whisper_cli=Path(self.fake.name))
         setup = transcribe.at_modes.check_setup(
             options, at_engine.run_bounded, read_version=False
         )
-        self.assertEqual(setup.cli, here / "whisper-cli")
+        self.assertEqual(setup.cli, here / self.fake.name)
 
     def test_a_program_found_through_a_relative_path_entry_is_absolute(self) -> None:
         here = _chdir(self, self.root)
@@ -166,7 +213,7 @@ class AbsolutePathTest(CliCase):
         setup = transcribe.at_modes.check_setup(
             self.options(), at_engine.run_bounded, read_version=False
         )
-        self.assertEqual(setup.cli, here / self.bin.name / "whisper-cli")
+        self.assertEqual(setup.cli, here / self.bin.name / self.fake.name)
 
     def test_a_name_starting_with_a_dash_reaches_whisper_cli_absolute(self) -> None:
         (self.lib / "-x.mp3").write_bytes(b"")
@@ -203,4 +250,5 @@ class AbsolutePathTest(CliCase):
             vad_model=self.models / at_models.VAD_MODEL_NAME,
             model_dir=self.models,
             whisper_cli=whisper_cli,
+            whisper_model=at_models.WHISPER_MODEL_NAME,
         )

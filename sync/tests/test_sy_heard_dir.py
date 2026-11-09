@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 import sys
 import unittest
@@ -37,11 +38,24 @@ class ReadStoreTest(sy_cases.IsolatedCase):
         self.assertEqual(listing, hs.Listing((), ()))
         self.assertEqual(problems, [f"--heard-dir is not a folder: {folder}"])
 
-    @unittest.skipIf(sy_cases.IS_ROOT, "root reads a mode-000 folder")
+    @unittest.skipUnless(sy_cases.FOLDER_LOCKS, sy_cases.NO_MODE_000_LOCK)
     def test_a_folder_that_cannot_be_read_is_a_setup_problem(self) -> None:
         folder = self.tmp / "heard"
         folder.mkdir(mode=0o000)
         self.addCleanup(folder.chmod, 0o700)
+        self.assert_unreadable_store(folder)
+
+    def test_a_folder_whose_listing_is_refused_is_a_setup_problem(self) -> None:
+        # The portable twin of the mode-000 test: the listing is refused directly, so
+        # the problem is proven where chmod cannot lock a folder.
+        folder = self.tmp / "heard"
+        folder.mkdir()
+        refused = sy_cases.permission_denied(folder)
+        with mock.patch.object(hd, "list_records", side_effect=refused):
+            self.assert_unreadable_store(folder)
+
+    def assert_unreadable_store(self, folder: Path) -> None:
+        """Reading the store at *folder* gives one problem: it cannot be read."""
         _, problems = hd.read_store(folder)
         (problem,) = problems
         self.assertTrue(problem.startswith(f"--heard-dir {folder}: cannot be read"))
@@ -118,11 +132,30 @@ class CleanTest(sy_cases.IsolatedCase):
             (f"--heard-dir: could not remove the record of {self.gone}: locked",),
         )
 
-    @unittest.skipIf(sy_cases.IS_ROOT, "root reads a mode-000 folder")
+    @unittest.skipUnless(sy_cases.FOLDER_LOCKS, sy_cases.NO_MODE_000_LOCK)
     def test_a_track_that_cannot_be_looked_at_is_not_gone(self) -> None:
         hidden = self.tmp / "Hidden"
         hidden.mkdir(mode=0o000)
         self.addCleanup(hidden.chmod, 0o700)
+        self.assert_kept_while_hidden(hidden)
+
+    def test_a_track_whose_look_is_refused_is_not_gone(self) -> None:
+        # The portable twin of the mode-000 test: looking at the track is refused
+        # directly, so its record is proven kept where chmod cannot lock a folder.
+        hidden = self.tmp / "Hidden"
+        hidden.mkdir()
+        real_lstat = os.lstat
+
+        def refuse_hidden(path: Path) -> os.stat_result:
+            if Path(path).parent == hidden:
+                raise sy_cases.permission_denied(Path(path))
+            return real_lstat(path)
+
+        with mock.patch.object(os, "lstat", refuse_hidden):
+            self.assert_kept_while_hidden(hidden)
+
+    def assert_kept_while_hidden(self, hidden: Path) -> None:
+        """A record of a track in *hidden*, which cannot be looked at, survives a clean."""
         track = hidden / "05 E.mp3"
         hs.write_record(self.folder, hs.HeardRecord(track, FINGERPRINT, "heard"))
         listing, _ = hd.read_store(self.folder)
@@ -164,15 +197,20 @@ class KeeperTest(sy_cases.IsolatedCase):
             self.audio, Outcome.NOT_SUNG, ("0.04 of ...",), transcript="heard"
         )
 
-    def test_a_text_not_sung_keeps_its_transcript_private(self) -> None:
+    def test_a_text_not_sung_keeps_its_transcript(self) -> None:
         keeper = hd.Keeper(self.folder, ())
         self.assertEqual(keeper.keep(self.planned, self.unsung), self.unsung)
         self.assertEqual(
             hs.read_record(self.folder, self.audio),
             hs.HeardRecord(self.audio, FINGERPRINT, "heard"),
         )
+        self.assertEqual((keeper.added, keeper.failed), (1, False))
+
+    @unittest.skipIf(os.name == "nt", sy_cases.NO_POSIX_MODES)
+    def test_a_kept_transcript_is_private(self) -> None:
+        hd.Keeper(self.folder, ()).keep(self.planned, self.unsung)
         mode = stat.S_IMODE(hs.record_path(self.folder, self.audio).stat().st_mode)
-        self.assertEqual((mode, keeper.added, keeper.failed), (0o600, 1, False))
+        self.assertEqual(mode, 0o600)
 
     def test_a_timed_track_loses_its_record(self) -> None:
         keeper = hd.Keeper(self.folder, ())

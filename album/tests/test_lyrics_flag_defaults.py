@@ -121,7 +121,6 @@ class KeptValueTest(fixtures.IsolatedCase):
     def test_the_prune_is_given_dry_run_false(self) -> None:
         with (
             mock.patch.object(lyrics_album, "resolve_album", return_value=Path("a")),
-            mock.patch.object(lyrics_prune_mode, "refuse_unsafe_delete"),
             mock.patch.object(
                 lyrics_prune_mode.lyrics_prune, "prune_album", side_effect=_Stop
             ) as prune,
@@ -133,7 +132,6 @@ class KeptValueTest(fixtures.IsolatedCase):
     def test_the_accept_is_given_apply_false(self) -> None:
         with (
             mock.patch.object(lyrics_album, "resolve_album", return_value=Path("a")),
-            mock.patch.object(lyrics_prune_mode, "refuse_unsafe_delete"),
             mock.patch.object(
                 lyrics_accept_mode, "accept_album", side_effect=_Stop
             ) as accept,

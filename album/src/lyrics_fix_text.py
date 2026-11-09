@@ -22,7 +22,18 @@ another track's text: no provider is named that did not give it, the provider th
 gave the wrong text no longer decides the track, so a later compare reads it as
 unrecorded, as the sibling was, and the outcome names the sibling it came from.
 
-Pure apart from `sibling_texts` and `stored_text`, which read the album's files.
+**Provider-timed texts** are taken too. `text_of` reads a track's untimed
+text alone first, exactly as above, and only a track holding none is read by its timed
+``.lrc`` (`lyrics_compare.timed_lyrics`): the text sync's hearing judged. One whose
+``.lrc`` a machine labeled is sync's own, never a fix's (`fix_skip_reason`); the rest
+are judged by `skip_reason` as an untimed text is. Timing held only in the frames is
+not read, so such a track holds no text a fix takes. `sibling_texts` keeps the album's
+timed texts apart (`SiblingTexts.timed`), each as its words alone, since a sibling's
+stamps belong to its own audio: a timed track draws them after the untimed ones
+(`SiblingTexts.every_besides`), and an untimed track never draws them, so the untimed
+fix cannot move.
+
+Pure apart from `sibling_texts` and `text_of`, which read the album's files.
 """
 
 from __future__ import annotations
@@ -31,11 +42,18 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from lyrics_compare import judged_lyrics
+from lyrics_compare import judged_lyrics, timed_lyrics
 from lyrics_heard import judge_words, little_heard, not_sung, text_fingerprint
 from lyrics_heard import words_of_text as words_of_text
 from lyrics_heard_store import HeardRecord
-from lyrics_model import Lyrics, LyricsError, Source
+from lyrics_model import (
+    Lyrics,
+    LyricsError,
+    PlainLyrics,
+    Source,
+    SyncedLyrics,
+    TrackTags,
+)
 from lyrics_provenance import SourceRecords
 from lyrics_stages import Stages
 
@@ -44,6 +62,7 @@ SKIP_NOT_UNTIMED = "its lyrics are not untimed only"
 SKIP_CHANGED = "its text changed since it was heard"
 SKIP_LITTLE = "too little heard to judge"
 SKIP_SUNG = "the transcript sings its text"
+SKIP_MACHINE_TIMED = "its timed lyrics are machine made"
 #: What a sibling's text is written under when no run recorded where it came from.
 UNRECORDED_SIBLING = Source.ALBUM_TEXT
 
@@ -73,21 +92,61 @@ class SiblingTexts:
 
     texts: tuple[Candidate, ...]
     unreadable: tuple[str, ...]
+    #: The album's timed ``.lrc`` texts, each as its words alone, never its stamps.
+    timed: tuple[Candidate, ...] = ()
 
     def besides(self, track: str) -> tuple[Candidate, ...]:
-        """Every text but the one *track* holds."""
+        """Every untimed text but the one *track* holds."""
         return tuple(text for text in self.texts if text.origin != track)
 
+    def every_besides(self, track: str) -> tuple[Candidate, ...]:
+        """Every text but *track*'s, untimed then timed: a timed track's candidates."""
+        timed = tuple(text for text in self.timed if text.origin != track)
+        return self.besides(track) + timed
 
-def stored_text(stages: Stages, album: Path, path: Path, lang: str) -> Lyrics | None:
-    """The untimed text the track at *path* holds alone, None when it holds none.
 
-    Read as compare reads it (`judged_lyrics`): its sidecar's words, else its served
-    untimed frame; a track holding timed lyrics, or none, holds none. Raises what reading
-    its tags or its sidecars raises.
+@dataclass(frozen=True)
+class StoredText:
+    """The text a fix judges a track by: untimed alone, or a timed ``.lrc``'s.
+
+    *lyrics* is None when the track holds neither. *label* is a timed ``.lrc``'s machine
+    label (`lyrics_sidecar.machine_label`), None for a provider's.
     """
-    tags = stages.read_tags(path)
-    return judged_lyrics(stages, album, path, tags, lang)
+
+    lyrics: Lyrics | None
+    label: Source | None = None
+
+    @property
+    def timed(self) -> bool:
+        """True when the text is a timed ``.lrc``'s."""
+        return isinstance(self.lyrics, SyncedLyrics)
+
+
+def text_of(
+    stages: Stages, album: Path, path: Path, tags: TrackTags, lang: str
+) -> StoredText:
+    """The text a fix judges the track at *path* by, its *tags* read already.
+
+    Its untimed text alone first, read as compare reads it (`judged_lyrics`): its
+    sidecar's words, else its served untimed frame. Else its timed ``.lrc``'s
+    (`timed_lyrics`). Raises what reading its sidecars raises.
+    """
+    untimed = judged_lyrics(stages, album, path, tags, lang)
+    if untimed is not None:
+        return StoredText(untimed)
+    timed = timed_lyrics(stages, album, path)
+    return StoredText(None) if timed is None else StoredText(*timed)
+
+
+def fix_skip_reason(stored: StoredText, record: HeardRecord) -> str | None:
+    """Why a fix leaves alone a track holding *stored*; None when it takes it.
+
+    A timed ``.lrc`` a machine labeled is sync's own, never a fix's; the rest are
+    judged by `skip_reason`.
+    """
+    if stored.label is not None:
+        return SKIP_MACHINE_TIMED
+    return skip_reason(stored.lyrics, record)
 
 
 def skip_reason(refused: Lyrics | None, record: HeardRecord) -> str | None:
@@ -116,26 +175,36 @@ def sibling_texts(
     lang: str,
     sources: SourceRecords,
 ) -> SiblingTexts:
-    """Every untimed text the album's *tracks* store, and the tracks that could not be read.
+    """Every text the album's *tracks* store, and the tracks that could not be read.
 
     Each keeps the provider *sources* records for its track, else `UNRECORDED_SIBLING`.
-    A track holding timed lyrics, or none, gives no text.
+    Each is read as `text_of` reads it: an untimed one is kept in `SiblingTexts.texts`,
+    a timed ``.lrc``'s, machine labeled or not, in `SiblingTexts.timed` as its words
+    alone. A track holding none, or timing in its frames alone, gives no text.
     """
     texts: list[Candidate] = []
+    timed: list[Candidate] = []
     unreadable: list[str] = []
     for path in tracks:
         rel = path.relative_to(album).as_posix()
         try:
-            lyrics = stored_text(stages, album, path, lang)
+            tags = stages.read_tags(path)
+            stored = text_of(stages, album, path, tags, lang)
         # A sibling that cannot be read is no candidate, and a fix that finds no sung
         # text then removes nothing: the unread text might have been the one.
         except Exception:  # noqa: BLE001 - any failure reading a sibling is reported
             unreadable.append(rel)
             continue
-        if lyrics is not None:
-            source = sources.source_of(rel) or UNRECORDED_SIBLING
-            texts.append(Candidate(lyrics, source, rel))
-    return SiblingTexts(tuple(texts), tuple(unreadable))
+        if stored.lyrics is None:
+            continue
+        source = sources.source_of(rel) or UNRECORDED_SIBLING
+        if stored.timed:
+            # Its words only: its stamps belong to its own audio, never this track's.
+            words_only = PlainLyrics(stored.lyrics.plain_text())
+            timed.append(Candidate(words_only, source, rel))
+        else:
+            texts.append(Candidate(stored.lyrics, source, rel))
+    return SiblingTexts(tuple(texts), tuple(unreadable), tuple(timed))
 
 
 def first_sung(

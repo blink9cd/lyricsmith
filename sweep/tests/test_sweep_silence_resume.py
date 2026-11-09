@@ -141,8 +141,8 @@ class InterruptTest(ResumeCase):
         resume = result.stdout.splitlines()[-1]
         self.assertEqual(
             resume,
-            f"resume: sweep.py --mode silence --library {self.library} "
-            f"--resume {listed}",
+            f"resume: sweep.py --mode silence --library {shlex.quote(str(self.library))} "
+            f"--resume {shlex.quote(str(listed))}",
         )
         # The printed command, run, finishes the pass in the same list.
         self.ffmpeg.interrupt = None

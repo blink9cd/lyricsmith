@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import os
 import re
+from os import lstat  # named here, so a test can hand the guards a Windows-shaped look
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 from lyrics_errors import AlbumUnusableError, NoRunError
+from lyrics_files import is_link_entry
 
 #: The hidden folder under an album that holds the lock and each run's folder.
 RUN_FOLDER_NAME: Final = ".lyricsmith"
@@ -107,11 +109,29 @@ RUN_ID_PATTERN: Final = run_id_regex(RUN_ID_FORMAT)
 
 
 class RunFolderLinkError(AlbumUnusableError):
-    """The album's run folder, or the lock in it, is a symbolic link."""
+    """The album's run folder, or the lock in it, is a symbolic link or a junction."""
+
+
+def is_link_or_junction(path: Path) -> bool:
+    """Whether *path* is a symbolic link or a Windows junction, read without following.
+
+    The reads' own rule, `lyrics_files.is_link_entry`: a symbolic link on any host, or
+    on Windows any name surrogate, a junction or a mount point among them. A junction
+    is no symbolic link to `Path.is_symlink`, and `Path.is_dir` follows it, so a guard
+    testing the first alone takes a junction for a real folder and acts through it,
+    outside the album. A missing path is no link; any other failed look is raised.
+    """
+    try:
+        found = lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return is_link_entry(found)
 
 
 def refuse_linked_run_folder(album: Path) -> None:
     """Raise `RunFolderLinkError` when *album*'s run folder, or its lock, is a link.
+
+    A link here is a symbolic link or a junction (`is_link_or_junction`).
 
     The folder and the lock are created by following the name (a folder made with
     ``exist_ok``, a lock opened with ``O_CREAT``), so a link at either would reach
@@ -120,16 +140,17 @@ def refuse_linked_run_folder(album: Path) -> None:
     """
     folder = album / RUN_FOLDER_NAME
     for path in (folder, folder / LOCK_NAME):
-        if path.is_symlink():
+        if is_link_or_junction(path):
             raise RunFolderLinkError(
-                f"{path} is a symbolic link; the run folder must be inside the album"
+                f"{path} is a symbolic link or junction; the run folder must be "
+                "inside the album"
             )
 
 
 def run_parent(album: Path) -> Path | None:
-    """*album*'s run folder when it exists and is no link, else None."""
+    """*album*'s run folder when it exists and is no link or junction, else None."""
     folder = album / RUN_FOLDER_NAME
-    return folder if folder.is_dir() and not folder.is_symlink() else None
+    return folder if folder.is_dir() and not is_link_or_junction(folder) else None
 
 
 def manifest_present(run_dir: Path) -> bool:
@@ -153,16 +174,16 @@ def _is_run(entry: Path) -> bool:
     """Whether *entry* is a run: a real folder, never a link, holding a manifest.
 
     A folder with no manifest is a backup that never finished, which changed nothing,
-    so it is not a run to undo or check. Nor is a symbolic link under a run id's name,
-    known by its own entry, never followed: a run created its folder there, so a link
-    is something else, and reading through it would judge a run folder outside the
-    album. Any entry named `MANIFEST_NAME` counts, any non-regular file (a folder, a
-    FIFO pipe) included: that run is then refused when its manifest is read, at once
-    and failing closed. A folder whose manifest cannot be told is a run, as prune keeps
-    one: its reader then fails on it and says why, where passing over it would let a
-    plain undo land on an older run.
+    so it is not a run to undo or check. Nor is a symbolic link or a junction under a
+    run id's name, known by its own entry, never followed: a run created its folder
+    there, so a link is something else, and reading through it would judge a run
+    folder outside the album. Any entry named `MANIFEST_NAME` counts, any non-regular
+    file (a folder, a FIFO pipe) included: that run is then refused when its manifest
+    is read, at once and failing closed. A folder whose manifest cannot be told is a
+    run, as prune keeps one: its reader then fails on it and says why, where passing
+    over it would let a plain undo land on an older run.
     """
-    if entry.is_symlink() or not entry.is_dir():
+    if is_link_or_junction(entry) or not entry.is_dir():
         return False
     try:
         return manifest_present(entry)

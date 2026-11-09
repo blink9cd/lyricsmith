@@ -124,7 +124,14 @@ class EmbedTest(sy_cases.IsolatedCase):
         result = sy_embed.embed_result(self.tmp, child)
         self.assertEqual((result.code, result.ok), (EmbedStop.NOT_STARTED, False))
 
+    def play_host(self, *, can_forward_signals: bool) -> None:
+        """Run this test as a host that can, or cannot, send a child Ctrl-C's signal."""
+        self.enterContext(
+            mock.patch.object(sweep_child, "CAN_FORWARD_SIGNALS", can_forward_signals)
+        )
+
     def test_past_the_bound_album_gets_sigint_before_any_kill(self) -> None:
+        self.play_host(can_forward_signals=True)
         timeout = subprocess.TimeoutExpired("album", 1.0)
         process = ScriptedProcess([timeout, timeout, KILLED])
 
@@ -136,6 +143,7 @@ class EmbedTest(sy_cases.IsolatedCase):
         self.assertIs(sy_embed.embed_result(self.tmp, child).code, EmbedStop.TIMED_OUT)
 
     def test_a_child_that_stops_on_sigint_is_never_killed(self) -> None:
+        self.play_host(can_forward_signals=True)
         timeout = subprocess.TimeoutExpired("album", 1.0)
         process = ScriptedProcess([timeout, 130])
 
@@ -144,6 +152,22 @@ class EmbedTest(sy_cases.IsolatedCase):
 
         sy_embed.run_album(["album"], 1.0, popen=popen)
         self.assertEqual(process.events, ["SIGINT"])
+
+    def test_where_sigint_cannot_be_sent_album_is_terminated_and_timed_out(
+        self,
+    ) -> None:
+        # Windows: the child is sent SIGTERM; its exit 1 is recorded as the stop's 130.
+        self.play_host(can_forward_signals=False)
+        timeout = subprocess.TimeoutExpired("album", 1.0)
+        process = ScriptedProcess([timeout, 1])
+
+        def popen(argv: Sequence[str], **_kwargs: object) -> ScriptedProcess:
+            return process
+
+        child = sy_embed.run_album(["album"], 1.0, popen=popen)
+        self.assertEqual(process.events, ["SIGTERM"])
+        self.assertEqual((child.exit_code, child.timed_out), (130, True))
+        self.assertIs(sy_embed.embed_result(self.tmp, child).code, EmbedStop.TIMED_OUT)
 
     def test_an_interrupt_stops_the_remaining_folders(self) -> None:
         folders = (self.tmp / "One", self.tmp / "Two", self.tmp / "Three")

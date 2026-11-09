@@ -7,8 +7,6 @@ import os
 import shutil
 import socket
 import subprocess
-import sys
-import unittest
 import urllib.request
 from pathlib import Path
 
@@ -31,9 +29,6 @@ class IsolationTest(IsolatedCase):
         with socket.socket() as raw, self.assertRaises(AssertionError):
             raw.connect(("192.0.2.1", 443))
 
-    @unittest.skipIf(
-        sys.platform == "win32", "the fake whisper-cli is a shebang script"
-    )
     def test_fake_whisper_answers_version_and_logs(self) -> None:
         fake = write_fake_whisper(self.bin)
         self.assertEqual(shutil.which("whisper-cli"), str(fake))

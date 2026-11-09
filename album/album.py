@@ -180,6 +180,18 @@ def _add_album_options(parser: argparse.ArgumentParser) -> None:
         "--heard-dir wrote, one record per track whose untimed text it found not "
         "sung; the fix only reads it, and keeps every record.",
     )
+    parser.add_argument(
+        "--hold-for-genius",
+        type=Path,
+        default=None,
+        help="fix-text only: leave Genius unasked, as --no-genius does; a track "
+        "whose wrong "
+        "text every source asked answered without singing is kept, its removal "
+        "withheld as held for Genius, and its absolute path written to this file, "
+        "one per line, as --changed-list writes; refused with --no-genius, and "
+        "when it names the --changed-list file; no list, and such a text removed, "
+        "when omitted.",
+    )
 
 
 def _add_run_options(parser: argparse.ArgumentParser) -> None:

@@ -27,6 +27,9 @@ mkdir -p "library/The Invented Quartet/Second Album" \
   "library/The Made-Up Trio/Untimed Album"
 cp "library/The Invented Quartet/Sample Album/01 The Keeper Counts."* \
   "library/The Invented Quartet/Second Album/"
+python "$TOOLS/album/album.py" \
+  --album "library/The Invented Quartet/Second Album" --offline
+rm -r "library/The Invented Quartet/Second Album/.lyricsmith"
 cp "library/The Invented Quartet/Sample Album/02 Orchard Wall.mp3" \
   "library/The Invented Quartet/Sample Album/03 The Mill Bell.mp3" \
   "library/The Made-Up Trio/Untimed Album/"
@@ -41,8 +44,13 @@ Two artists, three albums:
 | Album | Tracks |
 | --- | --- |
 | `The Invented Quartet/Sample Album` | one synced (its `.lrc`), one untimed stand-up track (its `.txt`), one whose `.txt` holds only the placeholder `[au:instrumental]`, three with no lyrics, one of them stand-up |
-| `The Invented Quartet/Second Album` | one synced (its `.lrc`): every track synced, so no run visits it |
+| `The Invented Quartet/Second Album` | one synced (its `.lrc`, already embedded in its frames): every track synced, so no run visits it |
 | `The Made-Up Trio/Untimed Album` | two untimed (their `.txt`) |
+
+The build runs `album` offline on `Second Album` once, so the track's frames hold its
+`.lrc`, then removes that run's `.lyricsmith` folder: the album looks like one
+embedded long ago. Without the embed, a timed `.lrc` beside frames holding no timed
+lyrics owes one, and the survey would visit the album for it.
 
 Each `sweep` command below sets `XDG_STATE_HOME` for itself alone, to a `state`
 folder beside the library, so the run's ledger stays there rather than in your own state
@@ -62,6 +70,7 @@ The Invented Quartet/Sample Album       1        2     3           0
 The Invented Quartet/Second Album       1        0     0           0
 The Made-Up Trio/Untimed Album          0        2     0           0
 total (3 albums)                        2        4     3           0
+unembedded: The Invented Quartet/Sample Album/01 The Keeper Counts.mp3 (unlabeled)
 albums a run would visit: 2
   The Invented Quartet/Sample Album
   The Made-Up Trio/Untimed Album
@@ -70,6 +79,10 @@ note: an album whose lyrics were embedded by other tools may have each track
   written from a timed sidecar keep blank lines those tools left out. In a
   library kept in a synced cloud folder, that is one upload per track.
 ```
+
+The `unembedded:` line names the synced track whose timed `.lrc` its frames do not hold
+yet: no machine labeled the file, so it shows as `unlabeled`, and a run embeds it. Its
+album is visited for its other tracks anyway.
 
 Exit code `0`. It wrote nothing: there is no `.lyricsmith/` folder in any album, and no
 `state/` folder beside the library yet.

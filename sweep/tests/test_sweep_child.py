@@ -5,12 +5,17 @@ the process boundary itself is exercised: an exit code passed through, the per-a
 bound stopping a child with Ctrl-C's own signal, and a child that ignores that signal
 killed. Only the parent's own Ctrl-C is played by a fake process, since a real one would
 interrupt the test run.
+
+The bound's stop described here is the POSIX one, Ctrl-C's own signal, so the cases that
+reach it play a host that sends signals (`child_fixtures.HostCase`) on every host; the
+real children it is sent to run only where a real `Popen` can send it. The Windows stop
+is `test_sweep_child_stop`'s.
 """
 
 from __future__ import annotations
 
-import subprocess
 import sys
+import unittest
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -21,6 +26,7 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 
 import sweep  # noqa: E402 - its bootstrap puts src/ and the album tool on the path
 import album  # noqa: E402 - import follows the sys.path bootstrap above
+import child_fixtures as cf  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_child  # noqa: E402 - import follows the sys.path bootstrap above
@@ -64,8 +70,9 @@ from lyrics_youtube_provider import (  # noqa: E402 - import follows the sys.pat
 
 #: A bound no child script here comes near, so only the bound under test ever fires.
 _GENEROUS_S = 60.0
-#: The pid the fake processes below report.
-_PID = 4242
+#: Whether a real `Popen` here can send Ctrl-C's signal: Windows' refuses SIGINT.
+_HOST_SENDS_SIGINT = sys.platform != "win32"
+_NO_SIGINT = "a real Popen cannot send SIGINT here (Windows)"
 #: A child that stops at Ctrl-C's signal with the shell's interrupted code.
 _STOPS_ON_SIGINT = (
     "import signal, sys, time\n"
@@ -172,17 +179,19 @@ class ArgvTest(sf.IsolatedCase):
         )
 
 
-class RunChildTest(sf.IsolatedCase):
-    """`run_child` against real child interpreters."""
+class RunChildTest(cf.HostCase):
+    """`run_child` against real child interpreters, on a host that sends signals."""
 
     def test_the_exit_code_passes_through(self) -> None:
         result = sweep_child.run_child(_python("raise SystemExit(3)"), _GENEROUS_S)
         self.assertEqual(result, sweep_child.ChildResult(3))
 
+    @unittest.skipUnless(_HOST_SENDS_SIGINT, _NO_SIGINT)
     def test_a_child_past_its_bound_is_stopped_with_ctrl_c_and_recorded(self) -> None:
         result = sweep_child.run_child(_python(_STOPS_ON_SIGINT), 1.0)
         self.assertEqual(result, sweep_child.ChildResult(130, timed_out=True))
 
+    @unittest.skipUnless(_HOST_SENDS_SIGINT, _NO_SIGINT)
     def test_a_child_that_ignores_ctrl_c_is_killed_after_the_grace(self) -> None:
         result = sweep_child.run_child(_python(_IGNORES_SIGINT), 0.5, stop_grace_s=0.5)
         self.assertTrue(result.timed_out)
@@ -251,7 +260,7 @@ class _InterruptedProcess:
     """A process whose first wait is cut short by the parent's Ctrl-C."""
 
     code: int = 130
-    pid: int = _PID
+    pid: int = cf.PID
     waits: list[float | None] = field(default_factory=list)
 
     def wait(self, timeout: float | None = None) -> int:
@@ -284,43 +293,14 @@ class InterruptTest(sf.IsolatedCase):
         self.assertEqual(process.waits, [_GENEROUS_S, sweep_child.STOP_GRACE_S])
 
 
-@dataclass
-class _ScriptedProcess:
-    """A process whose waits play *steps* in order: an exit code, or an exception."""
+class SecondInterruptTest(cf.HostCase):
+    """A second Ctrl-C, or a child that will not die, never leaves the album unrecorded.
 
-    steps: list[int | BaseException]
-    pid: int = _PID
-    waits: list[float | None] = field(default_factory=list)
-    signals: list[int] = field(default_factory=list)
-    kills: int = 0
+    Played on a host that sends signals; the Windows stop is `test_sweep_child_stop`'s.
+    """
 
-    def wait(self, timeout: float | None = None) -> int:
-        """Play the next step: return its exit code, or raise its exception."""
-        self.waits.append(timeout)
-        step = self.steps.pop(0)
-        if isinstance(step, BaseException):
-            raise step
-        return step
-
-    def send_signal(self, signal: int) -> None:
-        """Record *signal*."""
-        self.signals.append(signal)
-
-    def kill(self) -> None:
-        """Record the kill."""
-        self.kills += 1
-
-
-def _expired() -> subprocess.TimeoutExpired:
-    """The exception a bounded wait raises when its bound passes."""
-    return subprocess.TimeoutExpired("child", 0.0)
-
-
-class SecondInterruptTest(sf.IsolatedCase):
-    """A second Ctrl-C, or a child that will not die, never leaves the album unrecorded."""
-
-    def _run(self, process: _ScriptedProcess) -> sweep_child.ChildResult:
-        def popen(argv: Sequence[str], **_kwargs: object) -> _ScriptedProcess:
+    def _run(self, process: cf.ScriptedProcess) -> sweep_child.ChildResult:
+        def popen(argv: Sequence[str], **_kwargs: object) -> cf.ScriptedProcess:
             return process
 
         return sweep_child.run_child(
@@ -330,14 +310,14 @@ class SecondInterruptTest(sf.IsolatedCase):
     def test_a_second_ctrl_c_in_the_grace_kills_the_child_and_waits_again(
         self,
     ) -> None:
-        process = _ScriptedProcess([KeyboardInterrupt(), KeyboardInterrupt(), -9])
+        process = cf.ScriptedProcess([KeyboardInterrupt(), KeyboardInterrupt(), -9])
         result = self._run(process)
         self.assertEqual(result, sweep_child.ChildResult(-9, interrupted=True))
         self.assertEqual(process.kills, 1)
         self.assertEqual(process.waits, [_GENEROUS_S, 5.0, 3.0])
 
     def test_ctrl_c_in_the_grace_after_the_bound_is_both(self) -> None:
-        process = _ScriptedProcess([_expired(), KeyboardInterrupt(), -9])
+        process = cf.ScriptedProcess([cf.expired(), KeyboardInterrupt(), -9])
         result = self._run(process)
         self.assertEqual(
             result, sweep_child.ChildResult(-9, timed_out=True, interrupted=True)
@@ -345,18 +325,18 @@ class SecondInterruptTest(sf.IsolatedCase):
         self.assertEqual(process.kills, 1)
 
     def test_a_child_that_outlives_its_kill_is_abandoned_by_pid(self) -> None:
-        process = _ScriptedProcess([KeyboardInterrupt(), _expired(), _expired()])
+        process = cf.ScriptedProcess([KeyboardInterrupt(), cf.expired(), cf.expired()])
         result = self._run(process)
         self.assertEqual(
-            result, sweep_child.ChildResult(None, interrupted=True, pid=_PID)
+            result, sweep_child.ChildResult(None, interrupted=True, pid=cf.PID)
         )
 
     def test_a_ctrl_c_during_the_kill_wait_abandons_the_child_by_pid(self) -> None:
-        process = _ScriptedProcess([_expired(), _expired(), KeyboardInterrupt()])
+        process = cf.ScriptedProcess([cf.expired(), cf.expired(), KeyboardInterrupt()])
         result = self._run(process)
         self.assertEqual(
             result,
-            sweep_child.ChildResult(None, timed_out=True, interrupted=True, pid=_PID),
+            sweep_child.ChildResult(None, timed_out=True, interrupted=True, pid=cf.PID),
         )
 
 

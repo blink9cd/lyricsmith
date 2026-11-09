@@ -24,7 +24,6 @@ _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 
 import sweep  # noqa: E402 - import follows the sys.path bootstrap above
-import lyrics_prune_mode  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_manifest  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import run_lock  # noqa: E402 - import follows the sys.path bootstrap above
@@ -33,6 +32,7 @@ import sweep_ledger as sl  # noqa: E402 - import follows the sys.path bootstrap 
 import sweep_lock  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_accept_records as lar  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_album  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_delete  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_model import LyricsError  # noqa: E402 - follows the bootstrap
 from lyrics_wiring import real_wiring  # noqa: E402 - follows the bootstrap
 
@@ -426,7 +426,7 @@ class ReportWriteTest(AcceptCase):
 
 
 class StartTest(AcceptCase):
-    """What accept starts with: the real album seams, and the rmtree guard."""
+    """What accept starts with: the real album seams, on a link-proof rmtree or not."""
 
     def test_no_seams_given_runs_the_album_tools_own(self) -> None:
         album = run_album(self.library, "A")
@@ -439,14 +439,19 @@ class StartTest(AcceptCase):
         self.assertFalse(os.path.lexists(album / lr.RUN_FOLDER_NAME))
         self.assertEqual(len(self.records()), 1)
 
-    def test_an_rmtree_that_follows_links_is_exit_2_and_nothing_is_touched(
+    def test_an_rmtree_that_follows_links_still_accepts_through_the_walk(
         self,
     ) -> None:
-        run_album(self.library, "A")
-        before = tree_hashes(self.library)
-        rmtree = lyrics_prune_mode.shutil.rmtree
-        with mock.patch.object(rmtree, "avoids_symlink_attacks", False):
+        # Every Windows Python's: album's own walk deletes instead, so accept runs.
+        album = run_album(self.library, "A")
+        walk = lyrics_delete.delete_tree
+        with (
+            mock.patch.object(shutil.rmtree, "avoids_symlink_attacks", False),
+            mock.patch.object(lyrics_delete, "delete_tree", wraps=walk) as walked,
+        ):
             result = self.accept("--apply")
-        self.assertEqual(result.code, 2)
-        self.assertIn("accept will not run", result.stderr)
-        self.assertEqual(tree_hashes(self.library), before)
+        self.assertEqual(result.code, 0, result.stderr)
+        self.assertNotIn("will not run", result.stderr)
+        walked.assert_called_once()
+        self.assertFalse(os.path.lexists(album / lr.RUN_FOLDER_NAME))
+        self.assertEqual(len(self.records()), 1)

@@ -15,12 +15,13 @@ import sys
 import unittest
 from collections import Counter
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
+import lyrics_files  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_sidecar  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_slots  # noqa: E402 - import follows the sys.path bootstrap above
@@ -35,6 +36,8 @@ _FRAMES = (
     tb.uslt("A verse kept in the tag\n"),
     tb.sylt((1000, "A timed line"), (4000, "and another")),
 )
+#: Windows' extended-length prefix, as its readlink puts it on an absolute target.
+_EXTENDED = "\\\\?\\"
 #: A character device's mode, which an unprivileged test cannot create on disk.
 _DEVICE_MODE = stat.S_IFCHR | 0o644
 
@@ -70,7 +73,7 @@ class LinkedSidecarTest(rb.UndoCase):
         self.assertEqual(shared.read_text(encoding="utf-8"), _TXT)
         report = self.undo()
         self.assert_statuses(report, lr.UndoStatus.UNDONE)
-        self.assertEqual(os.readlink(slot), str(shared))
+        self.assertEqual(lyrics_files.read_link(slot), str(shared))
         self.assertEqual(shared.read_text(encoding="utf-8"), _TXT)
         self.assertEqual(report.tracks[0].displaced, ())
 
@@ -78,12 +81,44 @@ class LinkedSidecarTest(rb.UndoCase):
         self.shared("shared.lrc", _LRC)
         mp3 = self.track("01.mp3", (tb.uslt(_TXT),))
         slot = mp3.with_suffix(".lrc")
-        slot.symlink_to("../shared.lrc")
+        # Joined with the host's separator: Windows reads a relative target written
+        # with ``/`` as no path at all, so such a link reaches nothing there.
+        relative = os.path.join("..", "shared.lrc")
+        slot.symlink_to(relative)
         self.back_up(mp3)
         lyrics_strip.strip_track(mp3)
         self.undo()
-        self.assertEqual(os.readlink(slot), "../shared.lrc")
+        self.assertEqual(os.readlink(slot), relative)
         self.assertEqual(slot.read_text(encoding="utf-8"), _LRC)
+
+    def test_a_drive_link_windows_reads_back_extended_is_recorded_as_made(
+        self,
+    ) -> None:
+        # Windows' readlink gives an absolute target back as ``\\?\C:\...``; the
+        # backup records it, and undo puts it back, as the link was made.
+        made = str(PureWindowsPath("C:/", "Music", "shared.lrc"))
+        mp3 = self.track("01.mp3", (tb.uslt(_TXT),))
+        slot = mp3.with_suffix(".lrc")
+        slot.symlink_to(made)
+        real = os.readlink
+
+        def windows_readlink(path: str | os.PathLike[str]) -> str:
+            # Prefixed as Windows' readlink prefixes it; on Windows it already is.
+            raw = real(path)
+            extended = PureWindowsPath(raw).drive and not raw.startswith(_EXTENDED)
+            return _EXTENDED + raw if extended else raw
+
+        self.enterContext(mock.patch.object(lyrics_files, "LINKS_READ_EXTENDED", True))
+        self.enterContext(mock.patch.object(os, "readlink", windows_readlink))
+        before = self.back_up(mp3).tracks[0].before
+        assert before is not None
+        self.assertEqual(before.sidecars, (lr.SidecarCopy("01.lrc", None, made),))
+        lyrics_strip.strip_track(mp3)
+        report = self.undo()
+        self.assert_statuses(report, lr.UndoStatus.UNDONE)
+        # Off Windows the link's own stored text, exactly; on Windows, whose readlink
+        # always prefixes it, that text less the prefix.
+        self.assertEqual(lyrics_files.plain_target(real(slot)), made)
 
     def test_a_link_an_untouched_track_keeps_is_left_alone(self) -> None:
         shared = self.shared("shared.txt", _TXT)
@@ -100,7 +135,7 @@ class LinkedSidecarTest(rb.UndoCase):
         report = self.undo()
         self.assert_statuses(report, lr.UndoStatus.UNDONE)
         self.assertEqual(slot.lstat().st_ino, inode)
-        self.assertEqual(os.readlink(slot), str(shared))
+        self.assertEqual(lyrics_files.read_link(slot), str(shared))
 
     def test_a_file_put_where_a_link_was_is_displaced_for_the_link(self) -> None:
         shared = self.shared("shared.txt", _TXT)
@@ -111,7 +146,7 @@ class LinkedSidecarTest(rb.UndoCase):
         slot.unlink()
         slot.write_bytes(_HAND)
         report = self.undo()
-        self.assertEqual(os.readlink(slot), str(shared))
+        self.assertEqual(lyrics_files.read_link(slot), str(shared))
         kept = lr.run_folder(self.album, manifest.run_id) / "undo" / "01.txt"
         self.assertEqual(kept.read_bytes(), _HAND)
         self.assertEqual(len(report.tracks[0].displaced), 1)
@@ -126,7 +161,7 @@ class LinkedSidecarTest(rb.UndoCase):
         slot.unlink()
         slot.symlink_to(other)
         report = self.undo()
-        self.assertEqual(os.readlink(slot), str(shared))
+        self.assertEqual(lyrics_files.read_link(slot), str(shared))
         self.assertEqual(other.read_text(encoding="utf-8"), "another verse\n")
         self.assertEqual(report.tracks[0].displaced, ())
         self.assertFalse((lr.run_folder(self.album, manifest.run_id) / "undo").exists())

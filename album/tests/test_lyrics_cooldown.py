@@ -49,10 +49,12 @@ class PathTest(fixtures.IsolatedCase):
     """The file sits in the XDG state folder, or ~/.local/state when that is unusable."""
 
     def test_an_absolute_state_home_wins(self) -> None:
-        environ = {"XDG_STATE_HOME": "/srv/state", "HOME": "/srv/someone"}
+        # Rooted at the host's drive: ``/srv/state`` alone is relative on Windows.
+        state = fixtures.host_absolute("/srv/state")
+        environ = {"XDG_STATE_HOME": str(state), "HOME": "/srv/someone"}
         self.assertEqual(
             lyc.cooldown_path(environ, YTM),
-            Path("/srv/state/lyricsmith/youtube_music.json"),
+            state / "lyricsmith/youtube_music.json",
         )
 
     def test_a_relative_state_home_is_ignored(self) -> None:

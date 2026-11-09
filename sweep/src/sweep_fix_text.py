@@ -8,9 +8,12 @@ own discovery, has a record. A record is matched to a track by the album tool's 
 by file identity however its path was spelled (`lyrics_heard_store.records_for`), so the
 sweep picks exactly the albums whose child would find a record. Each album picked is
 surveyed as a run surveys it (`survey_album`), so one holding no track without synced
-lyrics, a record's track already timed say, is not visited. A track whose machine-made
-timed sidecar is not yet embedded (`sweep_survey`) does not count here: a fix embeds
-nothing, so that visit is the run pass's. The store's folder must
+lyrics is not visited, unless a track holding a record holds a provider's timed text
+(`provider_timed`), which the fix takes too: the survey names those tracks
+(`AlbumSurvey.timed_records`), set by this pass alone, so the run pass visits what it
+did. A record's track already timed by sync, labeled so, is no reason to visit. A track
+whose machine-made timed sidecar is not yet embedded (`sweep_survey`) does not count
+here: a fix embeds nothing, so that visit is the run pass's. The store's folder must
 exist: a missing or unlistable one stops the pass before any album (`HeardDirError`).
 
 The store is only read: every record is kept, and each file it cannot read is one
@@ -39,6 +42,8 @@ from pathlib import Path
 
 import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 from lyrics_album import AlbumUnusableError, discover_tracks
+from lyrics_model import SyncedLyrics
+from lyrics_sidecar import UNREADABLE, plan_sidecars
 from lyrics_heard_store import (
     HeardRecord,
     Listing,
@@ -58,12 +63,14 @@ class HeardDirError(Exception):
 class HeardAlbums:
     """The albums holding a record, in walk order, and the records matching none.
 
-    *digests* holds each album's `records_digest`, by its folder.
+    *digests* holds each album's `records_digest`, by its folder, and *timed* each
+    album's tracks holding a record and a provider's timed text (`provider_timed`).
     """
 
     albums: tuple[Path, ...]
     unmatched: int
     digests: Mapping[Path, str] = dataclasses.field(default_factory=dict)
+    timed: Mapping[Path, tuple[str, ...]] = dataclasses.field(default_factory=dict)
 
 
 def records_digest(records: Iterable[HeardRecord]) -> str:
@@ -109,6 +116,20 @@ def _tracks_by_album(albums: Sequence[Path]) -> dict[Path, tuple[Path, ...]]:
     return tracks
 
 
+def provider_timed(track: Path, album: Path) -> bool:
+    """True when *track*'s sidecars serve a timed ``.lrc`` no machine labeled.
+
+    Read by the album tool's own sidecar plan, as its fix reads the text it takes. A
+    sidecar that cannot be read is False here: the survey counts it unreadable, which
+    visits the album on its own.
+    """
+    try:
+        planned = plan_sidecars(track, album)
+    except (*UNREADABLE, OSError):
+        return False
+    return isinstance(planned.lyrics, SyncedLyrics) and planned.label is None
+
+
 def heard_albums(albums: Sequence[Path], listing: Listing) -> HeardAlbums:
     """Those of *albums* one of whose tracks has a record in *listing*, with digests."""
     found = records_by_group(listing, _tracks_by_album(albums))
@@ -116,7 +137,15 @@ def heard_albums(albums: Sequence[Path], listing: Listing) -> HeardAlbums:
     matched = {record for album in kept for record in found[album].values()}
     unmatched = sum(1 for record in listing.records if record not in matched)
     digests = {album: records_digest(found[album].values()) for album in kept}
-    return HeardAlbums(kept, unmatched, digests)
+    timed = {
+        album: tuple(
+            track.relative_to(album).as_posix()
+            for track in found[album]
+            if provider_timed(track, album)
+        )
+        for album in kept
+    }
+    return HeardAlbums(kept, unmatched, digests, timed)
 
 
 def album_digest(album: Path, heard_dir: Path) -> str | None:
@@ -176,13 +205,14 @@ def fix_surveys(
     found = heard_albums(albums, listing)
     if found.unmatched:
         notice(unmatched_notice(found.unmatched))
-    # A fix embeds nothing and passes over a track holding timed lyrics, so an embed
-    # a machine-timed sidecar owes (`AlbumSurvey.unembedded`) is the run pass's alone.
+    # A fix embeds nothing, so an embed a timed sidecar owes
+    # (`AlbumSurvey.unembedded`), labeled or not, is the run pass's alone.
     return [
         dataclasses.replace(
             survey_album(album, lang=lang),
             records_digest=found.digests[album],
             unembedded=(),
+            timed_records=found.timed[album],
         )
         for album in found.albums
     ]

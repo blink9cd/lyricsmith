@@ -8,7 +8,9 @@ lines give, from the folder the library sits in. Every block, commands and outpu
 must appear in the README as written, each output must equal its block with its
 placeholders filled in, and the undo must hand back each album as it was built, byte
 for byte. The silence pass's preview and its resume run with the host's real ffmpeg,
-and are skipped without one.
+and are skipped without one. The walk-through is a POSIX shell session over POSIX
+paths, so it skips on Windows; the check that every block appears in the README runs
+on every host.
 """
 
 from __future__ import annotations
@@ -38,6 +40,13 @@ _README = _HERE.parent / "samples" / "README.md"
 _PROJECT = _HERE.parent.parent
 #: How long building the sample album may take.
 _BUILD_TIMEOUT_S = 120
+#: Why the walk-through skips on Windows. Its build block is a POSIX shell session run
+#: through a bare ``bash``, which a Windows process resolves to WSL's ``System32`` alias
+#: ahead of Git Bash, and its expected output spells each path the POSIX way, with
+#: ``/`` between the library and its albums.
+_POSIX_WALK_THROUGH = (
+    "the README's walk-through is a POSIX shell session over POSIX paths"
+)
 #: The width of a run id with no collision suffix, ``YYYYMMDDTHHMMSSZ``.
 _RUN_ID_WIDTH = 16
 
@@ -65,6 +74,9 @@ mkdir -p "library/The Invented Quartet/Second Album" \\
   "library/The Made-Up Trio/Untimed Album"
 cp "library/The Invented Quartet/Sample Album/01 The Keeper Counts."* \\
   "library/The Invented Quartet/Second Album/"
+python "$TOOLS/album/album.py" \\
+  --album "library/The Invented Quartet/Second Album" --offline
+rm -r "library/The Invented Quartet/Second Album/.lyricsmith"
 cp "library/The Invented Quartet/Sample Album/02 Orchard Wall.mp3" \\
   "library/The Invented Quartet/Sample Album/03 The Mill Bell.mp3" \\
   "library/The Made-Up Trio/Untimed Album/"
@@ -107,6 +119,7 @@ The Invented Quartet/Sample Album       1        2     3           0
 The Invented Quartet/Second Album       1        0     0           0
 The Made-Up Trio/Untimed Album          0        2     0           0
 total (3 albums)                        2        4     3           0
+unembedded: The Invented Quartet/Sample Album/01 The Keeper Counts.mp3 (unlabeled)
 albums a run would visit: 2
   The Invented Quartet/Sample Album
   The Made-Up Trio/Untimed Album
@@ -220,6 +233,23 @@ def _placed(block: str, values: dict[str, str]) -> str:
     return block
 
 
+class ReadmeBlocksTest(sf.IsolatedCase):
+    """Every block the walk-through below runs appears in the README as written.
+
+    It reads the README alone, so it runs on every host, Windows included.
+    """
+
+    def test_the_readme_shows_every_block_verbatim(self) -> None:
+        readme = _README.read_text(encoding="utf-8")
+        commands = (BUILD, SURVEY_COMMAND, RUN_COMMAND, UNDO_COMMANDS)
+        silence = (SILENCE_COMMAND, SILENCE_RESUME_COMMAND, SILENCE_PREVIEW)
+        for block in (*commands, *silence, SILENCE_RESUMED, SURVEY, RUN):
+            self.assertIn(block, readme)
+        for block in (UNDO_SAMPLE, UNDO_UNTIMED):
+            self.assertIn(block, readme)
+
+
+@unittest.skipIf(os.name == "nt", _POSIX_WALK_THROUGH)
 class SampleSweepTest(sf.IsolatedCase):
     """The README's walk-through, step by step, on a freshly built library."""
 
@@ -353,12 +383,3 @@ class SampleSweepTest(sf.IsolatedCase):
             ("Likely meant", 0),
         ):
             self.assertIn(f'{heading} <span class="count">{count}</span>', page)
-
-    def test_the_readme_shows_every_block_verbatim(self) -> None:
-        readme = _README.read_text(encoding="utf-8")
-        commands = (BUILD, SURVEY_COMMAND, RUN_COMMAND, UNDO_COMMANDS)
-        silence = (SILENCE_COMMAND, SILENCE_RESUME_COMMAND, SILENCE_PREVIEW)
-        for block in (*commands, *silence, SILENCE_RESUMED, SURVEY, RUN):
-            self.assertIn(block, readme)
-        for block in (UNDO_SAMPLE, UNDO_UNTIMED):
-            self.assertIn(block, readme)

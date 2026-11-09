@@ -153,8 +153,10 @@ def genius_choice(
     """The Genius key for this run, if any, and how the summary describes it."""
     if args.offline:
         return None, "offline"
-    # Left out by --only-providers reads as --no-genius does: no key is looked for.
-    if args.no_genius or left_out(args.only_providers, Source.GENIUS):
+    # Left out by --only-providers, or by a fix's --hold-for-genius, reads as
+    # --no-genius does: no key is looked for, so no request is ever sent to Genius.
+    held = args.hold_for_genius is not None
+    if args.no_genius or held or left_out(args.only_providers, Source.GENIUS):
         return None, "skipped"
     resolution = lyrics_config.resolve_genius_key(args.config, environ)
     for warning in resolution.warnings:

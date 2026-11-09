@@ -34,7 +34,9 @@ ByReason = dict[Source, dict[Refusal, int]]
 ByKey = RefusalCounts
 #: The ``counts`` numbers added after the ledger was first written, each read as 0
 #: from a line that predates it.
-_LATER_COUNTS = frozenset({"no_lyrics_expected", "silent", "removed", "withheld"})
+_LATER_COUNTS = frozenset(
+    {"no_lyrics_expected", "silent", "removed", "withheld", "held"}
+)
 #: The ``counts`` maps added later, each read as empty from a line that predates it.
 _LATER_MAPS = frozenset({"written_by", "removed_by"})
 #: The providers an owed album may name: those ``--only-providers`` can.

@@ -1,4 +1,7 @@
-"""``--mode fix-text``: replace each wrong untimed text sync found, or remove and flag it.
+"""``--mode fix-text``: replace each wrong text sync found, or remove and flag it.
+
+The text is a track's untimed text alone or, failing that, a provider's timed ``.lrc``
+(`lyrics_fix_text.text_of`), the step drawing for each as `lyrics_fix_step` says.
 
 The mode reads the transcript store `--heard-dir` names (`lyrics_heard_store`), matches
 its records to the album's tracks, or the one ``--track`` names, by file identity
@@ -22,6 +25,12 @@ are backed up, and a fix is undone as a run is. The providers are chosen, their
 cool-downs and breakers reported, and the summary printed exactly as for a run
 (`lyrics_provider_modes`); each provider left out because it is cooling down is
 passed on to the step (`FixPlan.cooling`), which then removes nothing.
+
+With ``--hold-for-genius`` Genius is left out as ``--no-genius`` leaves it
+(`lyrics_choices.genius_choice`), the step holds every removal its guards allow
+(`FixPlan.hold`), and each held track is written to the option's file, as
+``--changed-list`` writes its own (`lyrics_changed.held_changed`). A dry run, or a run
+with nothing to fix, writes neither list.
 
 The fix only reads the store: every record is kept, whatever the track's end. A
 written track's record is sync's: album never touches sync's by-hand list, so the
@@ -54,9 +63,9 @@ from lyrics_fix_text import (
     UNRECORDED_SIBLING,
     SiblingTexts,
     first_sung,
+    fix_skip_reason,
     sibling_texts,
-    skip_reason,
-    stored_text,
+    text_of,
     words_of_text,
 )
 from lyrics_heard_store import HeardRecord, list_records, records_for
@@ -124,12 +133,16 @@ def _plan_taken(
     words: list[str],
     siblings: SiblingTexts,
     spoken: str | None,
+    *,
+    timed: bool = False,
 ) -> str:
     """A taken track's plan: the sibling whose text would win, else ask the providers.
 
-    Asking, on a spoken album, says no removal would follow, and why.
+    A *timed* track draws the album's timed texts too, as the step does. Asking, on a
+    spoken album, says no removal would follow, and why.
     """
-    won = first_sung(siblings.besides(rel), record.transcript, words)
+    others = siblings.every_besides(rel) if timed else siblings.besides(rel)
+    won = first_sung(others, record.transcript, words)
     if won is None:
         if spoken is None:
             return PLAN_ASK
@@ -155,17 +168,18 @@ def plan_track(
     rel = path.relative_to(album).as_posix()
     lang = args.lang or DEFAULT_LANG
     try:
-        refused = stored_text(wiring.stages, album, path, lang)
+        tags = wiring.stages.read_tags(path)
+        stored = text_of(wiring.stages, album, path, tags, lang)
     # A track that cannot be read is still taken: the run reads it again under the
     # lock and reports its error at its own stage, as a dry run's row does here.
     except Exception as error:  # noqa: BLE001 - every read failure is the track's row
         failure = StageError(ErrorStage.SIDECAR, type(error).__name__, str(error))
         return FixTrack(path, rel, record, error=failure)
-    reason = skip_reason(refused, record)
+    reason, refused = fix_skip_reason(stored, record), stored.lyrics
     if refused is None or reason is not None:
         return FixTrack(path, rel, record, skip=reason)
     words = words_of_text(refused.plain_text())
-    plan = _plan_taken(rel, record, words, siblings, spoken)
+    plan = _plan_taken(rel, record, words, siblings, spoken, timed=stored.timed)
     return FixTrack(path, rel, record, plan)
 
 
@@ -238,7 +252,7 @@ def _plan_album(args: argparse.Namespace, wiring: Wiring, notice: Notice) -> Alb
 def fix_text_mode(
     args: argparse.Namespace, wiring: Wiring, prog: str, notice: Notice
 ) -> int:
-    """Fix each wrong untimed text the store holds a transcript for; or plan it."""
+    """Fix each wrong text the store holds a transcript for; or plan it."""
     planned = _plan_album(args, wiring, notice)
     album, fixes = planned.album, planned.fixes
     for track in fixes:
@@ -250,7 +264,14 @@ def fix_text_mode(
     asked = choose_providers(args, wiring, notice)
     options = provider_options(args, asked)
     records = {track.rel: track.record for track in taken}
-    plan = FixPlan(records, planned.siblings, cooling_sources(asked), planned.spoken)
+    hold = args.hold_for_genius
+    plan = FixPlan(
+        records,
+        planned.siblings,
+        cooling_sources(asked),
+        planned.spoken,
+        hold=hold is not None,
+    )
     report = run_reported(
         asked,
         notice,
@@ -266,4 +287,4 @@ def fix_text_mode(
             step=partial(fix_step, plan),
         ),
     )
-    return finish_run(args, album, report, asked, prog, notice, silence=None)
+    return finish_run(args, album, report, asked, prog, notice, silence=None, held=hold)

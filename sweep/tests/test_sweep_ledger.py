@@ -8,6 +8,7 @@ hold it to raising nothing else on any text at all.
 from __future__ import annotations
 
 import json
+import ntpath
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -85,6 +86,12 @@ class LedgerPathTest(sf.IsolatedCase):
         self.assertEqual(
             path.parent, self.home / ".local" / "state" / "lyricsmith" / "sweep"
         )
+
+    def test_the_windows_home_lookup_is_the_test_home_too(self) -> None:
+        # ntpath's expanduser is the lookup `Path.home()` makes on Windows, reading
+        # USERPROFILE and never HOME, and it runs on any host, so the isolation's
+        # redirect of Windows' home is proven here as well.
+        self.assertEqual(ntpath.expanduser("~"), str(self.home))
 
     def test_without_xdg_state_home_it_lives_under_the_named_home(self) -> None:
         # A home folder that is not the process's, so only HOME in the mapping leads here.

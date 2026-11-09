@@ -9,6 +9,7 @@ import signal
 import stat
 import subprocess
 import sys
+import unittest
 from collections.abc import Sequence
 from pathlib import Path
 from unittest import mock
@@ -141,13 +142,17 @@ class HeardDirCliTest(sy_cases.IsolatedCase):
             hs.read_record(self.heard, self.audio),
             hs.HeardRecord(self.audio, text_fingerprint(LINES), OTHER_SONG),
         )
-        record = hs.record_path(self.heard, self.audio)
-        self.assertEqual(stat.S_IMODE(record.stat().st_mode), 0o600)
         (row,) = bh.read_by_hand_list(self.listed)
         self.assertEqual(row.reason, bh.REASON_NOT_SUNG)
         self.assertIn(
             f"kept what was heard of 1 track(s) not sung in {self.heard}", out
         )
+
+    @unittest.skipIf(os.name == "nt", sy_cases.NO_POSIX_MODES)
+    def test_a_kept_transcript_is_private(self) -> None:
+        self.run_store()
+        record = hs.record_path(self.heard, self.audio)
+        self.assertEqual(stat.S_IMODE(record.stat().st_mode), 0o600)
 
     def test_an_unchanged_text_is_skipped_with_no_child(self) -> None:
         self.run_store()
@@ -359,7 +364,7 @@ class HeardDirCliTest(sy_cases.IsolatedCase):
             "--mode", "fetch-models", "--heard-dir", str(self.heard), listed=False
         )
         self.assertEqual(code, 2)
-        self.assertIn("--heard-dir is for --mode run only", err)
+        self.assertIn("--heard-dir is for --mode run or hear only", err)
 
     def test_help_names_the_option(self) -> None:
         out = io.StringIO()

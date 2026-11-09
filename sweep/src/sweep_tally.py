@@ -7,8 +7,9 @@ for), silent
 (a track whose audio measured as silence, which nothing was found for), kept
 (nothing new found, the old lyrics kept), errors, and those whose check flagged; and
 the written tracks by category, the removed ones by reason, and the kept ones whose
-removal a fix withheld on an album that looks spoken (``withheld``, counted among the
-kept too), counted as the album summary counts them (`lyrics_categories`). A track
+removal a fix withheld on an album that looks spoken or held for Genius (``withheld``,
+counted among the kept too, and the held among them ``held``), counted as the album
+summary counts them (`lyrics_categories`). A track
 the run never reached has no end state and is counted nowhere.
 
 Refusals are counted by TRACK and by PROVIDER, never refusal by refusal: one failed call
@@ -170,6 +171,9 @@ class Counts:
     #: The kept tracks whose removal a fix withheld, the album looking spoken; each
     #: counts among the kept too. An older ledger line holds none.
     withheld: int = 0
+    #: The withheld tracks a fix held for Genius (``--hold-for-genius``); each counts
+    #: among the withheld too. An older ledger line holds none.
+    held: int = 0
     written_by: Mapping[WrittenCategory, int] = field(default_factory=dict)
     removed_by: Mapping[RemovedReason, int] = field(default_factory=dict)
 
@@ -212,6 +216,7 @@ def _count(tracks: tuple[ManifestTrack, ...]) -> Counts:
         kept=statuses.count(OutcomeStatus.KEPT_EXISTING),
         errors=statuses.count(OutcomeStatus.ERROR),
         withheld=categories.withheld,
+        held=categories.held,
         flagged=sum(
             1
             for outcome in outcomes

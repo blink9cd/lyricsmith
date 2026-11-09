@@ -33,12 +33,21 @@ _NO_RUN = "no run under"
 
 
 def tree_hashes(root: Path) -> dict[str, str]:
-    """Every file under *root*, ``.lyricsmith`` included, by path, to its sha256."""
+    """Every file under *root*, ``.lyricsmith`` included, by path, to its sha256.
+
+    An empty file is hashed as no bytes without being read: the run lock is one, and
+    on Windows a read of a lock another handle holds is refused, as a locked byte is.
+    """
     return {
-        p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+        p.relative_to(root).as_posix(): hashlib.sha256(_bytes_of(p)).hexdigest()
         for p in sorted(root.rglob("*"))
         if p.is_file() and not p.is_symlink()
     }
+
+
+def _bytes_of(path: Path) -> bytes:
+    """The bytes of the file at *path*; an empty file's, none, unread."""
+    return path.read_bytes() if path.stat().st_size else b""
 
 
 class AcceptCliCase(cli_fakes.RealWiringCliCase):
@@ -135,6 +144,15 @@ class ReportAndApplyTest(AcceptCliCase):
         self.assertIn("left by an earlier accept", again.stdout)
         self.assertFalse(os.path.lexists(self.album / laj.ACCEPTING_NAME))
 
+    def test_an_rmtree_that_can_follow_a_link_accepts_through_the_walk(self) -> None:
+        # Every Windows Python's: the walk deletes instead, so accept still runs.
+        with mock.patch.object(shutil.rmtree, "avoids_symlink_attacks", False):
+            result = self.accept("--apply")
+        self.assertEqual(result.code, album.EXIT_OK, result.stderr)
+        self.assertFalse(os.path.lexists(self.folder_path))
+        self.assertFalse(os.path.lexists(self.album / laj.ACCEPTING_NAME))
+        self.assertEqual(len(self.records()), 1)
+
     def test_records_that_cannot_be_written_are_exit_2(self) -> None:
         state = self.xdg["XDG_STATE_HOME"] / "lyricsmith"
         state.mkdir(parents=True, exist_ok=True)
@@ -200,10 +218,6 @@ class RefusalTest(AcceptCliCase):
         assert lock is not None
         self.addCleanup(lock.release)
         self.assert_refused_untouched("held by another run")
-
-    def test_an_unsafe_rmtree(self) -> None:
-        with mock.patch.object(shutil.rmtree, "avoids_symlink_attacks", False):
-            self.assert_refused_untouched("so accept will not run")
 
 
 class OptionsTest(AcceptCliCase):

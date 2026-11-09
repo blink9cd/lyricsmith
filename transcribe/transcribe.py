@@ -2,7 +2,7 @@
 
 The entry point of the project folder. It runs whisper.cpp's ``whisper-cli`` program on
 each audio file and never downloads anything during a transcribe run; only
-``--mode fetch-models`` reaches the network, and only for the two pinned models.
+``--mode fetch-models`` reaches the network, and only for the pinned models.
 Importing it puts the private modules, under ``src/``, on ``sys.path``, resolved from
 this file's own location, then the shared libraries the project's ``pyproject.toml``
 names, through the manifest reader at the project root (``lyricsmith_project/``), so
@@ -195,6 +195,14 @@ def build_parser(model_dir: Path, prog: str | None = None) -> argparse.ArgumentP
         help="where fetch-models writes and the model defaults point [all modes]",
     )
     parser.add_argument(
+        "--whisper-model",
+        choices=at_models.WHISPER_MODEL_NAMES,
+        default=at_models.WHISPER_MODEL_NAME,
+        help="fetch the files a run hearing with this pinned whisper model reads: "
+        f"name {at_models.LARGE_MODEL_NAME} to fetch it, for sync's hearing "
+        "[fetch-models]",
+    )
+    parser.add_argument(
         "--whisper-cli",
         type=Path,
         help="the whisper-cli executable; when omitted, found on PATH [transcribe]",
@@ -270,6 +278,11 @@ def resolve_options(namespace: argparse.Namespace) -> Options:
                 f"--language {namespace.language!r}: give auto or a two- or three-letter code"
             )
         extensions = _parse_extensions(namespace.extensions)
+        if namespace.whisper_model != at_models.WHISPER_MODEL_NAME:
+            raise SetupError(
+                "--whisper-model is for --mode fetch-models only: a transcribe run "
+                "hears with --model"
+            )
     model_dir = namespace.model_dir
     return Options(
         mode=namespace.mode,
@@ -285,6 +298,7 @@ def resolve_options(namespace: argparse.Namespace) -> Options:
         ).absolute(),
         model_dir=model_dir,
         whisper_cli=namespace.whisper_cli,
+        whisper_model=namespace.whisper_model,
     )
 
 

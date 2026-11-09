@@ -193,6 +193,8 @@ class Options:
     by_hand_list: Path | None = None
     #: The --heard-dir folder, absolute; None when the option is not given.
     heard_dir: Path | None = None
+    #: The whisper model a hearing hears with, its file name; None for the default.
+    whisper_model: str | None = None
 
 
 @dataclass(frozen=True)

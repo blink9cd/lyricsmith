@@ -57,7 +57,6 @@ The caller holds the album lock, and nothing here prints.
 from __future__ import annotations
 
 import dataclasses
-import os
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -231,7 +230,7 @@ def _restore_link(target: Path, link: str, aside: _SetAside) -> None:
     A file in its place is set aside first; another link is replaced without a copy.
     """
     entry = slot_entry(target)
-    if entry is Slot.LINK and os.readlink(target) == link:
+    if entry is Slot.LINK and lyrics_files.read_link(target) == link:
         return
     if entry is Slot.FILE:
         aside.clear(target)

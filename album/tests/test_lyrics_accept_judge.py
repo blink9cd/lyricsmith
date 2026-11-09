@@ -8,12 +8,16 @@ undo; every title and lyric is invented. The pure rules' own cases are in
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import os
 import stat
 import sys
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import FrameType
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
@@ -28,6 +32,31 @@ from lyrics_run_folders import LOCK_NAME  # noqa: E402 - import follows the sys.
 K = laj.RefusalKind
 R = laj.AtRiskReason
 _EDITED = b"The run's verse, edited after the run\n"
+
+
+def _mode_000_locks_a_folder() -> bool:
+    """True when ``chmod(0)`` stops this process listing a folder.
+
+    Root lists a mode-000 folder, and on Windows ``chmod`` sets only the read-only
+    attribute, which never stops a listing. Probed rather than inferred from the
+    platform, so the real-permission test runs wherever it can; its twin raises the
+    refusal through the listing itself, which runs everywhere.
+    """
+    with TemporaryDirectory() as scratch:
+        folder = Path(scratch) / "probe"
+        folder.mkdir()
+        folder.chmod(0)
+        try:
+            list(folder.iterdir())
+        except PermissionError:
+            return True
+        finally:
+            folder.chmod(stat.S_IRWXU)
+    return False
+
+
+#: Whether ``chmod(0)`` locks a folder here; probed once, at import.
+_MODE_000_LOCKS = _mode_000_locks_a_folder()
 
 
 def later(minutes: int) -> dt.datetime:
@@ -82,12 +111,35 @@ class RefusalsTest(AcceptCase):
         self.assertIn(run_id, detail)
         self.assertEqual(self.judged().runs, ())
 
+    @unittest.skipUnless(
+        _MODE_000_LOCKS, "chmod(0) does not stop a listing here (root, or Windows)"
+    )
     def test_an_undo_folder_that_cannot_be_listed(self) -> None:
         run_id = self.made_run()
         inner = self.folder / run_id / "undo" / "inner"
         inner.mkdir(parents=True)
         inner.chmod(0)
         self.addCleanup(inner.chmod, stat.S_IRWXU)
+        self.assert_refused_as_an_unreadable_run_folder(run_id)
+
+    def test_an_undo_folder_whose_listing_is_refused(self) -> None:
+        # The portable twin of the mode-000 test: the listing raises the refusal
+        # itself, so the judgment is proven where chmod cannot lock a folder.
+        run_id = self.made_run()
+        inner = self.folder / run_id / "undo" / "inner"
+        inner.mkdir(parents=True)
+        real_iterdir = Path.iterdir
+
+        def refuse_inner(path: Path) -> Iterator[Path]:
+            if path == inner:
+                raise PermissionError(errno.EACCES, "Permission denied", str(path))
+            return real_iterdir(path)
+
+        with mock.patch.object(Path, "iterdir", refuse_inner):
+            self.assert_refused_as_an_unreadable_run_folder(run_id)
+
+    def assert_refused_as_an_unreadable_run_folder(self, run_id: str) -> None:
+        """Assert the one refusal is run *run_id*'s, as an unreadable run folder."""
         ((kind, detail),) = self.refusals()
         # Its manifest read: what failed is the run folder, so it is named as such.
         self.assertEqual(kind, K.UNREADABLE_FOLDER)

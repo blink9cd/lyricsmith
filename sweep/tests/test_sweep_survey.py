@@ -6,7 +6,6 @@ whatever its sidecars hold. Classifying writes nothing, which the first test che
 
 from __future__ import annotations
 
-import os
 import sys
 import unittest
 from pathlib import Path
@@ -16,13 +15,9 @@ _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 
 import sweep  # noqa: E402, F401 - its bootstrap puts src/ and the album tool on the path
+import denied_fixtures as dn  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_survey  # noqa: E402 - import follows the sys.path bootstrap above
-
-# os.geteuid exists only off Windows, so it is looked up; root can list a mode-000
-# folder, so the unreadable-folder test skips under it.
-_GETEUID = getattr(os, "geteuid", None)
-_IS_ROOT = _GETEUID is not None and _GETEUID() == 0
 
 
 def _snapshot(folder: Path) -> dict[str, bytes]:
@@ -123,7 +118,7 @@ class SurveyLibraryTest(sf.IsolatedCase):
         self.assertEqual(names, ["A Artist/Done", "B Artist/Needs"])
         self.assertEqual([s.needs_visit for s in surveys], [False, True])
 
-    @unittest.skipIf(_IS_ROOT, "root can list a mode-000 folder")
+    @unittest.skipUnless(dn.MODE_000_LOCKS_A_FOLDER, dn.NO_FOLDER_LOCK)
     def test_an_unreadable_artist_folder_is_reported_by_name(self) -> None:
         sf.needy_album(self.library, "Readable", "Album")
         locked = self.library / "Locked"
@@ -134,6 +129,19 @@ class SurveyLibraryTest(sf.IsolatedCase):
         surveys = sweep_survey.survey_library(
             self.library, lang="eng", on_skip=skipped.append
         )
+        self.assertEqual(skipped, ["Locked"])
+        self.assertEqual(len(surveys), 1)
+
+    def test_an_artist_folder_whose_listing_is_refused_is_reported(self) -> None:
+        # The portable twin of the mode-000 case: the listing itself raises.
+        sf.needy_album(self.library, "Readable", "Album")
+        locked = self.library / "Locked"
+        locked.mkdir()
+        skipped: list[str] = []
+        with dn.listing_refused(locked):
+            surveys = sweep_survey.survey_library(
+                self.library, lang="eng", on_skip=skipped.append
+            )
         self.assertEqual(skipped, ["Locked"])
         self.assertEqual(len(surveys), 1)
 

@@ -50,13 +50,12 @@ lyricsmith_project.confirm_from(
 import album  # noqa: E402 - import follows the sys.path bootstrap above
 import help_formatter  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_help  # noqa: E402 - import follows the sys.path bootstrap above
-import lyrics_exit  # noqa: E402 - import follows the sys.path bootstrap above
-import lyrics_prune_mode  # noqa: E402 - import follows the sys.path bootstrap above
 import stdio_utf8  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_accept  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_changed  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fix_text  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_lock  # noqa: E402 - import follows the sys.path bootstrap above
+import sweep_more_modes  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_report  # noqa: E402 - import follows the sys.path bootstrap above
 from sweep_report import Words  # noqa: E402 - follows the bootstrap
 import sweep_run  # noqa: E402 - import follows the sys.path bootstrap above
@@ -71,6 +70,7 @@ from sweep_options import (  # noqa: E402 - follows the bootstrap
     CHILD_MODES,
     EPILOG,
     FLAG_HELP,
+    HOLD_FOR_GENIUS,
     MODE_ACCEPT,
     MODE_FIX_TEXT,
     MODE_RUN,
@@ -93,8 +93,6 @@ ALBUM_ENTRY = Path(album.__file__).resolve()
 _PROG_FILE = Path(__file__).name
 
 
-#: `os.name` on Windows, where a run is refused.
-_WINDOWS = "nt"
 #: The pause between albums, in seconds. Conservative: it has run a whole library
 #: unchanged, and has not been tuned.
 DEFAULT_PAUSE_S = 10.0
@@ -114,7 +112,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         description="Run the album tool over every album of a library that has a "
         "track without synced lyrics, one album at a time.",
         formatter_class=help_formatter.RawNoneHidingFormatter,
-        epilog=EPILOG,
+        epilog=sweep_more_modes.epilog(EPILOG),
     )
     parser.add_argument(
         "--library",
@@ -123,14 +121,16 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=(MODE_SURVEY, MODE_RUN, MODE_ACCEPT, MODE_SILENCE, MODE_FIX_TEXT),
+        choices=(MODE_SURVEY, MODE_RUN, MODE_ACCEPT, MODE_SILENCE, MODE_FIX_TEXT)
+        + sweep_more_modes.MODE_NAMES,
         default=MODE_SURVEY,
         help="survey: count each album's tracks by the lyrics they hold, writing "
         "nothing. run: run the album tool on each album a survey would visit. "
         "accept: report, by the album tool's accept rules, what dropping each "
         "album's runs and backups would remove; it removes them with --apply. "
         "silence: measure every track's peak and list the silent ones, judged. "
-        "fix-text: run the album tool's fix on each album with a --heard-dir record.",
+        "fix-text: run the album tool's fix on each album with a --heard-dir record."
+        + sweep_more_modes.MODE_HELP,
     )
     parser.add_argument(
         "--apply",
@@ -167,6 +167,13 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         help=FLAG_HELP["--owe-earlier-runs"],
     )
     _add_run_options(parser)
+    parser.add_argument("--seed", **sweep_more_modes.SEED)
+    parser.add_argument("--out", **sweep_more_modes.OUT)
+    parser.add_argument("--withheld", **sweep_more_modes.WITHHELD)
+    parser.add_argument("--hearing-log", **sweep_more_modes.HEARING_LOG)
+    parser.add_argument("--strata", **sweep_more_modes.STRATA)
+    parser.add_argument("--model", **sweep_more_modes.MODEL)
+    parser.add_argument("--compare-model", **sweep_more_modes.COMPARE_MODEL)
     parser.add_argument("--resume", type=Path, help=sweep_silence.RESUME_HELP)
     return parser
 
@@ -179,6 +186,7 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
         help="fix-text only, and required there: the transcript folder sync "
         "--heard-dir wrote, passed to each album's fix, which only reads it.",
     )
+    parser.add_argument("--hold-for-genius", **HOLD_FOR_GENIUS)
     parser.add_argument(
         "--offline",
         action="store_true",
@@ -368,9 +376,9 @@ def _sweep_held(
     """Visit each album that needs it and is not done, then print the report."""
     surveys = _child_surveys(args, library)
     options = build_options(args)
-    with sweep_changed.changed_union(
-        args.changed_list, _notice, restart=bool(args.restart)
-    ) as changed:
+    with sweep_changed.sweep_lists(
+        args.changed_list, args.hold_for_genius, _notice, restart=bool(args.restart)
+    ) as (changed, held):
         seams = sweep_run.SweepSeams(
             wiring.run_child, wiring.sleep, wiring.now, _notice, ALBUM_ENTRY
         )
@@ -379,7 +387,7 @@ def _sweep_held(
             """Every provider's hold, fresh, where and when the child will read them."""
             return sweep_waiting.read_holds(os.environ, wiring.now())
 
-        seams = dataclasses.replace(seams, changed=changed, holds=holds)
+        seams = dataclasses.replace(seams, changed=changed, held=held, holds=holds)
         report = sweep_run.sweep(library, surveys, ledger, options, seams)
     print(
         sweep_report.format_sweep(
@@ -389,8 +397,10 @@ def _sweep_held(
     )
     if report.stop is not sweep_run.StopReason.FINISHED:
         _print_resume(args, library, words)
-    if changed is not None and changed.error is not None:
-        _notice(f"{' '.join(words)}: {changed.error}")
+    errors = sweep_changed.list_errors(changed, held)
+    for error in errors:
+        _notice(f"{' '.join(words)}: {error}")
+    if errors:
         return sweep_run.EXIT_USAGE
     return sweep_run.sweep_exit_code(report)
 
@@ -403,36 +413,6 @@ def _print_resume(args: argparse.Namespace, library: Path, words: Words) -> None
     )
 
 
-def _accept_mode(
-    args: argparse.Namespace, library: Path, wiring: Wiring, words: Words
-) -> int:
-    """Hold the library's lock, accept each album, print the summary; 2 if it cannot.
-
-    The ledger's lock keeps it off a library a sweep run is visiting; it writes no
-    ledger line. The walk is the albums a run considers, linked ones dropped.
-    """
-    ledger = ledger_path(library, os.environ)
-    run = sweep_accept.AcceptRun(
-        library,
-        bool(args.apply),
-        wiring.accept or sweep_accept.real_seams(),
-        wiring.now,
-        " ".join(sweep_report.resume_prog(words, _PROG_FILE)),
-        lambda text: print(text, end=""),
-        _notice,
-    )
-    try:
-        lyrics_prune_mode.refuse_unsafe_delete(MODE_ACCEPT)
-        with sweep_lock.held(sweep_lock.lock_path(ledger)):
-            albums = contained_albums(library, on_skip=_skipped, on_linked=_linked)
-            return sweep_accept.accept_library(run, albums)
-    except (sweep_lock.SweepLockError, lyrics_prune_mode.UnsafeDeleteError) as error:
-        _notice(f"{' '.join(words)}: {error}")
-        return sweep_run.EXIT_USAGE
-    except lyrics_exit.ReportNotWrittenError as error:
-        return lyrics_exit.lost_report_exit(error, " ".join(words), _notice)
-
-
 def album_prog(words: Words) -> Words:
     """The album command's words as the user ran this one: `lyricsmith album`, else album.py."""
     return sweep_report.album_prog(words, ALBUM_ENTRY.name)
@@ -441,9 +421,15 @@ def album_prog(words: Words) -> Words:
 _MODES: dict[str, Callable[[argparse.Namespace, Path, Wiring, Words], int]] = {
     MODE_SURVEY: _survey_mode,
     MODE_RUN: _run_mode,
-    MODE_ACCEPT: _accept_mode,
+    MODE_ACCEPT: functools.partial(
+        sweep_accept.accept_mode,
+        prog_file=_PROG_FILE,
+        notice=_notice,
+        walk=functools.partial(contained_albums, on_skip=_skipped, on_linked=_linked),
+    ),
     MODE_SILENCE: functools.partial(sweep_silence.silence_mode, prog_file=_PROG_FILE),
     MODE_FIX_TEXT: _run_mode,
+    **sweep_more_modes.RUNNERS,
 }
 
 
@@ -462,14 +448,8 @@ def main(
     parser = build_parser(prog)
     words = sweep_report.command_words(parser.prog, prog)
     args = parser.parse_args(argv)
+    sweep_more_modes.refuse(parser, args)
     refuse_misplaced(parser, args)
-    # Checked before any path is built: a run stops the album tool with SIGINT, which
-    # only a POSIX system delivers as Ctrl-C's own signal.
-    if args.mode in CHILD_MODES and os.name == _WINDOWS:
-        _notice(
-            f"{parser.prog}: --mode {args.mode} needs a POSIX system (macOS, Linux)"
-        )
-        return sweep_run.EXIT_USAGE
     library = Path(args.library).expanduser()
     if not library.is_dir():
         _notice(f"{parser.prog}: the library is not a folder: {library}")

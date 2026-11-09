@@ -20,16 +20,13 @@ sys.path[:0] = [str(_HERE), str(_HERE.parent)]
 
 import sweep  # noqa: E402 - import follows the sys.path bootstrap above
 import album  # noqa: E402 - import follows the sys.path bootstrap above
+import denied_fixtures as dn  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_fixtures as sf  # noqa: E402 - import follows the sys.path bootstrap above
 import sweep_ledger as sl  # noqa: E402 - import follows the sys.path bootstrap above
 
 #: The line that opens the survey's list of albums a run passes over as done.
 _DONE_LINE = "already done, passed over by a run:"
 _VISIT_LINE = "albums a run would visit:"
-# os.geteuid exists only off Windows, so it is looked up; root can read a mode-000
-# file, so the unreadable-ledger test skips under it.
-_GETEUID = getattr(os, "geteuid", None)
-_IS_ROOT = _GETEUID is not None and _GETEUID() == 0
 
 
 @dataclass(frozen=True)
@@ -137,11 +134,21 @@ class SurveyLedgerAbsentOrBadTest(SurveyLedgerCase):
         self.assertNotIn(_DONE_LINE, result.stdout)
         self.assertFalse(self.state.exists())
 
-    @unittest.skipIf(_IS_ROOT, "root can read a mode-000 file")
+    @unittest.skipUnless(dn.MODE_000_LOCKS_A_FILE, dn.NO_FILE_LOCK)
     def test_a_ledger_that_cannot_be_read_exits_two(self) -> None:
         self.record_done("Artist/A2")
         self.ledger.chmod(0)
         self.addCleanup(self.ledger.chmod, 0o644)
+        self.assert_an_unreadable_ledger_exits_two()
+
+    def test_a_ledger_whose_read_is_refused_exits_two(self) -> None:
+        # The portable twin of the mode-000 case: the open itself raises.
+        self.record_done("Artist/A2")
+        with dn.reading_refused(self.ledger):
+            self.assert_an_unreadable_ledger_exits_two()
+
+    def assert_an_unreadable_ledger_exits_two(self) -> None:
+        """A survey exits 2, naming the ledger, and prints nothing on stdout."""
         result = self.main("--mode", "survey")
         self.assertEqual(result.code, 2)
         self.assertIn("the ledger cannot be read", result.stderr)

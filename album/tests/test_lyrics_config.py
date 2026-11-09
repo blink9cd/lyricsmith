@@ -7,9 +7,11 @@ value below, so no test can reach the real config directory or a real key.
 from __future__ import annotations
 
 import os
+import stat
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
@@ -194,9 +196,21 @@ class PermissionWarningTest(fixtures.IsolatedCase):
         path = _write_config(self.tmp / "shared.toml", _token_body(FAKE_TOKEN), SHARED)
         self.assertEqual(lc.permission_warnings(path, posix=False), ())
 
+    @unittest.skipIf(os.name == "nt", fixtures.NO_POSIX_MODES)
     def test_a_private_file_draws_no_warning(self) -> None:
         path = _write_config(self.tmp / "private.toml", _token_body(FAKE_TOKEN))
         self.assertEqual(lc.permission_warnings(path, posix=True), ())
+
+    def test_on_posix_only_the_shared_read_bits_warn(self) -> None:
+        # The bits a POSIX stat would report, handed in, so both answers are reached on
+        # every host: NTFS reports every file as 0o666 and would only ever warn.
+        path = _write_config(self.tmp / "key.toml", _token_body(FAKE_TOKEN))
+        for mode, warnings in ((PRIVATE, 0), (SHARED, 1)):
+            with self.subTest(mode=oct(mode)):
+                reported = os.stat_result((stat.S_IFREG | mode,) + (0,) * 9)
+                with mock.patch.object(Path, "stat", return_value=reported):
+                    got = lc.permission_warnings(path, posix=True)
+                self.assertEqual([oct(mode)[2:] in w for w in got], [True] * warnings)
 
 
 class SecretTest(fixtures.IsolatedCase):

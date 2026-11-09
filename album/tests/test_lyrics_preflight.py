@@ -154,8 +154,9 @@ class PreflightRunTest(cli_fakes.RealWiringCliCase):
         )
         for name, lyrics in _BAD_ANSWERS.items():
             with self.subTest(name):
-                # A fresh album per answer: the run folder takes a fixed id.
-                self.album = self.tmp / name.replace(" ", "-")
+                # A fresh album per answer: the run folder takes a fixed id. Prefixed,
+                # so no folder is named NUL, a device name Windows cannot hold.
+                self.album = self.tmp / f"album-{name.replace(' ', '-')}"
                 path = self.build(track)
                 before = rb.snapshot(path)
                 self.overrides["fetch"] = _fetching(lyrics)

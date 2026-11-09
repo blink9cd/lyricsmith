@@ -8,6 +8,7 @@ reaching the real network or the real config file, so each is proven here by beh
 
 from __future__ import annotations
 
+import ntpath
 import os
 import socket
 import sys
@@ -146,8 +147,18 @@ class EnvironmentTest(fixtures.IsolatedCase):
         # name: the redirect must have reached os.environ, not only the yielded paths.
         # The difference, not a subset check, so a failure names only what is missing
         # rather than printing every variable the environment holds.
-        expected = {"HOME": str(self.home), **{n: str(p) for n, p in self.xdg.items()}}
+        # USERPROFILE too: Windows' home lookup reads it and ignores HOME.
+        expected = {
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            **{n: str(p) for n, p in self.xdg.items()},
+        }
         self.assertEqual(expected.items() - os.environ.items(), set())
+
+    def test_the_windows_home_lookup_points_there_too(self) -> None:
+        # ntpath's expanduser is the lookup `Path.home()` makes on Windows, and it runs
+        # on any host, so the redirect Windows needs is proven on this one as well.
+        self.assertEqual(ntpath.expanduser("~"), str(self.home))
 
     def test_a_genius_key_set_outside_is_gone_inside(self) -> None:
         self.assertEqual(fixtures.GENIUS_TOKEN_ENV, "GENIUS_ACCESS_TOKEN")
@@ -169,6 +180,21 @@ class EnvironmentTest(fixtures.IsolatedCase):
                 self.assertTrue(inner.home.is_relative_to(Path(raw)))
         self.assertEqual(Path.home(), outer_home)
         self.assertIs(socket.socket.connect, outer_connect)
+
+    def test_leaving_restores_the_windows_home_lookup(self) -> None:
+        outer = {"USERPROFILE": str(self.tmp / "outer-profile")}
+        with mock.patch.dict(os.environ, outer), TemporaryDirectory() as raw:
+            with fixtures.isolated_environment(Path(raw)) as inner:
+                self.assertEqual(ntpath.expanduser("~"), str(inner.home))
+            self.assertEqual(outer.items() - os.environ.items(), set())
+
+    def test_leaving_unsets_a_windows_home_lookup_that_was_unset(self) -> None:
+        with mock.patch.dict(os.environ):
+            os.environ.pop("USERPROFILE", None)
+            with TemporaryDirectory() as raw:
+                with fixtures.isolated_environment(Path(raw)) as inner:
+                    self.assertEqual(ntpath.expanduser("~"), str(inner.home))
+            self.assertFalse("USERPROFILE" in os.environ.keys())
 
 
 class IsolationEnforcementTest(fixtures.IsolatedCase):
@@ -229,6 +255,36 @@ class SilentMp3Test(fixtures.IsolatedCase):
         with self.assertRaises(ID3NoHeaderError):
             ID3(path)
         self.assertAlmostEqual(_length(path), 5, delta=_DURATION_TOLERANCE_S)
+
+
+class HostPathTest(fixtures.IsolatedCase):
+    """The host-shaped helpers: an absolute made-up path, and a name the host holds."""
+
+    def test_a_host_absolute_path_is_absolute_under_the_host_root(self) -> None:
+        made = fixtures.host_absolute("/srv/state")
+        self.assertTrue(made.is_absolute())
+        self.assertEqual(made, fixtures.HOST_ROOT / "srv" / "state")
+
+    @unittest.skipIf(os.name == "nt", "POSIX paths need no drive")
+    def test_off_windows_it_is_the_posix_path_itself(self) -> None:
+        self.assertEqual(fixtures.host_absolute("/srv/state"), Path("/srv/state"))
+
+    def test_an_ordinary_name_is_held(self) -> None:
+        self.assertTrue(fixtures.host_holds_name("01 Keeper.mp3"))
+
+    def test_a_name_no_host_can_make_is_not_held(self) -> None:
+        # A missing folder in the way fails on every host, as a refused name does.
+        self.assertFalse(fixtures.host_holds_name("missing-folder/01 Keeper.mp3"))
+
+    def test_a_name_with_a_nul_is_not_held(self) -> None:
+        # Python refuses the NUL itself (ValueError), before any file system sees it.
+        self.assertFalse(fixtures.host_holds_name("01 \x00.mp3"))
+
+    def test_a_name_made_but_not_listed_is_not_held(self) -> None:
+        # Opening a device name such as NUL succeeds on Windows and makes no file: the
+        # listing afterward is what tells the two apart, on every host.
+        with mock.patch.object(fixtures.os, "listdir", return_value=[]):
+            self.assertFalse(fixtures.host_holds_name("01 Keeper.mp3"))
 
 
 class BuildAlbumTest(fixtures.IsolatedCase):

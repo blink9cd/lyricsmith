@@ -17,6 +17,9 @@ tab-separated list and an HTML page beside it (see "The silence pass").
 `--mode fix-text` drives `album --mode fix-text` over the albums holding a transcript
 record `sync --heard-dir` kept, with a run's ledger, pace and resume (see "The fix pass").
 
+`--mode draw` is read-only too: it draws a sample of provider-timed tracks to hear into a
+track list and a strata file (see "The sample's draw").
+
 ## Prerequisites
 
 `album` beside this tool, under the same project root, with the project's
@@ -26,10 +29,12 @@ with `mutagen`. Every prerequisite of `album` applies to each album a run visits
 Genius key included when you want Genius asked. The library is a folder of `Artist/Album`
 folders.
 
-A run needs a POSIX system (macOS, Linux): it stops `album` with SIGINT, Ctrl-C's own
-signal, which Windows does not deliver that way, and it locks the ledger with `flock`. On
-Windows `--mode run` is refused with exit `2` before anything runs; the survey still works.
-`--mode accept` locks the ledger the same way, so it too needs a POSIX system.
+Every mode runs on macOS, Linux, and Windows. Accept's removal goes through `album`'s own
+delete, which never follows a link out of the folder it removes on any host (see `album`'s
+"The delete that never follows a link").
+On Windows, which cannot send `album` Ctrl-C's own signal, the per-album bound terminates
+it instead (see "The per-album bound"), and the ledger's lock is the system's own on each
+(see "One sweep per library at a time").
 
 ## A first real run
 
@@ -56,23 +61,27 @@ Try it on a handful of albums before the whole library:
 ## Usage
 
 ```text
-sweep.py [--library <dir>] [--mode survey|run|accept|silence|fix-text] [--apply] [--lang <code>]
+sweep.py [--library <dir>] [--mode survey|run|accept|silence|fix-text|draw|hear-report] [--apply] [--lang <code>]
                 [--refetch-untimed] [--refetch-implausible] [--owe-earlier-runs] [--heard-dir <dir>]
+                [--hold-for-genius <file>]
                 [--offline] [--no-netease] [--no-bandcamp] [--no-youtube-music]
                 [--no-genius] [--no-tekstowo] [--pause-seconds <s>] [--stop-after <n>]
                 [--limit <n>] [--restart] [--changed-list <file>] [--resume <file>]
+                [--seed <n>] [--out <dir>] [--withheld]
+                [--hearing-log <dir>] [--strata <file>] [--model <file>] [--compare-model <file>]
 ```
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--library` | `~/Music/Albums` | The library: a folder of `Artist/Album` folders. A leading `~` is expanded. |
-| `--mode` | `survey` | `survey` counts each album's tracks by the lyrics they hold and writes nothing. `run` runs `album` on each album a survey would visit. `accept` reports, by `album`'s accept rules, what dropping each album's runs and backups would remove, and removes them with `--apply` (see "Accept"). `silence` measures every track's peak and lists the silent ones, judged (see "The silence pass"). `fix-text` runs `album --mode fix-text` on each album holding a record in `--heard-dir` (see "The fix pass"). |
+| `--mode` | `survey` | `survey` counts each album's tracks by the lyrics they hold and writes nothing. `run` runs `album` on each album a survey would visit. `accept` reports, by `album`'s accept rules, what dropping each album's runs and backups would remove, and removes them with `--apply` (see "Accept"). `silence` measures every track's peak and lists the silent ones, judged (see "The silence pass"). `fix-text` runs `album --mode fix-text` on each album holding a record in `--heard-dir` (see "The fix pass"). `draw` draws a sample of provider-timed tracks to hear into `--out`, reading only (see "The sample's draw"). `hear-report` reports each group of a drawn sample's `not sung` rate from the hearing log, reading only (see "The hearing's report"). |
 | `--apply` | off | `accept` only: record each album's manifests outside the library, then remove its `.lyricsmith` folder, every backup and undo with it. Without it, accept only reports. Refused by `survey` and `run`. |
 | `--lang` | `album`'s own, `eng` | The ISO 639-2 code `album` ranks a track's frames by and writes new frames in; the survey ranks frames by it too. Passed to `album` only when given. |
 | `--refetch-untimed` | off | The refetch pass (see "Two passes"): a run passes `--refetch-untimed` to `album`, which asks the providers again for each track holding only untimed lyrics, and a survey lists the albums this pass would visit. Refused with `--offline`. |
 | `--refetch-implausible` | off | A run passes `--refetch-implausible` to `album`, which asks the providers again for each track serving implausible lyrics and removes them when none answers. A survey or run with it also visits an album whose every track is synced when a track's serving lyrics are implausible, naming each such track (see "Which albums are visited"). It adds no pass: it rides the normal pass, or the refetch pass beside `--refetch-untimed` (see "Two passes"), and the survey's restart hint names it. Refused with `--offline`. |
 | `--owe-earlier-runs` | off | A survey or run also counts as owed an album an earlier run left owing: one whose newest ledger line is `done` but was written before the `owed` outcome existed, owing each refusing provider it names and each provider its run left out by a cool-down while that provider could still answer a track (see "An owed album"). A run asks it only those providers; a survey lists it with its debt. Refused with `--restart`, `--offline` and `--mode accept`. |
 | `--heard-dir` | none | `fix-text` only, and required there: the transcript folder `sync --heard-dir` wrote, made absolute (a leading `~` expanded) and passed to each album's fix, which only reads it. Every other mode refuses it. |
+| `--hold-for-genius` | no list, and such a text removed | `fix-text` only: pass `album`'s `--hold-for-genius` to each album's fix, which then never asks Genius and keeps, instead of removing, a wrong text every provider asked answered without singing; add each track so held to this file, one absolute path per line, rewritten after each album, and added to when the file already exists, unless `--restart`. Refused with `--no-genius`, and when it names the same file as `--changed-list`; every other mode refuses it. See "Holding for Genius" under "The fix pass". |
 | `--offline` | off | `run` only: pass `--offline` to `album`, which then asks no provider. For trying the sweep on a library, and for its samples. An offline visit never makes an album done. |
 | `--no-netease` | off | `run` and `fix-text` only: pass `--no-netease` to `album`, which then skips both NetEase steps. NetEase publishes no terms for the routes asked. See *Lyrics sources and their terms* in `../README.md`. |
 | `--no-bandcamp` | off | `run` and `fix-text` only: pass `--no-bandcamp` to `album`, which then skips its Bandcamp step. Bandcamp's terms allow personal, non-commercial use. See *Lyrics sources and their terms* in `../README.md`. |
@@ -85,6 +94,13 @@ sweep.py [--library <dir>] [--mode survey|run|accept|silence|fix-text] [--apply]
 | `--restart` | off | `run` and `fix-text` only: visit the albums the ledger holds as done as well. |
 | `--changed-list` | no list | `run` and `fix-text` only: write the absolute path of every MP3 the run's albums saved to this file, one per line, for a library app or script that rereads those files' tags; rewritten after each album, and added to when the file already exists, unless `--restart`. See "The changed list". |
 | `--resume` | a new list | `silence` only: append to this silence list, skipping the albums it marks done, after cutting off the lines of an album it did not finish (see "The silence pass"). |
+| `--seed` | none | `draw` only, and required there: the integer the sample is drawn by, written in the strata file's header. |
+| `--out` | none | `draw` only, and required there: the folder `tracks.txt` and `strata.tsv` are written into, made absolute (a leading `~` expanded); refused inside the library. |
+| `--withheld` | off | `draw` only: list the untimed tracks whose removal a fix withheld, instead of the sample (see "The sample's draw"). |
+| `--hearing-log` | none | `hear-report` only, and required there: the hearing log `sync --mode hear` wrote, made absolute (a leading `~` expanded); only read. |
+| `--strata` | none | `hear-report` only, and required there: the `strata.tsv` the draw wrote, made absolute (a leading `~` expanded). |
+| `--model` | the pinned turbo, shown by `--help` | `hear-report` only: the whisper model file whose hearings are reported, as the hearing log names it. |
+| `--compare-model` | no comparison | `hear-report` only: a second whisper model file; each track heard by both models is compared (see "The hearing's report"). Refused when it names `--model`. |
 
 The survey refuses `--offline`, the five `--no-*` options, `--limit`, `--restart` and
 `--changed-list` with exit `2` rather than ignoring them, and `--pause-seconds` and
@@ -101,7 +117,15 @@ only `--library`, `--mode`, `--limit` and `--resume`, and refuses every other op
 same way; every other mode refuses `--resume`. `fix-text` takes a run's options but
 `--offline`, `--refetch-untimed` and `--refetch-implausible`, which `album`'s fix itself
 refuses, `--owe-earlier-runs`, since a fix is never owed (see "The fix pass"), and
-`--apply`; it needs `--heard-dir`.
+`--apply`; it needs `--heard-dir`, and alone takes `--hold-for-genius`, which it refuses
+beside `--no-genius`, and when it names the same file as `--changed-list` (the same path,
+another spelling of it, or a link to it), since both lists would rewrite the one file and
+the held tracks would be lost while their albums are recorded `done`. `draw` takes only `--library`, `--mode`, `--seed`,
+`--out` and `--withheld`, needs the first two of its own, and refuses every other option
+given a value other than its default; every other mode refuses the three. `hear-report`
+takes only `--library`, `--mode`, `--hearing-log`, `--strata`, `--model` and
+`--compare-model`, needs the first two of its own, and refuses every other option the
+same way; every other mode refuses its four given a value other than their default.
 
 ## Which albums are visited
 
@@ -139,6 +163,17 @@ reads the frames for this, not just the sidecar's presence, and names each such 
 online, the synced providers are asked first and an answer is embedded instead, else the
 file. Frames holding the file itself, or other timed lines, owe nothing.
 
+A synced track whose timed `.lrc` no machine labeled is named unembedded too, labeled
+`unlabeled`, but by a narrower rule: only while its frames hold no timed lyrics at all
+(untimed frames, or none), when a run embeds the file. Beside frames holding timed lyrics
+it owes nothing, even when they hold other lines, or the same lines at other times, which
+`album` would replace with the file. That divergence from `album`'s serving rule is
+deliberate: frames holding timed lyrics are left to serve, and a survey following the full
+rule would revisit hundreds of albums whose frames differ from their `.lrc` only by blank
+lines. Placeholders are set aside first on both sides, for an unlabeled file as for a
+labeled one: a placeholder `.lrc` owes nothing, and a placeholder timed frame holds no
+timed lyrics.
+
 A track that cannot be classified, a sidecar that is not UTF-8 for one, is counted as
 **unreadable**, never fatal, and its album is visited too: `album` reports the track
 itself when it runs. A folder holding no MP3 is counted apart and never visited.
@@ -165,7 +200,8 @@ parentheses, each track serving implausible lyrics when `--refetch-implausible` 
 (`implausible: <album>/<track> (<row>: <the row's measure>)`, the reason its album is
 visited; one holding a lyrics frame over the cap, under either refetch option, names that
 reason instead, and its album is
-visited), each unembedded track (`unembedded: <album>/<track> (machine timed)`, counted
+visited), each unembedded track (`unembedded: <album>/<track> (machine timed)`, with its
+label's source, or `(unlabeled)` for a file no machine labeled, counted
 as synced in the table, and the reason its album is visited, though an album the ledger
 holds as done is passed over for it, as for any other, without `--restart`), the count of folders holding no MP3, and the albums a run would visit. It writes nothing and contacts nothing.
 
@@ -268,9 +304,10 @@ retried: LRCLIB overloaded 30
 
 `written:` and `removed:` split the written and removed tracks as `album`'s summary does
 (`../album/album.md`, the run summary's `written:` and `removed:` lines), and a fix
-pass's `removal withheld: spoken word <n>` counts the kept tracks whose removal a fix
-withheld because the album looks spoken (*`--mode fix-text`* there), each counted in the
-`kept` column too; `refusals:`
+pass's `removal withheld: spoken word <n>, held for Genius <n>` counts the kept tracks
+whose removal a fix withheld because the album looks spoken, and those it held for Genius
+under `--hold-for-genius` (*`--mode fix-text`* there), each part only when it counts one
+and each track counted in the `kept` column too; `refusals:`
 counts the tracks each provider refused, by reason, then the tracks its open breaker left
 unsent as `breaker open` (each still owed, as any refusal but `unrecognized` is), and
 `retried:` the retries made after a refusal, by provider and reason, from each run's
@@ -547,28 +584,33 @@ visited"); such an album, once the pass made it done, is passed over like any ot
 ### The fix pass
 
 `--mode fix-text --heard-dir <dir>` drives `album --mode fix-text` over the library, for
-the untimed texts `sync --heard-dir <dir>` found are not sung. It visits only the albums
+the texts `sync --heard-dir <dir>` found are not sung, untimed and provider-timed alike.
+It visits only the albums
 of the walk, links dropped as for a run, one of whose tracks has a record in the
 transcript folder: a record is matched to a track as `album` matches it, by the file it
 names however its path was spelled, so the sweep picks exactly the albums whose fix would
 find one. Each such album is surveyed as a run surveys it, so one holding no track
-without synced lyrics is not visited; an unembedded track does not count here, since a fix
-embeds nothing. A file the folder holds that cannot be read as a
+without synced lyrics is not visited, unless a track holding a record holds a timed
+`.lrc` no machine labeled: a provider-timed text is a fix's too. A run, which reads no
+record, still passes such an album over, and a record beside a track `sync` timed itself
+(`[by:machine timed]`) visits nothing. An unembedded track does not count here, since a
+fix embeds nothing. A file the folder holds that cannot be read as a
 record is one notice on stderr, and the rest are still used; records naming no track of
 the library's albums are counted in one notice and passed over. A transcript folder that
 is not a folder, or cannot be listed, exits `2` before any album is visited. The sweep
 only reads the folder: every record is kept, and `sync` deletes each one once its track
-is timed (`../album/album.md`, *`--mode fix-text`*).
+is gone, timed by `sync` itself, or timed by a provider with a text other than the one
+heard (`../album/album.md`, *`--mode fix-text`*).
 
 Each album's child is `album --album <dir> --mode fix-text --heard-dir <dir>` with
-`--lang`, the `--no-*` options and the album's `--changed-list` when given, and with no
-`--only-providers`, ever. The visit is paced, bounded, recorded in the ledger, resumed
+`--lang`, the `--no-*` options and the album's `--changed-list` and `--hold-for-genius`
+lists when given, and with no `--only-providers`, ever. The visit is paced, bounded, recorded in the ledger, resumed
 and interrupted exactly as a run's is; only how it ends differs:
 
 | The fix | Outcome |
 | --- | --- |
 | made a run whose providers only refused, whether it exits `0` or `1` | `refused`, as for a run, toward the stop rule |
-| exits `0`, having made a run | `done`: each text it took was written or removed, or its removal withheld on an album that looks spoken, which is no error and never retried |
+| exits `0`, having made a run | `done`: each text it took was written or removed, or its removal withheld on an album that looks spoken or held for Genius, which is no error and never retried |
 | exits `0` and made no run (nothing to fix: every recorded track skipped) | `done` |
 | exits `1` otherwise | `track errors`: a wrong text kept, never done, so a later fix pass visits it again |
 
@@ -597,11 +639,32 @@ records, never the tracks' texts: an undo of a written text leaves the record as
 (`sync` has not yet re-timed the track), so its album stays done until `--restart`.
 A `--restart` of the fix pass forgets only the fix pass's done albums, never a run's.
 
+**Holding for Genius.** Genius challenges every request a script sends, so with Genius
+asked each of its refusals keeps a track as an error, and an album whose providers only
+refused counts toward the stop rule; with `--no-genius` a track no other provider has is
+removed. `--hold-for-genius <file>` passes `album`'s own option to each album's fix,
+which then leaves Genius unasked and keeps such a track, its removal withheld as `held
+for Genius` (`../album/album.md`, *Holding for Genius*). Each child is handed a hold list
+of its own and the sweep keeps the union in `<file>`, exactly as it keeps the changed
+list (see "The changed list"): merged in visit order, rewritten after each album, added
+to by a resumed sweep, started empty by a `--restart`, carried by the resume command,
+and read under the same contract and the same 64 MiB bound, its failures exiting `2` as
+the changed list's do. One rule differs: a child that left no readable hold list (killed
+at the bound, crashed, never started, or a fix with nothing to fix, which exits `0`
+having made no run and written no list) adds none of its album's tracks, since a held
+track keeps its text and its record, so the album's retry, or a later fix, holds it
+again, while listing every MP3 would send tracks no fix held to the later pass. One
+stderr line says so, except for a fix with nothing to fix, which held nothing. A held
+track ends `kept existing`, which shows a provider answering, so
+an album whose open tracks were all held ends `done` and ends a run of refused albums
+(see "The stop rule").
+
 The report is a run's: the table, the `written:` and `removed:` lines (a removal counted
-as `wrong text`), the `removal withheld: spoken word <n>` line when a fix withheld any,
+as `wrong text`), the `removal withheld:` line when a fix withheld any (`spoken word
+<n>`, `held for Genius <n>`),
 an `errors: <n> tracks kept for a later fix` line when a track
 errored, each album's undo command, and the `resume:` line, which resumes the fix on the
-same `--heard-dir`. The exit code is a run's: `0` only when every album visited ended
+same `--heard-dir` and the same `--hold-for-genius` list. The exit code is a run's: `0` only when every album visited ended
 `done` with `album` exiting `0`.
 
 ### The stop rule
@@ -612,7 +675,7 @@ every provider failed as that track's fetch error, so a track that ended any oth
 a lookup heard from some provider, even beside another provider's refusal. A track shows an
 answer when a provider's lyrics were taken for it; when it ended with nothing new found, not
 found, no lyrics expected, silent, its old lyrics kept (a fix's withheld removal among
-them), or its implausible old lyrics removed (the providers answered, emptily); or when it was served its own untimed lyrics or a
+them, a track held for Genius included), or its implausible old lyrics removed (the providers answered, emptily); or when it was served its own untimed lyrics or a
 machine-labeled `.lrc` (a machine transcript, or lyrics timed by `lyricsmith sync`) and not
 every LRC provider's synced step (LRCLIB's and NetEase's) that the album asked refused (such
 a track is looked up for synced lyrics only). Under `--no-netease`, or on a revisit naming
@@ -670,11 +733,16 @@ room of their own. LRCLIB, NetEase and YouTube Music each answer both kinds of l
 call, which their plain step re-reads, so each is counted once per lookup.
 Past the bound the child is sent Ctrl-C's own signal, so it stops as an interrupted run does
 (below); a child still running `STOP_GRACE_S` later is killed. The album is recorded as
-`timed out`, and the sweep goes on.
+`timed out`, and the sweep goes on. Windows cannot send that signal, so there the child is
+terminated instead: it ends at once, without recording the track in hand or printing its
+summary, and the album is recorded as `timed out` with `album`'s interrupted code, `130`, as
+the signal's stop would leave it, not the terminated process's own `1`.
 
 ### Interrupting a run
 
 `album` runs in the same process group and on the same terminal, so Ctrl-C reaches it too.
+On Windows that rests on the console handing Ctrl+C to every process attached to it, which
+is so far unverified there.
 It stops at once: it lets a write in hand finish, so no file is left half-written, cuts the
 track in hand short and records it as interrupted in its manifest, prints its summary and
 exits `130`. The sweep waits up to `STOP_GRACE_S` for that, generous because the write may
@@ -836,9 +904,10 @@ Two sweeps on one library would each read the ledger and then rewrite it whole, 
 entries would replace the other's. A run therefore holds a lock beside the ledger,
 `ledger-<hash>.lock`, from before its survey to its end, and a second run on the same library
 is refused at once with exit `2`, naming the lock file. The lock is the operating system's
-(`flock`), let go when the sweep ends however it ends, so a crashed sweep leaves nothing to
-clean up; the empty lock file stays. A lock file that cannot be made or opened, or a lock
-`flock` refuses for any other reason (a file system that keeps no locks, say), ends the run
+(`flock` on macOS and Linux, `msvcrt.locking` on Windows, through the shared `run_lock`), let
+go when the sweep ends however it ends, so a crashed sweep leaves nothing to clean up; the
+empty lock file stays. A lock file that cannot be made or opened, or a lock the system
+refuses for any other reason (a file system that keeps no locks, say), ends the run
 the same way, with exit `2` naming the lock file. A survey takes no lock. Sweeps on two
 different libraries never meet.
 
@@ -1073,13 +1142,157 @@ line this pass does not write, or a list that cannot be made or opened (a `--res
 that is a link, a FIFO pipe or anything else but a regular file, or one over 64 MiB, is
 refused at once as one that cannot be read); `130` on Ctrl-C.
 
+## The sample's draw
+
+`--mode draw` draws a sample of timed tracks for `sync` to hear: every provider-timed track of the albums
+where a fix found a wrong text, and a seeded share of each provenance group from the rest.
+It reads each track's sidecars and frames, each album's run manifests and the ledger, and
+writes two files into `--out`, never in the library; it plays no audio and asks no
+provider.
+
+```text
+sweep.py --mode draw --seed <n> --out <dir> [--withheld] [--library <dir>]
+```
+
+**What it writes.** `tracks.txt` holds one absolute path per line in the `--changed-list`
+format (see "The changed list"), each below the resolved `--library`, for
+`sync --tracks-from`, which matches these even when its `--path` reaches the library
+through a link; `strata.tsv` holds the same tracks, each with its group and its album,
+under a `#seed<TAB><n>` header (`src/sweep_strata.py`), which the hearing's report reads
+to give each group its own rate.
+Both are written readable by the user alone (`0o600`), atomically and read back, so a
+rerun replaces them whole: the same seed over the same library writes the same bytes.
+
+**A track's timing** is read from its sidecars and frames as `sync`'s planner reads them.
+A timed `.lrc` no machine labeled is provider-timed, the only kind drawn; one labeled
+`[by:machine timed]` (or `[by:machine transcript]`) is machine-timed, and timed frames
+with no timed `.lrc` are frames-only. Placeholder lyrics are no lyrics.
+
+**The groups.**
+
+| Group | Tracks | Drawn |
+| --- | --- | --- |
+| `wrong-text-albums` | Every provider-timed track of an album whose manifests record a `wrong text removed` outcome, a withheld removal or a fix's write of another track's text (an outcome naming the track it came from, whatever provider it is under), or that the ledger holds a `fix-text` visit of (an undone entry still counts: the finding stands) | All |
+| `netease`, `youtube-music`, `lrclib` | The newest deciding manifest entry is a synced write, or `unchanged`, from that provider | `250` each |
+| `older-sidecars` | The same, from the `sidecar` | `250` |
+
+A track's provenance is a walk of its own manifest entries, newest first: an undone entry
+decides nothing, nor does a kept or missed track or an error; a `stripped` or `removed`
+entry, or an untimed write or `unchanged`, ends the walk with no manifest record, since
+what the track holds came after it (writing the `.txt` unlinks the `.lrc`, and a run that
+kept an untimed text found no timed one to serve). A
+wrong-text album's track is never drawn into a provenance group.
+Each group is drawn by one generator seeded with `--seed`, from its tracks sorted by path,
+so the walk's order changes nothing. A group with fewer tracks than its share is taken
+whole, and the summary says it is short.
+
+**Left out, and counted:** machine-timed and frames-only tracks, tracks no manifest entry
+decides (`no manifest record`), tracks whose deciding write came from another source (the
+track's own frames, an old provider), tracks not timed, tracks that cannot be read, and
+tracks whose path or album the two files cannot hold. The `no manifest record` count shows
+whether the older sidecars miss a real part of the library.
+
+**`--withheld`** writes instead the tracks to hear again with a second model: each
+whose removal a fix withheld, on an entry not undone, that still holds an untimed sidecar,
+all in the `withheld` group with no draw. One marked so but timed since is left out as `no
+longer untimed`, and one whose path or album the two files cannot hold as the sample's
+are, each counted.
+
+**What it prints.** The seed, then each group's size and how many were drawn of it, then
+each left-out reason, every count approximate (`under 10`, else to two figures, as `about
+580`), so the summary can be recorded as it stands; then the two files written. An album
+reached through a link, an artist folder that cannot be listed, a run whose manifest
+cannot be read and a ledger line that cannot be read are each named on stderr and passed
+over.
+
+**Exit codes.** `0` once both files are written; `2` for an `--out` inside the library, a
+library that cannot be listed, a ledger that cannot be read, or a file that cannot be
+written (an `--out` that is a file, say).
+
+## The hearing's report
+
+`--mode hear-report` reports what `sync --mode hear` found of a drawn sample: each group's
+`not sung` rate, a library-wide estimate, and two measures of whether "heard
+as not sung" can be trusted. It reads the strata file the draw wrote, the hearing log,
+and the album texts; it plays no audio, asks no provider and writes nothing.
+
+```text
+sweep.py --mode hear-report --hearing-log <dir> --strata <file> [--model <file>]
+         [--compare-model <file>] [--library <dir>]
+```
+
+**Each group.** A strata track the log holds a hearing of by `--model` is heard, and
+counted by its verdict: `sung`, `not sung` or `little heard`. A group's rate is its
+`not sung` hearings over the tracks of it heard, every verdict counted, so a group's size
+times its rate is how many of its tracks the hearing would find not sung. A strata track
+with no hearing by `--model` is skipped, as `not heard` while it still holds its group's
+kind of text (a provider-timed `.lrc`, or an untimed `.txt` for `withheld`), else by its
+timing now, read as the draw reads it (`frames-only`, say). A hearing of a track no
+strata row names is counted, never used.
+
+**The estimate.** Each drawn group's rate (NetEase, YouTube Music, LRCLIB, the older
+sidecars) is weighted by that group's size in the library, outside the wrong-text albums,
+and the wrong-text group, taken whole, adds its own `not sung` count as it stands; it is
+also reported on its own. A drawn group with tracks in the library but none heard is
+named and left out, its size with it, so the share printed is of the tracks the estimate
+covers. The sizes are counted by the draw's own reader and sizing, which no seed
+changes, so each group is sized by the rule that drew it; the library's left-out counts
+print beside them, `frames-only` among them. A `withheld` list has no estimate, and its
+report reads no library.
+
+The sizes are read over the library as it is now, so run the report before the
+sample's fix pass: each album a `fix-text` ledger entry names counts as a wrong-text
+album from then on, which moves the sampled albums' tracks out of their drawn groups
+and changes the sizes the rates are weighted by.
+
+**The shift test.** Each `not sung` transcript is judged again, by `sync`'s own rule
+unchanged (a share under `0.25` of 20 or more distinct heard pairs is `not sung`),
+against every other text of its album, `--library/<album>` as the strata row names it,
+read by `album --mode fix-text`'s own reader, so every text a fix would draw is tried:
+each sibling's untimed text, from its `.txt` or else its served untimed frame, and a
+timed `.lrc`'s words only. A shift is found either way: the transcript sings one of those
+texts, the stored text a neighbor's song and the verdict right; or the track's own stored
+text, read by the same reader, is word for word one of them (the same text fingerprint),
+a neighbor's text held twice while the neighbor keeps it, so the transcript sings no
+other text. A text of no words matches none. Neither found is a suspect miss, tallied by its track's genre tags, so a cluster in
+one genre points at the hearing rather than the text. A sibling whose sidecar cannot be
+read is passed over and counted; an album that cannot be listed is not tested, and
+counted.
+
+**A strata row** must name a track in its album, directly or in a folder of it such as
+a multi-disc album's `Disc 1/`, with neither the track nor a folder between them a link
+or a junction, and both its path and its album lexically normal, as the draw writes them;
+the album is an `Artist/Album` folder under `--library` that neither is nor sits in a
+linked folder and resolves inside the library, since the report reads that album's
+files.
+
+**With `--compare-model`**, each strata track heard by both models prints with its
+share and verdict under each, then how many rise from under `0.25` with `--model` to
+`sung` with `--compare-model` (at or over `0.25` on 20 or more pairs): misses that are
+the model's, not the text's. One over the share but `little heard` does not count. `--model`
+defaults to the pinned turbo, by its file name; sweep imports no `transcribe` code, so
+the name is written in `src/sweep_hear_report.py`, and a test holds it to the pin.
+
+**What it prints.** The seed and model, a line a group with a line for each skip
+reason, the estimate, the suspect misses by genre tag, the hearings of tracks in no
+strata row, the log files that could not be read (each also named on stderr), and the
+comparison. Every count is approximate, as the draw's are, and a rate prints as a
+percentage to one decimal, so all of it can be recorded as it stands except the
+comparison's per-track block: those lines name each track by its absolute path with its
+exact share (to two decimals) and verdict, so the block opens with a line saying they
+are not for the record.
+
+**Exit codes.** `0` once the report prints; `2` for a strata file that cannot be read or
+names a track outside `--library`, a hearing log that is not a folder or cannot be
+listed, a library that cannot be listed, or a ledger that cannot be read.
+
 ## Exit codes
 
 | Code | When |
 | --- | --- |
-| `0` | The sweep finished, every album it visited `done` (or `offline`) with `album` exiting `0`. A survey exits `0`. An accept that finished exits `0`, every album cleared, holding no run, or skipped as a link. A silence pass exits `0` when every track was measured and its page written. |
+| `0` | The sweep finished, every album it visited `done` (or `offline`) with `album` exiting `0`. A survey exits `0`. An accept that finished exits `0`, every album cleared, holding no run, or skipped as a link. A silence pass exits `0` when every track was measured and its page written. A draw exits `0` once both its files are written, and a hearing's report once it prints. |
 | `1` | The sweep finished, but an album did not end `done` (or `offline`) with exit `0`: track errors (a fix's `track errors` among them), refused providers, an album still `owed` answers or passed over waiting on a cool-down or breaker, an album locked by another run or one the sweep could not run, a timeout, no record, a record `album` could not write (its exit `3`), an exit code `album` never gives, or a child left running (`abandoned`). For accept: an album refused, or one whose removal, or whose records, failed. For silence: a track not measured, an album that could not be read, or a page that could not be written. |
-| `2` | A usage problem, a library that is missing or cannot be listed, a ledger that cannot be read or written (a run still prints its report so far; a survey prints nothing), its lock not taken (another sweep running on the library, or the lock unavailable), a run or a fix on Windows, a `--heard-dir` that is not a folder or cannot be listed, a `--changed-list` file whose last write failed (said on stderr after the report), an existing one it cannot read as a list, or its private folder not made. For accept also a Python whose `shutil.rmtree` can follow a link. For silence: no `ffmpeg`, a `--resume` list that cannot be read, is malformed or was begun on another library, or a list that cannot be made or opened. |
+| `2` | A usage problem, a library that is missing or cannot be listed, a ledger that cannot be read or written (a run still prints its report so far; a survey prints nothing), its lock not taken (another sweep running on the library, or the lock unavailable), a `--heard-dir` that is not a folder or cannot be listed, a `--changed-list` or `--hold-for-genius` file whose last write failed (said on stderr after the report), an existing one it cannot read as a list, or its private folder not made. For silence: no `ffmpeg`, a `--resume` list that cannot be read, is malformed or was begun on another library, or a list that cannot be made or opened. For draw: an `--out` inside the library, or a file it cannot write. For hear-report: a strata file it cannot read or that names a track outside `--library`, or a hearing log that is not a folder or cannot be listed. |
 | `3` | Stopped after `--stop-after` consecutive refused albums; the resume command is printed. For accept: a report that could not be written, which ends the pass at that album. |
 | `130` | Interrupted with Ctrl-C; the album in hand, if any, is recorded (not done, unless its run was already read), and the resume command is printed. An accept prints no resume command and records nothing: run it again, and an album stopped after its rename has its `.lyricsmith.accepting` finished. A silence pass keeps every album it finished in its list, writes its page, and prints the resume command. |
 
@@ -1139,8 +1352,9 @@ A `--restart` revisits every album done in that pass, not only the one undone.
   between that check and the replace is replaced.
 - **A folder swapped for a link** in the milliseconds between the sweep's last check and
   `album` opening it is followed (see "Which albums are visited").
-- **`--mode run` and `--mode accept` need a POSIX system**; on Windows a run is refused,
-  and an accept cannot take the ledger's lock, each with exit `2`.
+- **On Windows the bound's stop is a terminate**, so an album stopped there records nothing
+  for the track in hand (see "The per-album bound"), and Ctrl-C reaching `album` through the
+  console is unverified there.
 - **Run folders accumulate.** Each album visited gains one `album` run folder per sweep, a
   few kilobytes each, under its own `.lyricsmith` folder. `album.py --mode prune` removes,
   album by album, those nothing needs; the undo command a sweep printed for a pruned run
@@ -1165,6 +1379,7 @@ manifest through `album`'s own records and writer; one runs the real `album`
 with `--offline` over its own invented sample album and undoes the run from the printed undo
 command, and another runs the real `album --mode fix-text` over that album with an invented
 transcript record that the fix skips, so it asks no provider. The ledger's line parser has property tests, since a person may edit the file,
-and so does the silence list's resume reader. The silence pass's suites play `ffmpeg` through
+and so do the silence list's resume reader and the strata file's reader
+(`src/sweep_strata.py`), which refuses a whole file for one line it does not expect. The silence pass's suites play `ffmpeg` through
 `measure_level`'s process seam; one live test, skipped without `ffmpeg` on `PATH`, measures
 a generated silent MP3 for real.

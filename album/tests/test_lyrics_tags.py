@@ -24,6 +24,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
 
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_files  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_tags as lt  # noqa: E402 - import follows the sys.path bootstrap above
 import tag_builders as tb  # noqa: E402 - import follows the sys.path bootstrap above
@@ -441,6 +442,28 @@ class SeamTest(TagsCase):
                 write()
             self.assertEqual(seam.call_count, 1)
             self.assertIsInstance(seam.call_args.args[0], ID3)
+
+    def test_the_save_refuses_a_folder_swapped_in_after_its_tail_is_read(
+        self,
+    ) -> None:
+        # The portable twin of the FIFO swap in test_lyrics_reads_fifo, which skips
+        # where there are no named pipes: a folder is no regular file on every host,
+        # so the save's open refuses it as itself, never as a mutagen error.
+        path = self.track(_V24)
+        real = lt._v1_tail
+
+        def reading_then_swapping(target: Path) -> bytes:
+            tail = real(target)
+            target.unlink()
+            target.mkdir()
+            return tail
+
+        with (
+            mock.patch.object(lt, "_v1_tail", reading_then_swapping),
+            self.assertRaisesRegex(lyrics_files.NotRegularFileError, "not a regular"),
+        ):
+            lt.write_lyrics(path, _PLAIN, "eng")
+        self.assertTrue(path.is_dir())
 
 
 if __name__ == "__main__":
