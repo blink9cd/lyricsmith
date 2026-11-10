@@ -53,6 +53,7 @@ from lyrics_records import (
     HeldBefore,
     Manifest,
     ManifestTrack,
+    PASTED_BY_HAND,
     OutcomeStatus,
     ProviderRefusal,
     RunState,
@@ -96,7 +97,8 @@ _REFUSALS, _REFETCH, _UNREADABLE = "refusals", "refetch_untimed", "sidecar_unrea
 _PEAK, _SILENCE_FAILED = "peak_dbfs", "silence_failed"
 _REFETCH_IMPLAUSIBLE = "refetch_implausible"
 _HELD = "held"
-#: A fix's track whose text it wrote; a manifest from before it was recorded has none.
+#: A fix's track whose text it wrote, or a paste's origin; a manifest from before it
+#: was recorded has none.
 _ORIGIN = "origin"
 #: Why a fix withheld a removal; a manifest from before it was recorded has none.
 _WITHHELD = "withheld"
@@ -298,7 +300,7 @@ def _after(value: object, where: str) -> TrackOutcome:
         peak_dbfs=fields.later(_PEAK, real_value),
         silence_failed=fields.later(_SILENCE_FAILED, text_value),
         held=fields.later(_HELD, member(HeldBefore)),
-        origin=fields.later(_ORIGIN, _mp3_path),
+        origin=fields.later(_ORIGIN, origin_value),
         withheld=fields.later(_WITHHELD, text_value),
     )
 
@@ -316,6 +318,13 @@ def _mp3_path(value: object, where: str) -> str:
     if not is_mp3_name(text):
         raise malformed(where, "a path to an MP3")
     return text
+
+
+def origin_value(value: object, where: str) -> str:
+    """*value* as an outcome's origin: an album-relative MP3, or `PASTED_BY_HAND`."""
+    if value == PASTED_BY_HAND:
+        return PASTED_BY_HAND
+    return _mp3_path(value, where)
 
 
 def _track(value: object, where: str) -> ManifestTrack:

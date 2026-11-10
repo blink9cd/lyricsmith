@@ -12,7 +12,7 @@ import contextlib
 import io
 import sys
 import unittest
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -214,9 +214,14 @@ class KeptCurrentTest(ChangedCase):
         self.fake.scripts["A1"] = sf.Script(changed=("01 Timed.mp3",))
         seen: list[bytes] = []
 
-        def runner(argv: Sequence[str], timeout_s: float) -> sweep_child.ChildResult:
+        def runner(
+            argv: Sequence[str],
+            timeout_s: float,
+            *,
+            env: Mapping[str, str] | None = None,
+        ) -> sweep_child.ChildResult:
             seen.append(self.listed.read_bytes())
-            return self.fake(argv, timeout_s)
+            return self.fake(argv, timeout_s, env=env)
 
         self.runner = runner
         self.sweep()

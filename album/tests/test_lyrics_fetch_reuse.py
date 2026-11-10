@@ -232,10 +232,16 @@ class FailureReuseTest(fixtures.IsolatedCase):
             result = lf.fetch_lyrics(
                 QUERY, lm.SidecarState(None), table, deadline_s=SHORT_DEADLINE_S
             )
+            # The watchdog may abandon the call before it sends: wait for its request.
+            arrived = held.wait_sent(1)
             sent = len(held.sent)
             finished = held.finish()
+        self.assertTrue(arrived)
         self.assertEqual(sent, 1)
         self.assertTrue(finished)
+        # Read once every call has ended: a second call asking again would be a second
+        # sender, though its request might land after `sent` was read.
+        self.assertEqual(held.senders(), 1)
         self.assertEqual(_steps(result), [(LRCLIB, S, TIMEOUT), (LRCLIB, U, TIMEOUT)])
         self.assertEqual(result.attempts[0].detail, result.attempts[1].detail)
 

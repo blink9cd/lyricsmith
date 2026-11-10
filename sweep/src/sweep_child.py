@@ -149,8 +149,27 @@ class _Settled:
     interrupted: bool
 
 
-#: What runs the album tool: an argv and a bound in seconds in, its `ChildResult` out.
-ChildRunner = Callable[[Sequence[str], float], ChildResult]
+#: A child's environment: None for this process's own.
+ChildEnv = Mapping[str, str] | None
+
+
+class ChildRunner(Protocol):
+    """What runs the album tool: `run_child`, or a test's stand-in.
+
+    An argv and a bound in seconds in, its `ChildResult` out. *env* is the child's
+    environment, this process's own when None: the paste walk passes one without the
+    Genius key, while a run's child keeps it.
+    """
+
+    def __call__(
+        self,
+        argv: Sequence[str],
+        timeout_s: float,
+        /,
+        *,
+        env: ChildEnv = None,
+    ) -> ChildResult:
+        """Run *argv* on *env*, bounded by *timeout_s*; how it ended."""
 
 
 class _Process(Protocol):
@@ -319,8 +338,12 @@ def run_child(
     popen: Spawn = subprocess.Popen,
     stop_grace_s: float = STOP_GRACE_S,
     kill_wait_s: float = KILL_WAIT_S,
+    env: ChildEnv = None,
 ) -> ChildResult:
     """Run *argv* to its end, bounded by *timeout_s*; how it ended.
+
+    The child runs on *env*, this process's own environment when None: the paste walk
+    hands its child one without the Genius key, while a run's child keeps it.
 
     Past the bound the child is sent SIGINT, or terminated where that cannot be sent
     (`_stop`), and given *stop_grace_s* to stop. When
@@ -328,7 +351,7 @@ def run_child(
     it is given the same grace, and the result says it was interrupted. Never raises
     for a child that will not stop: the result says it was left, with its pid.
     """
-    process = popen(list(argv), stdin=subprocess.DEVNULL, stdout=_STDERR_FD)
+    process = popen(list(argv), stdin=subprocess.DEVNULL, stdout=_STDERR_FD, env=env)
     try:
         return ChildResult(process.wait(timeout=timeout_s))
     except subprocess.TimeoutExpired:

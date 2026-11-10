@@ -21,9 +21,10 @@ TEKSTOWO_CHALLENGE = "challenge page"
 #: The stop words each YouTube Music challenge redirect records.
 TO_CONSENT, TO_SORRY = "redirect to consent", "redirect to sorry"
 #: Each Genius host, and the request a refusal from it was, in the order the summary
-#: lists them. lyricsgenius sends only its song record request to ``api.genius.com``,
-#: with the key; its searches and the lyrics page go to ``genius.com``, with none. So
-#: the host tells a refused key from a refused site, though not a search from a page.
+#: lists them. The Genius step's song record request goes to ``api.genius.com`` with
+#: the key, and so does the Genius check's keyed search (`lyrics_genius_search`); the
+#: step's own search and the lyrics page go to ``genius.com``, with none. So the host
+#: tells a refused key from a refused site, though not a search from a record or a page.
 REQUEST_LABELS: Mapping[str, str] = MappingProxyType(
     {"api.genius.com": "keyed API", "genius.com": "unkeyed site"}
 )

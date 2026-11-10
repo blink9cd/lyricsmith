@@ -293,6 +293,23 @@ class InterruptTest(sf.IsolatedCase):
         self.assertEqual(process.waits, [_GENEROUS_S, sweep_child.STOP_GRACE_S])
 
 
+class EnvTest(sf.IsolatedCase):
+    """The child gets the environment it is handed, or this process's when none is."""
+
+    def test_the_environment_given_reaches_the_child(self) -> None:
+        seen: list[object] = []
+
+        def popen(argv: Sequence[str], **kwargs: object) -> cf.ScriptedProcess:
+            seen.append(kwargs["env"])
+            return cf.ScriptedProcess([0])
+
+        sweep_child.run_child(["child"], _GENEROUS_S, popen=popen)
+        sweep_child.run_child(
+            ["child"], _GENEROUS_S, popen=popen, env={"PATH": "/invented/bin"}
+        )
+        self.assertEqual(seen, [None, {"PATH": "/invented/bin"}])
+
+
 class SecondInterruptTest(cf.HostCase):
     """A second Ctrl-C, or a child that will not die, never leaves the album unrecorded.
 

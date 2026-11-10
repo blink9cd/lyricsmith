@@ -19,6 +19,7 @@ records themselves, and that relies on the root logger keeping its default level
 from __future__ import annotations
 
 import argparse
+import functools
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -49,6 +50,7 @@ import lyrics_help  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_modes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_only  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_options  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_paste_mode  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_provider_modes  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_prune_mode  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_run  # noqa: E402 - import follows the sys.path bootstrap above
@@ -59,6 +61,9 @@ import stdio_utf8  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_exit import EXIT_CANNOT_RUN as EXIT_CANNOT_RUN  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_exit import EXIT_INTERRUPTED as EXIT_INTERRUPTED  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_exit import EXIT_OK as EXIT_OK  # noqa: E402 - import follows the sys.path bootstrap above
+from lyrics_exit import EXIT_PASTE_ERROR as EXIT_PASTE_ERROR  # noqa: E402 - import follows the sys.path bootstrap above
+from lyrics_exit import EXIT_PASTE_NOT_SUNG as EXIT_PASTE_NOT_SUNG  # noqa: E402 - import follows the sys.path bootstrap above
+from lyrics_exit import EXIT_PASTE_REFUSED as EXIT_PASTE_REFUSED  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_exit import EXIT_RECORD_NOT_WRITTEN as EXIT_RECORD_NOT_WRITTEN  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_exit import EXIT_TRACK_ERRORS as EXIT_TRACK_ERRORS  # noqa: E402 - import follows the sys.path bootstrap above
 from lyrics_model import LyricsError  # noqa: E402 - follows the bootstrap
@@ -74,6 +79,7 @@ from lyrics_options import (  # noqa: E402 - follows the bootstrap
     MODE_CHECK,
     MODE_COMPARE,
     MODE_FIX_TEXT,
+    MODE_PASTE,
     MODE_PRUNE,
     MODE_RUN,
     MODE_STRIP,
@@ -98,7 +104,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
         description="Find an album's lyrics, embed them, check them; strip them; "
-        "fix a wrong text; undo a run.",
+        "fix a wrong text; paste one in; undo a run.",
         formatter_class=help_formatter.RawNoneHidingFormatter,
         epilog=lyrics_help.EPILOG,
     )
@@ -126,6 +132,7 @@ def _add_album_options(parser: argparse.ArgumentParser) -> None:
             MODE_PRUNE,
             MODE_ACCEPT,
             MODE_FIX_TEXT,
+            MODE_PASTE,
         ),
         default=MODE_RUN,
         help="run: back up, fetch, embed and check. check: re-check a run's tracks. "
@@ -137,7 +144,9 @@ def _add_album_options(parser: argparse.ArgumentParser) -> None:
         "with --apply, remove them. fix-text: for each track the --heard-dir "
         "store holds a transcript of, write the first text that transcript sings, "
         "the album's other untimed texts tried before the providers' answers; with "
-        "none, remove the wrong text, listed as wrong text removed.",
+        "none, remove the wrong text, listed as wrong text removed. paste: write "
+        "the --text-from text, copied from Genius in a browser, into the one "
+        "--track, only when its --heard-dir transcript sings it; asks no provider.",
     )
     parser.add_argument(
         "--apply",
@@ -156,7 +165,7 @@ def _add_album_options(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="run, strip, check, undo, compare and fix-text: one MP3 under --album, "
         "relative to the "
-        "working directory; every track when omitted.",
+        "working directory; every track when omitted. Required by paste.",
     )
     parser.add_argument(
         "--run-id",
@@ -167,7 +176,8 @@ def _add_album_options(parser: argparse.ArgumentParser) -> None:
         "--changed-list",
         type=Path,
         default=None,
-        help="run, strip, undo and fix-text: write the absolute path of every MP3 this "
+        help="run, strip, undo, fix-text and paste: write the absolute path of every "
+        "MP3 this "
         "saved to "
         "this file, one per line, for a library app or script that rereads those "
         "files' tags; refused with --dry-run; no list when omitted.",
@@ -176,9 +186,16 @@ def _add_album_options(parser: argparse.ArgumentParser) -> None:
         "--heard-dir",
         type=Path,
         default=None,
-        help="fix-text only, and required there: the transcript store sync "
-        "--heard-dir wrote, one record per track whose untimed text it found not "
-        "sung; the fix only reads it, and keeps every record.",
+        help="fix-text and paste only, and required there: the transcript store "
+        "sync --heard-dir wrote, one record per track whose untimed text it found "
+        "not sung; each only reads it, and keeps every record.",
+    )
+    parser.add_argument(
+        "--text-from",
+        type=Path,
+        default=None,
+        help="paste only, and required there: a UTF-8 file holding the text to "
+        "paste, as copied from the track's Genius page; only read.",
     )
     parser.add_argument(
         "--hold-for-genius",
@@ -200,9 +217,9 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
         "--lang",
         type=iso_639_2,
         default=None,
-        help="run, compare and fix-text only: the ISO 639-2 code whose frames rank first among "
-        "a track's own, the frames compare may judge included; a run also writes "
-        "it into new lyrics frames; "
+        help="run, compare, fix-text and paste only: the ISO 639-2 code whose frames rank "
+        "first among a track's own, the frames compare may judge included; a run, a "
+        "fix and a paste also write it into new lyrics frames; "
         f"{DEFAULT_LANG} when omitted.",
     )
     parser.add_argument(
@@ -406,6 +423,7 @@ _MODES: dict[str, Callable[[argparse.Namespace, Wiring, str], int]] = {
     MODE_PRUNE: lyrics_prune_mode.prune_mode,
     MODE_ACCEPT: lyrics_accept_mode.accept_mode,
     MODE_FIX_TEXT: _fix_text_mode,
+    MODE_PASTE: functools.partial(lyrics_paste_mode.paste_mode, notice=_notice),
 }
 
 

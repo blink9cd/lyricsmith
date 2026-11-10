@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Final, TypeVar
 
 import lyrics_files
+import lyrics_pinned
 from lyrics_cooldown import load_record
 from lyrics_model import ReadBackError
 from lyrics_state import write_state_file
@@ -263,33 +264,39 @@ def delete_record(folder: Path, track: Path) -> None:
         lyrics_files.sync_folder(folder)
 
 
-#: A file's identity: its device and its inode, the same for every spelling of its path.
-_Identity = tuple[int, int]
+#: A file's identity: its device and its inode, the same for every spelling of its path
+#: (`lyrics_pinned.FileIdentity`, which a pinned open compares).
+FileIdentity = lyrics_pinned.FileIdentity
 
 
 #: Every record of a listing, by the identity of the file its path names now.
-_ByIdentity = dict[_Identity, list[HeardRecord]]
+_ByIdentity = dict[FileIdentity, list[HeardRecord]]
 _K = TypeVar("_K")
 
 
-def _identity(path: Path) -> _Identity | None:
+def file_identity(path: Path) -> FileIdentity:
+    """*path*'s file identity, links followed; raises what `Path.stat` raises."""
+    status = path.stat()
+    return (status.st_dev, status.st_ino)
+
+
+def found_identity(path: Path) -> FileIdentity | None:
     """*path*'s file identity, links followed; none when it cannot be read as a file.
 
     A path holding a NUL byte, which the store refuses but a caller may still hand
     in, raises `ValueError` from the OS layer: it names nothing either.
     """
     try:
-        status = path.stat()
+        return file_identity(path)
     except (OSError, ValueError):
         return None
-    return (status.st_dev, status.st_ino)
 
 
 def _by_identity(listing: Listing) -> _ByIdentity:
     """*listing*'s records by file identity; a record naming no file is left out."""
     by_identity: _ByIdentity = {}
     for record in listing.records:
-        identity = _identity(record.path)
+        identity = found_identity(record.path)
         if identity is not None:
             by_identity.setdefault(identity, []).append(record)
     return by_identity
@@ -301,7 +308,7 @@ def _matched(
     """Each of *tracks* that has a record in *by_identity*, mapped to it."""
     found: dict[Path, HeardRecord] = {}
     for track in tracks:
-        identity = _identity(track)
+        identity = found_identity(track)
         matches = by_identity.get(identity, []) if identity is not None else []
         if matches:
             own = [record for record in matches if record.path == track]

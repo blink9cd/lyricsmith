@@ -35,8 +35,9 @@ it searches by each track's artist, title and album tags and its length.
 ## Usage
 
 ```text
-album.py --album <dir> [--mode run|check|undo|strip|compare|prune|accept|fix-text]
+album.py --album <dir> [--mode run|check|undo|strip|compare|prune|accept|fix-text|paste]
                 [--apply] [--heard-dir <dir>] [--hold-for-genius <file>]
+                [--text-from <file>]
                 [--track <file>] [--run-id <id>]
                 [--lang <code>] [--config <file>] [--dry-run] [--offline] [--no-genius]
                 [--no-netease] [--no-bandcamp] [--no-youtube-music] [--no-tekstowo]
@@ -48,14 +49,15 @@ album.py --album <dir> [--mode run|check|undo|strip|compare|prune|accept|fix-tex
 | Option | Default | Description |
 | --- | --- | --- |
 | `--album` | required | The album folder. Every MP3 under it, in any subfolder, is a track. |
-| `--mode` | `run` | `run` backs up, fetches, embeds and checks. `check` re-checks a finished run. `undo` puts a run's backup back. `strip` backs up, then removes every track's lyrics frames and sidecars. `compare` asks each provider for every untimed-only track and reports whether a provider other than its lyrics' source agrees; it writes nothing. `prune` removes the run folders nothing needs. `accept` keeps the album as it is and reports what removing every run's backup would lose; with `--apply` it removes them (*`--mode accept`*). `fix-text` replaces each untimed or provider-timed text `sync` found not sung with the first text its transcript sings, the album's other texts tried before the providers', or removes it as `wrong text removed`, a removal withheld on an album that looks spoken (*`--mode fix-text`*). |
-| `--heard-dir` | none | `fix-text` only, and required there: the transcript store `sync --heard-dir` wrote. The fix only reads it: every record is kept (*`--mode fix-text`*). |
+| `--mode` | `run` | `run` backs up, fetches, embeds and checks. `check` re-checks a finished run. `undo` puts a run's backup back. `strip` backs up, then removes every track's lyrics frames and sidecars. `compare` asks each provider for every untimed-only track and reports whether a provider other than its lyrics' source agrees; it writes nothing. `prune` removes the run folders nothing needs. `accept` keeps the album as it is and reports what removing every run's backup would lose; with `--apply` it removes them (*`--mode accept`*). `fix-text` replaces each untimed or provider-timed text `sync` found not sung with the first text its transcript sings, the album's other texts tried before the providers', or removes it as `wrong text removed`, a removal withheld on an album that looks spoken (*`--mode fix-text`*). `paste` writes the one `--text-from` text, copied from Genius in a browser, into the one `--track`, only when its `--heard-dir` transcript sings it, and asks no provider (*`--mode paste`*). |
+| `--heard-dir` | none | `fix-text` and `paste` only, and required there: the transcript store `sync --heard-dir` wrote. Each only reads it: every record is kept (*`--mode fix-text`*, *`--mode paste`*). |
+| `--text-from` | none | `paste` only, and required there: a UTF-8 file holding the text to paste, as copied from the track's Genius page; only read (*`--mode paste`*). |
 | `--hold-for-genius` | no list, and such a text removed | `fix-text` only: leave Genius unasked, as `--no-genius` does; a track whose wrong text every provider asked answered without singing is kept, its removal withheld as `held for Genius`, and its absolute path written to this file, one per line, as `--changed-list` writes. Refused with `--no-genius`, and when it names the same file as `--changed-list`. See *Holding for Genius* under *`--mode fix-text`*. |
 | `--apply` | off | `accept` only: record each run's manifest outside the album, then remove the album's `.lyricsmith` folder, every backup and its undo with it. Without it, accept only reports. |
-| `--track` | every track | `run`, `strip`, `check`, `undo`, `compare` and `fix-text`: one MP3 under `--album`, relative to the working directory. |
+| `--track` | every track | `run`, `strip`, `check`, `undo`, `compare` and `fix-text`: one MP3 under `--album`, relative to the working directory. Required by `paste`. |
 | `--run-id` | the newest run | `check` and `undo` only: which run to read. |
-| `--changed-list` | no list | `run`, `strip`, `undo` and `fix-text`: write the absolute path of every MP3 this saved to this file, one per line, for a library app or script that rereads those files' tags. See [The changed list](#the-changed-list). |
-| `--lang` | `eng` | `run`, `compare` and `fix-text` only: the language whose frames rank first when a track's own frames serve it, and rank first among the frames `compare` may judge; `run` also writes this ISO 639-2 code into new lyrics frames. |
+| `--changed-list` | no list | `run`, `strip`, `undo`, `fix-text` and `paste`: write the absolute path of every MP3 this saved to this file, one per line, for a library app or script that rereads those files' tags. See [The changed list](#the-changed-list). |
+| `--lang` | `eng` | `run`, `compare`, `fix-text` and `paste` only: the language whose frames rank first when a track's own frames serve it, and rank first among the frames `compare` may judge; `run`, `fix-text` and `paste` also write this ISO 639-2 code into new lyrics frames. |
 | `--config` | the environment, then the default config paths | `run`, `compare` and `fix-text` only: a config file holding the Genius key, the `[no_lyrics]` genres and the `[musicbrainz]` contact; when given, the only place any is read. |
 | `--dry-run` | off | `run`, `prune` and `fix-text` only: report what each track would use, which run folders would go, or what a fix would try, and change no file. |
 | `--offline` | off | `run` only: no network; only what the tracks already hold, their sidecars and lyrics frames, is used, and the local silence measurement (*Silent tracks*) still runs. |
@@ -95,7 +97,10 @@ and `--apply`; it needs `--heard-dir`, which every other mode refuses, and alone
 `--hold-for-genius`, which it refuses beside `--no-genius`, since the option already
 leaves Genius out, and when it names the same file as `--changed-list`, whether as the
 same path, another spelling of it, or a link to it: each list is written whole, so one
-file would keep only the list written last.
+file would keep only the list written last. `paste` is a new run of one track that asks
+no provider, so it takes `--album`, `--track`, `--heard-dir`, `--text-from` and
+`--changed-list` alone, needs the first four, and refuses every other option; every
+other mode refuses `--text-from`.
 `--changed-list` is refused by `check` and with `--dry-run`: neither changes anything, so
 its list would always be empty.
 
@@ -534,7 +539,17 @@ was heard`, `too little heard to judge`, `the transcript sings its text`), and i
 is kept. A track holding a worded `SYLT` frame beside its `.txt`, with no timed `.lrc`,
 is timed, not untimed only, and is skipped: timing held only in the frames is never read.
 A track holding a timed `.lrc` is taken as *Provider-timed texts* below says. Only the
-tracks it takes are backed up and run, and the run is undone as any run is.
+tracks it takes are backed up and run, and the run is undone as any run is. Under the
+lock each is read again before any provider is asked: a text no longer one the fix takes,
+or the track's name now naming another file than the one matched to its record (`it is no
+longer the file its transcript was heard from`), is the track's error and exit `1`, with
+nothing changed and its record kept. From that check on, every open of the MP3, each
+write's included, is told by the opened file itself, not its name, so a file swapped in
+under the name after the check is refused the same way at the open that would have
+written it. One residual stays: the sidecars are written and removed by name beside the
+MP3, so a swap after the MP3's last open, or during a removal that strips no frame and so
+never opens the MP3, still reaches the sidecar beside the new file, and an undo puts the
+backup back by name, over whatever file the name then holds.
 
 *Which text it writes.* First, with no request, every other untimed text stored on the
 album, read before anything is written, so a text one track gives up is still there for
@@ -656,6 +671,77 @@ providers`, which on an album that looks spoken reads `ask the providers; no rem
 spoken word (<why>)`, and writes nothing and asks no provider. A run with no track to take
 prints that plan too, ending `nothing to fix: nothing was written`, and makes no run
 folder.
+
+**`--mode paste`** writes one text a person copied from the track's Genius page in a
+browser, in place of the wrong text `sync` found not sung. Genius challenges every
+request a script sends (*Holding for Genius*), but a browser reaches the page, so the
+person fetches it and this mode checks it, against the same transcript a fix judges by.
+`sweep --mode paste` walks the Genius check's `has-it.tsv` and runs this mode for each row
+(`../sweep/sweep.md`, *Pasting from Genius*); run alone it takes `--track`, `--heard-dir`
+and `--text-from`, never prompts, and asks no provider: nothing it does touches the
+network. It takes `--lang` as `fix-text` does: the language whose frames the track's text
+is read from, and the one the new `USLT` frame is written under, `eng` when omitted.
+
+*The text.* `--text-from` is read as strict UTF-8, no further than four bytes for each
+character of the lyrics cap (*Oversized lyrics frames*): a file that cannot be read, or
+is not UTF-8, is exit `2`, and a larger one is too large. It is then cleaned as a run
+cleans Genius's own text: the `<n> Contributors ... Lyrics` header and the `<n>Embed`
+trailer go, and blank text, a placeholder and text over the cap are not lyrics to write.
+First, though, each whole line a browser copy of the page picks up and Genius's text never
+holds is dropped: `You might also like`, the heading of the panel Genius puts between the
+verses, matched as the page renders it, spaces around it aside (`BROWSER_CLUTTER` in
+`src/lyrics_paste.py`, extended only with a line Genius renders inside the lyrics, never
+one a song might sing). Section headers such as `[Verse 1]` stay: they give no words, and
+they are part of Genius's text. A timed paste keeps its words alone. The text is then
+judged against the track's length as a run judges an answer, so one the check's `past end`
+or `too many words` row would flag is not written.
+
+*The guards.* The track's record is found by the file it names, as a fix finds it, and the
+track is refused, exit `4`, unless a fix would take it (*Which tracks it takes*, above): no
+record (`no transcript record in --heard-dir`), a text changed since it was heard (as a
+track already pasted is), a text that is not untimed only or is machine timed, or a
+transcript that heard too little or sings its text. So is a track whose tags or sidecars
+cannot be read (`its tags or sidecars cannot be read`, with what was raised, a malformed
+ID3 tag's error among them), never a crash. Each is one notice on stderr, and nothing is
+written.
+
+*The sung check.* The paste is written only when the transcript sings it, by the fix's own
+rule: 0.25 or more of the 20 or more distinct word pairs heard are its words. A paste whose
+words are the track's wrong text is never sung. One that is not, or that is not lyrics to
+write, is one notice on stderr naming why, with the share and the pairs heard (`not sung:
+0.06 of the 34 word pairs heard are the pasted text's, under the 0.25 needed`); nothing is
+written and the exit is `6`. Paste again; nothing allows an unsung text through. The judge
+is one-sided, though: it measures how much of the transcript the paste holds, not how much
+of the paste was sung, so text appended to a correct copy passes, and only the clutter
+filter above and the track-length rule stand against it.
+
+*Recording.* A sung paste is written by one run of the one track: the album lock, the
+backup, a run id and the manifest, the guards read again under the lock (a text changed
+in between, or the track's name now naming another file than the one matched to its
+record, is the track's error, `it is no longer the file its transcript was heard from`,
+and so is a file swapped in after that check, at the open that would write it, as for a
+fix; the tags are read just before that check, so a file swapped in and back between the
+two can lend the step its tags, its length among them, though the write still reaches
+only the matched file), then the write a fix makes: an untimed `.txt` and an untimed
+`USLT` frame replacing the old frames and sidecars, and the check. The manifest records
+the source `Genius` and the `origin` `pasted by hand`, and the row shows `Genius, pasted
+by hand`; no provider is asked, so the provider tally counts none, the manifest's
+`genius` state reads `absent`, as for a run with no Genius key, and the summary's Genius
+label reads `not asked (pasted by hand)`. Its record is kept, for `sync`'s rerun to judge
+and time the new text, as after a fix. It is never a removal.
+
+*Undo.* The run is undone as any run is, by `--mode undo` (with `--run-id` naming it, once
+a later run exists), which puts the old frames and sidecars back byte for byte.
+
+*Exit codes.* `0` written; `2` could not run, as any mode (a bad option, the album, the
+lock, an unreadable `--text-from`); `3` the record, the `--changed-list` or the report
+could not be written; `4` the track refused by its guards, its tags or sidecars unreadable
+included; `5` the run was made but its one track errored (its text changed under the lock,
+another file under its name, or its write failed); `6` not written, the paste not sung or
+not lyrics to write; `130` interrupted. Not sung has a code of its own, so a caller never
+reads a crash's `1` as not sung. `--changed-list` is
+written whatever the end once the guards are read, empty when nothing was written, so a
+caller merging it adds nothing.
 
 **`--mode prune`** removes the run folders nothing needs, for the one `--album`. It takes the
 album lock for the whole pass, as undo does, and refuses a linked `.lyricsmith` or `lock`
@@ -1192,8 +1278,14 @@ which also say what each sends). Every LRCLIB and NetEase request also has its o
 timeout, 5 seconds to connect and 10 between bytes of the reply, both cut in proportion
 for LRCLIB's search by `q` when less of the call is left (*How LRCLIB is asked*), and
 each call opens a fresh connection, so a call that was abandoned shares nothing with the
-next. Every request, to every provider, names the tool and
-its version in its `User-Agent`, as LRCLIB asks of its clients, with no address or
+next. A call stopped by an error outside Python's `Exception`, a `KeyboardInterrupt` or
+a `SystemExit` raised by the call's own code, is no step's error: it is raised as itself,
+and no breaker is told of it. A `KeyboardInterrupt` ends the run as Ctrl-C does; a
+`SystemExit` ends the process with its own code. A Ctrl-C taken while the watchdog starts
+a call's thread is raised as itself too, even when Python's threading code wraps it in a
+lock error of its own (`release unlocked lock`), so it is never read as a refusal. Every
+request, to every provider, names the tool and its version in its `User-Agent`, as LRCLIB
+asks of its clients, with no address or
 personal detail in it (MusicBrainz's alone adds the contact, when the config file sets
 one: *The config file*): the tool's name, `lyricsmith`, and the project's version from
 `[project].version` in the project's `pyproject.toml` (`unknown` when it cannot be read;
@@ -2049,9 +2141,12 @@ The manifest keeps the true names.
 | Code | When |
 | --- | --- |
 | `0` | Every track was processed with no error. A track with no lyrics found, or one the check flagged, is not an error, and neither is a compare FLAG nor a hint, whatever the count. |
-| `1` | At least one track errored: its backup, sidecar, fetch, strip, embed or check, or its undo. A prune exits `1` when a run folder's rename or removal failed, and an accept when the removal of `.lyricsmith`, or of an earlier accept's leftover, failed. A compare exits `1` when any row is an `ERROR`: a tag or sidecar it cannot read, or every provider asked failing. A fix exits `1` when a track's text could not be written or removed, the guards that keep a wrong text included (*`--mode fix-text`*). A dry run exits `1` when it cannot plan a track: its tag or sidecar unreadable, or, with `--fresh`, or for a track asked again (one holding only placeholder lyrics, or one `--refetch-untimed` or `--refetch-implausible` picks), a sidecar name its strip, or an MP3 its embed, would fail on. |
+| `1` | At least one track errored: its backup, sidecar, fetch, strip, embed or check, or its undo. A prune exits `1` when a run folder's rename or removal failed, and an accept when the removal of `.lyricsmith`, or of an earlier accept's leftover, failed. A compare exits `1` when any row is an `ERROR`: a tag or sidecar it cannot read, or every provider asked failing. A fix exits `1` when a track's text could not be written or removed, the guards that keep a wrong text included, or when a track changed between its plan and its turn: its text, or the file its name names (*`--mode fix-text`*). A paste has codes of its own, `4`, `5` and `6`, and exits `1` only on an unforeseen error, as a traceback (*`--mode paste`*). A dry run exits `1` when it cannot plan a track: its tag or sidecar unreadable, or, with `--fresh`, or for a track asked again (one holding only placeholder lyrics, or one `--refetch-untimed` or `--refetch-implausible` picks), a sidecar name its strip, or an MP3 its embed, would fail on. |
 | `2` | The run could not start: a bad or misplaced option, no album or no MP3 under it, the album lock held by another run, no run to check or undo or a chosen run whose manifest could not be read (*Which folders are runs*), an accept that refused the album or could not write its records (*`--mode accept`*), a `--track` outside the album or the run or not one of its tracks (*`--track` paths*), a `--heard-dir` that is not a folder, or an unusable `--config` (unreadable, holding none of the three tables, a malformed `[no_lyrics]` table, or an unusable `[musicbrainz] contact`). Also an album-level error before any MP3 changed, as below. |
 | `3` | The work finished, or stopped part-way, but its record could not be written: the run's manifest after a track finished (an OS error, or a write that does not read back as written), the `--changed-list` file, or a fix's `--hold-for-genius` file. Each is said on stderr after the report. So is a prune's or an accept's report that could not be written, and so is a report that could not be written once any mode's work began, a dry run's, a check's and a compare's included: a progress line or the summary refused by a closed stderr or stdout (below). It outranks `1` and `130`, since undo depends on the record: a run with track errors, or one a Ctrl-C stopped, whose record also failed exits `3`, its errors still in the summary. |
+| `4` | A paste only: the track refused by its guards (no transcript record, a text changed since it was heard, its tags or sidecars unreadable), nothing written (*`--mode paste`*). |
+| `5` | A paste only: the run was made, but its one track errored (its text changed under the lock, another file under its name, or its write failed). |
+| `6` | A paste only: not written, the paste not sung or not lyrics to write. |
 | `130` | Interrupted with Ctrl-C. Once the backup is done, the manifest records the tracks that finished; before it, the run stops with no summary and no track changed. An accept stopped after its rename (on Windows, its first move) leaves `.lyricsmith.accepting`, which the next accept finishes; stopped before it, none of the album's runs was removed. |
 
 A shared library or a sibling tool's module that cannot be located, or that a same-named
@@ -2411,7 +2506,7 @@ Each track records:
 | `path` | The MP3's path inside the album. |
 | `id3_version` | The ID3v2 version the file had before the run, as `[2, 4]`, or `null` when it had no ID3v2 header. |
 | `before` | What undo restores: `frames`, each frame's kind, language, description, encoding, SYLT format and type, its export `file` and any `exact` copy; and `sidecars`, each sidecar's `name` and either its copy's `file` or, for a symbolic link, its `link` target, the other `null` (either left out reads as `null`, and an entry with neither is refused); an entry with no `link` field, as a manifest written before links were recorded has, is a file copy. `null` when the track's backup failed. |
-| `after` | What the run did, filled in as the track finishes: `status` (`written`, `unchanged`, `not found`, `no lyrics expected`, `silent`, `kept existing`, `removed`, `stripped` or `error`; a manifest written before `unchanged` existed reads as it always did), `source` (a provider's name, `sidecar`, `frames`, `machine transcript`, `machine timed` or `album text`, another track's text a fix wrote), `kind` (`synced` or `unsynced`), `query`, `sidecar_written`, `sidecars_removed`, `sidecars_renamed`, `sidecar_hashes`, `frames_written`, `check`, `error` and `sidecar_links_ignored`, each sidecar link left unread because it leads out of the album (left out, as a manifest written before it existed has, it reads as none), and `refusals`, each provider call that refused or failed instead of answering, in the order asked, as its `provider`, its `step` (`synced` or `unsynced`, the kind it was asked for) and a short `detail` such as `HTTP 503` or `timeout`, one line of at most 80 characters, never a reply body, and its facts (*Each refusal is recorded on its track*): `reason`, `status`, `retries`, `retry_after_s`, `server` and `unsent` (left out, `refusals` reads as none; an entry written before its facts reads its `reason` from its `provider` and `detail`, no `retries` and the rest as `null`; one written before `unsent` reads it as `false`, and any value but `true` or `false` is refused), then `refetch_untimed`, `sidecar_unreadable`, `implausible` and `refetch_implausible` (below), and the silence check's `peak_dbfs`, a number set on a `silent` track alone, and `silence_failed`, a string naming why a missed track's measurement failed (both left out, they read as none), and `held`, what the track held before the run changed anything: `nothing`, `untimed` or `synced` (`null`, or left out, it reads as unknown: for a sidecar that could not be read, a frame over the lyrics cap, a track that errored before `held` was read, and a manifest written before the field existed, which leaves it out; any other value is refused), and `origin`, the album-relative path of the MP3 whose stored text a fix wrote (`null`, or left out, for any other write; a path that is not an MP3 inside the album is refused), and `withheld`, why a fix kept a `kept existing` track's wrong text rather than remove it, the album looking spoken (`spoken word (genre Comedy)`; `null`, or left out, for any other outcome). `null` until then. |
+| `after` | What the run did, filled in as the track finishes: `status` (`written`, `unchanged`, `not found`, `no lyrics expected`, `silent`, `kept existing`, `removed`, `stripped` or `error`; a manifest written before `unchanged` existed reads as it always did), `source` (a provider's name, `sidecar`, `frames`, `machine transcript`, `machine timed` or `album text`, another track's text a fix wrote), `kind` (`synced` or `unsynced`), `query`, `sidecar_written`, `sidecars_removed`, `sidecars_renamed`, `sidecar_hashes`, `frames_written`, `check`, `error` and `sidecar_links_ignored`, each sidecar link left unread because it leads out of the album (left out, as a manifest written before it existed has, it reads as none), and `refusals`, each provider call that refused or failed instead of answering, in the order asked, as its `provider`, its `step` (`synced` or `unsynced`, the kind it was asked for) and a short `detail` such as `HTTP 503` or `timeout`, one line of at most 80 characters, never a reply body, and its facts (*Each refusal is recorded on its track*): `reason`, `status`, `retries`, `retry_after_s`, `server` and `unsent` (left out, `refusals` reads as none; an entry written before its facts reads its `reason` from its `provider` and `detail`, no `retries` and the rest as `null`; one written before `unsent` reads it as `false`, and any value but `true` or `false` is refused), then `refetch_untimed`, `sidecar_unreadable`, `implausible` and `refetch_implausible` (below), and the silence check's `peak_dbfs`, a number set on a `silent` track alone, and `silence_failed`, a string naming why a missed track's measurement failed (both left out, they read as none), and `held`, what the track held before the run changed anything: `nothing`, `untimed` or `synced` (`null`, or left out, it reads as unknown: for a sidecar that could not be read, a frame over the lyrics cap, a track that errored before `held` was read, and a manifest written before the field existed, which leaves it out; any other value is refused), and `origin`, the album-relative path of the MP3 whose stored text a fix wrote, or `pasted by hand` for a text `--mode paste` wrote (`null`, or left out, for any other write; any other value that is not a path to an MP3 inside the album is refused), and `withheld`, why a fix kept a `kept existing` track's wrong text rather than remove it, the album looking spoken (`spoken word (genre Comedy)`; `null`, or left out, for any other outcome). `null` until then. |
 | `undone` | Whether an undo has put the track back. |
 | `displaced` | Every copy an undo of this track set aside in `undo/`, by its path inside the album, an undo that then failed included. |
 

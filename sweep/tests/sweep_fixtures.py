@@ -24,7 +24,7 @@ import json
 import os
 import socket
 import unittest
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -303,9 +303,16 @@ class FakeAlbumTool:
     clock: datetime = datetime(2026, 10, 19, 12, 0, 0, tzinfo=UTC)
 
     def __call__(
-        self, argv: Sequence[str], timeout_s: float
+        self,
+        argv: Sequence[str],
+        timeout_s: float,
+        *,
+        env: Mapping[str, str] | None = None,
     ) -> sweep_child.ChildResult:
-        """Record the call, write the scripted manifest, return the scripted result."""
+        """Record the call, write the scripted manifest, return the scripted result.
+
+        *env* is taken as `run_child` takes it, and not applied: nothing here is spawned.
+        """
         self.calls.append(list(argv))
         self.timeouts.append(timeout_s)
         album = Path(option_value(argv, "--album"))

@@ -38,14 +38,16 @@ Pure apart from `sibling_texts` and `text_of`, which read the album's files.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+import contextlib
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import lyrics_pinned
 from lyrics_compare import judged_lyrics, timed_lyrics
 from lyrics_heard import judge_words, little_heard, not_sung, text_fingerprint
 from lyrics_heard import words_of_text as words_of_text
-from lyrics_heard_store import HeardRecord
+from lyrics_heard_store import FileIdentity, HeardRecord, file_identity
 from lyrics_model import (
     Lyrics,
     LyricsError,
@@ -63,12 +65,34 @@ SKIP_CHANGED = "its text changed since it was heard"
 SKIP_LITTLE = "too little heard to judge"
 SKIP_SUNG = "the transcript sings its text"
 SKIP_MACHINE_TIMED = "its timed lyrics are machine made"
+#: A track whose path names another file than the one its record was matched to.
+NOT_THE_HEARD_FILE = "it is no longer the file its transcript was heard from"
 #: What a sibling's text is written under when no run recorded where it came from.
 UNRECORDED_SIBLING = Source.ALBUM_TEXT
 
 
 class TextChangedError(LyricsError):
     """A track's text no longer one a fix takes, between its plan and its turn."""
+
+
+@contextlib.contextmanager
+def held_to_planned_file(path: Path, planned: FileIdentity | None) -> Iterator[None]:
+    """Hold *path* to the file *planned* names for the block; refuse another one.
+
+    *planned* is the track's identity read before its record was matched (None when it
+    could not be read then). The record is matched by file identity, so a file swapped
+    in under the track's name after the match, its sidecar holding the same text, would
+    take a text judged against another file's hearing. So the name is checked now,
+    `TextChangedError` when it names another file, and then pinned
+    (`lyrics_pinned.pinned`): every open of it in the block, each write's included, must
+    be the planned file, else `lyrics_pinned.PinnedFileError`, both saying
+    `NOT_THE_HEARD_FILE`. Raises what `Path.stat` raises.
+    """
+    identity = file_identity(path)
+    if identity != planned:
+        raise TextChangedError(NOT_THE_HEARD_FILE)
+    with lyrics_pinned.pinned(path, identity, NOT_THE_HEARD_FILE):
+        yield
 
 
 @dataclass(frozen=True)

@@ -49,6 +49,17 @@ class FilenameReadingsTest(fixtures.IsolatedCase):
                     _readings(stem), [("", stem), ("", "The Keeper Counts")]
                 )
 
+    def test_strip_track_number_is_the_second_readings_title(self) -> None:
+        """The stem a reading drops its number from is what `strip_track_number` gives."""
+        for stem, stripped in (
+            ("03 - The Keeper Counts", "The Keeper Counts"),
+            ("1-03 The Keeper Counts", "The Keeper Counts"),
+            ("The Keeper Counts", "The Keeper Counts"),
+            ("03", "03"),
+        ):
+            with self.subTest(stem=stem):
+                self.assertEqual(lmatch.strip_track_number(stem), stripped)
+
     def test_an_artist_before_a_dash_is_read_as_the_artist(self) -> None:
         self.assertEqual(
             _readings("Invented Artist - The Keeper Counts"),

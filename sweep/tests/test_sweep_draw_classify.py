@@ -126,6 +126,16 @@ class MarksTest(sf.IsolatedCase):
             with self.subTest(after=after):
                 self.assertTrue(dc.marks_wrong_text(df.entry(_TRACK, after)))
 
+    def test_a_paste_s_write_marks(self) -> None:
+        # A paste follows only a not-sung finding, so its write is the finding's mark.
+        pasted = lr.TrackOutcome(
+            _STATUS.WRITTEN,
+            source=lm.Source.GENIUS,
+            kind=lm.LyricsKind.UNSYNCED,
+            origin=lr.PASTED_BY_HAND,
+        )
+        self.assertTrue(dc.marks_wrong_text(df.entry(_TRACK, pasted)))
+
     def test_an_undone_mark_still_marks(self) -> None:
         # The finding was made; an undo puts the text back, not the finding away.
         undone = df.entry(_TRACK, df.wrong_text_removed(), undone=True)

@@ -280,7 +280,9 @@ class RunTest(CliCase):
         )
 
     def test_ctrl_c_anywhere_else_exits_130_with_the_resume(self) -> None:
-        def interrupting(_argv: object, _timeout: float) -> sweep_child.ChildResult:
+        def interrupting(
+            _argv: object, _timeout: float, *, env: sweep_child.ChildEnv = None
+        ) -> sweep_child.ChildResult:
             raise KeyboardInterrupt
 
         self.runner = interrupting
@@ -344,13 +346,15 @@ class RunTest(CliCase):
     def test_an_album_swapped_for_a_link_after_the_survey_is_never_run(self) -> None:
         outside = sf.needy_album(self.tmp / "outside", "Far Artist", "Far Album")
 
-        def swapping(argv: Sequence[str], timeout_s: float) -> sweep_child.ChildResult:
+        def swapping(
+            argv: Sequence[str], timeout_s: float, *, env: sweep_child.ChildEnv = None
+        ) -> sweep_child.ChildResult:
             # While the first album runs, A2 is replaced by a link leading out of the
             # library; the survey had found it inside.
             if not self.fake.calls:
                 shutil.rmtree(self.albums[1])
                 self.albums[1].symlink_to(outside)
-            return self.fake(argv, timeout_s)
+            return self.fake(argv, timeout_s, env=env)
 
         self.runner = swapping
         result = self.main("--mode", "run")

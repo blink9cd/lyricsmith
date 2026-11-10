@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import sys
 import threading
+import types
+from collections.abc import Callable
 from pathlib import Path
+from unittest import mock
 
 import requests
 
@@ -42,6 +45,88 @@ SHORT_DEADLINE_S = 0.05
 # --- The watchdog ----------------------------------------------------------------------
 
 
+class _Halt(BaseException):
+    """A `BaseException` that is not an `Exception`, as `SystemExit` is."""
+
+
+def _lock_error(context: BaseException | None) -> RuntimeError:
+    """The lock error CPython's `Condition.wait` raises, with *context* behind it.
+
+    A Ctrl-C handled while the wait takes its lock back leaves the lock released, so
+    the ``with`` block's exit raises this, the interrupt only as its context.
+    """
+    error = RuntimeError("release unlocked lock")
+    error.__context__ = context
+    return error
+
+
+class _CutThread:
+    """A worker thread whose *step* (``start`` or ``join``) raises *error*."""
+
+    def __init__(self, step: str, error: Exception) -> None:
+        """Raise *error* from *step*; the other step does nothing."""
+        self.step, self.error = step, error
+
+    def __call__(self, *, target: object, daemon: bool) -> _CutThread:
+        """Stand in for `threading.Thread`: this fake, whatever it was given."""
+        del target, daemon
+        return self
+
+    def start(self) -> None:
+        """Raise the error when it is the start's."""
+        if self.step == "start":
+            raise self.error
+
+    def join(self, timeout: float) -> None:
+        """Raise the error when it is the join's."""
+        del timeout
+        if self.step == "join":
+            raise self.error
+
+    def is_alive(self) -> bool:
+        """Never reached: each test's step raises first."""
+        raise AssertionError("the watchdog went on past its cut step")
+
+
+class MangledInterruptTest(fixtures.IsolatedCase):
+    """A Ctrl-C the threading machinery wraps is still a Ctrl-C, never its error."""
+
+    def run_cut(self, step: str, error: Exception) -> None:
+        """`run_with_deadline` with its worker's *step* raising *error*."""
+        fake = types.SimpleNamespace(Thread=_CutThread(step, error))
+        with mock.patch.object(lf, "threading", fake):
+            lf.run_with_deadline(lambda: "answer", 5.0)
+
+    def test_an_interrupt_behind_a_lock_error_is_the_interrupt(self) -> None:
+        """At the start or the join, the Ctrl-C itself reaches the caller."""
+        for step in ("start", "join"):
+            with self.subTest(step=step):
+                interrupt = KeyboardInterrupt()
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    self.run_cut(step, _lock_error(interrupt))
+                self.assertIs(caught.exception, interrupt)
+
+    def test_a_lock_error_with_no_interrupt_is_raised_as_it_is(self) -> None:
+        """Any other error from the machinery is raised unchanged."""
+        for context in (None, ValueError("other")):
+            with self.subTest(context=context):
+                error = _lock_error(context)
+                with self.assertRaises(RuntimeError) as caught:
+                    self.run_cut("start", error)
+                self.assertIs(caught.exception, error)
+
+    def test_an_interrupt_already_in_hand_is_not_taken_for_a_new_one(self) -> None:
+        """Called while an earlier Ctrl-C is handled, a lock error stays itself."""
+        outer = KeyboardInterrupt()
+        error = _lock_error(outer)
+        try:
+            raise outer
+        except KeyboardInterrupt:
+            with self.assertRaises(RuntimeError) as caught:
+                self.run_cut("start", error)
+        self.assertIs(caught.exception, error)
+
+
 class DeadlineTest(fixtures.IsolatedCase):
     """run_with_deadline returns, re-raises, or abandons the call at its deadline."""
 
@@ -57,6 +142,16 @@ class DeadlineTest(fixtures.IsolatedCase):
 
         with self.assertRaises(KeyError):
             lf.run_with_deadline(fail, 5.0)
+
+    def test_a_base_exception_reaches_the_caller_not_an_index_error(self) -> None:
+        """An error outside `Exception` is the caller's error, never an empty box."""
+
+        def stop() -> str:
+            raise _Halt("worker stopped")
+
+        with self.assertRaises(_Halt) as caught:
+            lf.run_with_deadline(stop, 5.0)
+        self.assertEqual(str(caught.exception), "worker stopped")
 
     def test_a_hanging_call_is_abandoned_as_a_timeout(self) -> None:
         release = threading.Event()
@@ -143,6 +238,23 @@ class ProviderTableTest(fixtures.IsolatedCase):
         self.assertEqual(table[lm.ProviderKey(lm.Source.GENIUS, U)](QUERY), "words")
 
 
+class _LateTransport:
+    """*held*, reached only once *arrive* is set: a request sent after its deadline.
+
+    Under load the watchdog can abandon a call before its thread has sent anything;
+    this makes that order certain, so the test reads what such a call leaves.
+    """
+
+    def __init__(self, held: http_fakes.HeldTransport, arrive: threading.Event) -> None:
+        """Pass each request on to *held* once *arrive* is set."""
+        self.held, self.arrive = held, arrive
+
+    def __call__(self, request: requests.PreparedRequest) -> requests.Response:
+        """Wait for *arrive*, bounded as *held* is, then hand *request* to *held*."""
+        self.arrive.wait(self.held.limit_s)
+        return self.held(request)
+
+
 class RealAdapterTimeoutTest(fixtures.IsolatedCase):
     """A real LRC adapter whose request never answers ends as one TIMEOUT attempt."""
 
@@ -150,26 +262,48 @@ class RealAdapterTimeoutTest(fixtures.IsolatedCase):
         for source in lf.LRC_PROVIDERS:
             with self.subTest(source=source):
                 held = http_fakes.HeldTransport(fixtures.HANG_LIMIT_S)
-                # Only a backstop: the abandoned call is finished inside the transport.
-                self.addCleanup(held.released.set)
-                key = lm.ProviderKey(source, S)
-                table = {key: ltable.build_provider_table(None)[key]}
-                with http_fakes.transport(held):
-                    result = lf.fetch_lyrics(
-                        QUERY,
-                        lm.SidecarState(None),
-                        table,
-                        deadline_s=SHORT_DEADLINE_S,
-                    )
-                    sent = len(held.sent)
-                    finished = held.finish()
-                self.assertEqual(
-                    [(a.key, a.outcome) for a in result.attempts],
-                    [(key, lm.AttemptOutcome.TIMEOUT)],
-                )
-                self.assertIsNone(result.lyrics)
-                self.assertEqual(sent, 1)
-                self.assertTrue(finished)
+                self.assert_abandoned(source, held, held)
+
+    def test_a_request_sent_after_the_deadline_is_still_one_and_finished(self) -> None:
+        """The call abandoned before it sent still sends once, and ends in its test."""
+        held = http_fakes.HeldTransport(fixtures.HANG_LIMIT_S)
+        arrive = threading.Event()
+        self.addCleanup(arrive.set)
+        late = _LateTransport(held, arrive)
+        self.assert_abandoned(lm.Source.LRCLIB, held, late, after_deadline=arrive.set)
+
+    def assert_abandoned(
+        self,
+        source: lm.Source,
+        held: http_fakes.HeldTransport,
+        answer: http_fakes.Answer,
+        after_deadline: Callable[[], object] = lambda: None,
+    ) -> None:
+        """*source*'s step, answered by *answer* ahead of *held*, is one abandoned send."""
+        # Only a backstop: the abandoned call is finished inside the transport.
+        self.addCleanup(held.released.set)
+        key = lm.ProviderKey(source, S)
+        table = {key: ltable.build_provider_table(None)[key]}
+        with http_fakes.transport(answer):
+            result = lf.fetch_lyrics(
+                QUERY, lm.SidecarState(None), table, deadline_s=SHORT_DEADLINE_S
+            )
+            after_deadline()
+            # The watchdog may abandon the call before it sends: wait for its request,
+            # and count what was sent while held, before a release lets it follow up.
+            arrived = held.wait_sent(1)
+            sent = len(held.sent)
+            finished = held.finish()
+        self.assertEqual(
+            [(a.key, a.outcome) for a in result.attempts],
+            [(key, lm.AttemptOutcome.TIMEOUT)],
+        )
+        self.assertIsNone(result.lyrics)
+        self.assertTrue(arrived)
+        self.assertEqual(sent, 1)
+        self.assertTrue(finished)
+        # Read once every call has ended: a second call would be a second sender.
+        self.assertEqual(held.senders(), 1)
 
 
 class NoArtistTest(fixtures.IsolatedCase):

@@ -13,7 +13,7 @@ import io
 import shlex
 import sys
 import unittest
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -285,10 +285,14 @@ class _Removing(sf.FakeAlbumTool):
     heard: Path | None = None
 
     def __call__(
-        self, argv: Sequence[str], timeout_s: float
+        self,
+        argv: Sequence[str],
+        timeout_s: float,
+        *,
+        env: Mapping[str, str] | None = None,
     ) -> sweep_child.ChildResult:
         """Run the fake, then delete the album's records from the store."""
-        result = super().__call__(argv, timeout_s)
+        result = super().__call__(argv, timeout_s, env=env)
         assert self.heard is not None
         album = Path(sf.option_value(argv, "--album"))
         for record in list_records(self.heard).records:

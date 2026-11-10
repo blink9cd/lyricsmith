@@ -6,12 +6,18 @@ earlier refusal, or one stopped part-way through the run keeps the text, as the 
 error. A provider left out on purpose (``--no-tekstowo``, ``--only-providers``) is not
 one the run meant to ask, so it blocks nothing. A removal keeps the track's transcript
 record: the track then holds no untimed text, so a later fix leaves it alone, and once
-undo brings the wrong text back a fix takes it again. Each test drives the entry point
-with its real wiring; every title and lyric is invented.
+undo brings the wrong text back a fix takes it again. A track whose path names another
+file by the step than the one its record was matched to is refused, nothing changed,
+even when the sidecar beside it still holds the text the record was judged against,
+and so is one swapped in after the step's own check, at the write's open of it.
+Each test drives the entry point with its real wiring; every title and lyric is
+invented.
 """
 
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -23,6 +29,7 @@ import album  # noqa: E402 - import follows the sys.path bootstrap above
 import cli_fakes  # noqa: E402 - import follows the sys.path bootstrap above
 import fixtures  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_cooldown as lyc  # noqa: E402 - import follows the sys.path bootstrap above
+import lyrics_fix_text as lft  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_model as lm  # noqa: E402 - import follows the sys.path bootstrap above
 import lyrics_records as lr  # noqa: E402 - import follows the sys.path bootstrap above
 import tag_builders  # noqa: E402 - import follows the sys.path bootstrap above
@@ -175,3 +182,54 @@ class TimedFrameTest(FixCase):
         self.assertEqual(raw(paths), before)
         self.assertEqual(self.asked(), [])
         self.assertFalse((self.album / lr.RUN_FOLDER_NAME).exists())
+
+
+class SwappedFileTest(FixCase):
+    """A track swapped for another file between the plan and the step is refused."""
+
+    def test_a_track_swapped_for_another_file_after_the_plan_is_refused(self) -> None:
+        paths = self.build(song_track(1, HARBOR, txt=QUARRY))
+        self.hear(paths[0], HARBOR)
+        self.answer({TITLES[HARBOR]: HARBOR})
+        real = album.real_wiring().stages.back_up
+        stand_in = self.tmp / "stand-in.mp3"
+        shutil.copyfile(paths[0], stand_in)
+
+        def back_up_then_swap(*args: object, **kwargs: object) -> object:
+            # Another file takes the track's name once the plan is made; its sidecar
+            # still holds the text the record was judged against.
+            manifest = real(*args, **kwargs)  # type: ignore[arg-type] # passed through
+            os.replace(stand_in, paths[0])
+            return manifest
+
+        self.overrides["back_up"] = back_up_then_swap
+        result = self.fix()
+        self.assertEqual(result.code, album.EXIT_TRACK_ERRORS, result.stdout)
+        cell = cli_fakes.row_cells(result.stdout, paths[0].name)[-1]
+        self.assertIn(lft.NOT_THE_HEARD_FILE, cell)
+        self.assertEqual(self.text_of(paths[0]), words(QUARRY))
+        self.assertIsNotNone(self.record_of(paths[0]))
+        self.assertEqual(self.asked(), [])
+
+    def test_a_track_swapped_after_the_step_s_check_is_never_written(self) -> None:
+        paths = self.build(song_track(1, HARBOR, txt=QUARRY), sung_neighbor())
+        self.hear(paths[0], HARBOR)
+        self.answer({TITLES[HARBOR]: HARBOR})
+        real = album.real_wiring().stages.check_encodable
+        stand_in = self.tmp / "stand-in.mp3"
+        shutil.copyfile(paths[1], stand_in)
+        original = paths[1].read_bytes()
+
+        def swap_then_check(lyrics: lm.Lyrics, lang: str) -> None:
+            # The write's first call, once the step checked the name: another file
+            # takes it, its sidecar still the text the record was judged against.
+            os.replace(stand_in, paths[0])
+            real(lyrics, lang)
+
+        self.overrides["check_encodable"] = swap_then_check
+        result = self.fix()
+        self.assertEqual(result.code, album.EXIT_TRACK_ERRORS, result.stdout)
+        cell = cli_fakes.row_cells(result.stdout, paths[0].name)[-1]
+        self.assertIn(lft.NOT_THE_HEARD_FILE, cell)
+        self.assertEqual(paths[0].read_bytes(), original)
+        self.assertEqual(self.text_of(paths[0]), words(QUARRY))

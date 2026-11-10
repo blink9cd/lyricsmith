@@ -45,6 +45,11 @@ class EpilogWidthTest(fixtures.IsolatedCase):
 class ExitTableTest(fixtures.IsolatedCase):
     """The exit table names the causes the companion doc's table names."""
 
+    def test_a_paste_s_own_codes_are_listed(self) -> None:
+        rows = exit_rows()
+        self.assertIn("paste only: the track refused by its guards", rows["4"])
+        self.assertIn("paste only: the run was made", rows["5"])
+
     def test_a_compare_error_row_is_exit_1(self) -> None:
         self.assertIn("a compare with an ERROR row", exit_rows()["1"])
 

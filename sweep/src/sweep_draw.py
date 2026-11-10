@@ -264,12 +264,20 @@ def _drawn(args: argparse.Namespace, library: Path) -> Draw | None:
     return draw_withheld(tracks) if args.withheld else draw_sample(tracks, args.seed)
 
 
+def out_inside_library(out: Path, library: Path) -> bool:
+    """Whether *out*, resolved through any link, is the resolved *library* or inside it.
+
+    The read-only modes refuse such an ``--out``, so none writes into the library.
+    """
+    return out.resolve().is_relative_to(library)
+
+
 def draw_mode(
     args: argparse.Namespace, library: Path, _wiring: object, _words: object
 ) -> int:
     """``--mode draw`` over *library*, resolved: draw, write, print; the exit code."""
     out: Path = args.out
-    if out.resolve().is_relative_to(library):
+    if out_inside_library(out, library):
         _notice(f"--out is inside the library, which the draw never writes: {out}")
         return EXIT_USAGE
     draw = _drawn(args, library)

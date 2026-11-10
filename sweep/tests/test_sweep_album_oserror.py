@@ -13,7 +13,7 @@ import contextlib
 import io
 import sys
 import unittest
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -142,10 +142,15 @@ class ChildLaunchTest(AlbumErrorCase):
     """An album tool that cannot be started could not run; the sweep goes on."""
 
     def test_a_child_that_cannot_start_could_not_run(self) -> None:
-        def runner(argv: Sequence[str], timeout_s: float) -> sweep_child.ChildResult:
+        def runner(
+            argv: Sequence[str],
+            timeout_s: float,
+            *,
+            env: Mapping[str, str] | None = None,
+        ) -> sweep_child.ChildResult:
             if sf.option_value(argv, "--album").endswith("First"):
                 raise FileNotFoundError(2, "No such file or directory", "python")
-            return self.fake(argv, timeout_s)
+            return self.fake(argv, timeout_s, env=env)
 
         self.runner = runner
         result = self.main()
@@ -177,8 +182,13 @@ class PostRunListingTest(AlbumErrorCase):
     ) -> None:
         """*lock* the first album's run folder once its album tool ran; assert no record."""
 
-        def runner(argv: Sequence[str], timeout_s: float) -> sweep_child.ChildResult:
-            result = self.fake(argv, timeout_s)
+        def runner(
+            argv: Sequence[str],
+            timeout_s: float,
+            *,
+            env: Mapping[str, str] | None = None,
+        ) -> sweep_child.ChildResult:
+            result = self.fake(argv, timeout_s, env=env)
             if sf.option_value(argv, "--album").endswith("First"):
                 lock()
             return result
@@ -204,10 +214,15 @@ class LaunchFailedChangedListTest(AlbumErrorCase):
     """An album tool that could not start lists its album at once, saying it never started."""
 
     def test_the_notice_comes_before_the_next_album_and_says_so(self) -> None:
-        def runner(argv: Sequence[str], timeout_s: float) -> sweep_child.ChildResult:
+        def runner(
+            argv: Sequence[str],
+            timeout_s: float,
+            *,
+            env: Mapping[str, str] | None = None,
+        ) -> sweep_child.ChildResult:
             if sf.option_value(argv, "--album").endswith("First"):
                 raise FileNotFoundError(2, "No such file or directory", "python")
-            return self.fake(argv, timeout_s)
+            return self.fake(argv, timeout_s, env=env)
 
         self.runner = runner
         listed = self.tmp / "changed.txt"
@@ -231,10 +246,15 @@ class LaunchFailedChangedListTest(AlbumErrorCase):
         self.assertEqual(lines[: len(firsts)], firsts)
 
     def test_a_ctrl_c_during_the_immediate_absorb_stops_the_sweep(self) -> None:
-        def runner(argv: Sequence[str], timeout_s: float) -> sweep_child.ChildResult:
+        def runner(
+            argv: Sequence[str],
+            timeout_s: float,
+            *,
+            env: Mapping[str, str] | None = None,
+        ) -> sweep_child.ChildResult:
             if sf.option_value(argv, "--album").endswith("First"):
                 raise FileNotFoundError(2, "No such file or directory", "python")
-            return self.fake(argv, timeout_s)
+            return self.fake(argv, timeout_s, env=env)
 
         real = sweep_changed.ChangedUnion._read_child
         calls: list[Path] = []

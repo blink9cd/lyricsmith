@@ -55,6 +55,7 @@ Nothing here prints; every attempt comes back in the `FetchResult` instead.
 
 from __future__ import annotations
 
+import sys
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -131,26 +132,56 @@ CHAIN: tuple[ProviderKey, ...] = (
 # --- The watchdog ------------------------------------------------------------------------
 
 
+def _raise_interrupt_behind(error: Exception, in_hand: BaseException | None) -> None:
+    """Raise the Ctrl-C *error* stands in for, if it stands in for a new one.
+
+    CPython's `threading.Thread.start` waits on a `threading.Condition` until the new
+    thread runs, and that wait can take a `KeyboardInterrupt` while it reacquires its
+    lock. The lock is then left released, and the ``with`` block around the wait raises
+    `RuntimeError` ("release unlocked lock") as it exits, the interrupt only its
+    context. Raised as it is, a caller reading every `Exception` as the provider's
+    refusal would take a Ctrl-C for one, and tell the breaker so. The lock error is the
+    interpreter's, never the provider's, so it is dropped from the interrupt's report.
+    *in_hand* is the error already being handled when the watchdog began: an earlier
+    Ctrl-C there is every new error's context too, so it is not taken for a new one.
+    """
+    interrupt = error.__context__
+    if isinstance(interrupt, KeyboardInterrupt) and interrupt is not in_hand:
+        raise interrupt from None
+
+
 def run_with_deadline(call: Callable[[], _T], deadline_s: float) -> _T:
     """*call*'s result, or its own error re-raised; `ProviderTimeout` at *deadline_s*.
 
     The call runs on a daemon thread. One still running at the deadline is abandoned:
-    it keeps its thread until it returns, and the caller has already moved on.
+    it keeps its thread until it returns, and the caller has already moved on. Any
+    error the call raises reaches the caller, one outside `Exception` (`SystemExit`, a
+    `KeyboardInterrupt` raised on the worker) included. A Ctrl-C taken while the
+    worker starts reaches the caller as itself, even where the threading machinery
+    wraps it in an error of its own (`_raise_interrupt_behind`); the join is held to
+    the same rule, though no version measured wraps one there.
     """
     # One-slot boxes the worker fills; a finished call fills exactly one of them.
     values: list[_T] = []
-    errors: list[Exception] = []
+    errors: list[BaseException] = []
 
     def _run() -> None:
         try:
             values.append(call())
-        # Any failure is carried back and re-raised on the caller's thread below.
-        except Exception as error:
+        # Every failure is carried back and re-raised on the caller's thread below.
+        # Catching only `Exception` left both boxes empty for a `SystemExit` or a
+        # worker's `KeyboardInterrupt`, and `values[0]` then hid it as an IndexError.
+        except BaseException as error:
             errors.append(error)
 
     worker = threading.Thread(target=_run, daemon=True)
-    worker.start()
-    worker.join(deadline_s)
+    in_hand = sys.exception()
+    try:
+        worker.start()
+        worker.join(deadline_s)
+    except Exception as error:
+        _raise_interrupt_behind(error, in_hand)
+        raise
     if worker.is_alive():
         raise ProviderTimeout(f"no answer within {deadline_s}s")
     if errors:

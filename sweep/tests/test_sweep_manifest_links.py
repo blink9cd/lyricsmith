@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import shutil
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -71,10 +71,14 @@ class _LinkingAlbumTool(sf.FakeAlbumTool):
     """The fake album tool, leaving the manifest of each run it makes a dangling link."""
 
     def __call__(
-        self, argv: Sequence[str], timeout_s: float
+        self,
+        argv: Sequence[str],
+        timeout_s: float,
+        *,
+        env: Mapping[str, str] | None = None,
     ) -> sweep_child.ChildResult:
         """Make the run as the fake does, then dangle its manifest."""
-        result = super().__call__(argv, timeout_s)
+        result = super().__call__(argv, timeout_s, env=env)
         album = Path(sf.option_value(argv, "--album"))
         dangle(_manifests(album)[-1])
         return result

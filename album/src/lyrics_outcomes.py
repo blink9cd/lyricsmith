@@ -39,6 +39,7 @@ from lyrics_records import (
     CheckResult,
     CheckRule,
     ErrorStage,
+    PASTED_BY_HAND,
     HeldBefore,
     OutcomeStatus,
     ProviderRefusal,
@@ -461,8 +462,11 @@ def shown_source(outcome: TrackOutcome) -> str:
     """*outcome*'s source as a row or a progress line shows it.
 
     A fix's text taken from another track names that track after it
-    (``another track's text from 02 Song.mp3``).
+    (``another track's text from 02 Song.mp3``), and a pasted text says so
+    (``Genius, pasted by hand``).
     """
+    if outcome.origin == PASTED_BY_HAND:
+        return f"{outcome.source}, {PASTED_BY_HAND}"
     if outcome.origin is not None:
         return f"{outcome.source} from {outcome.origin}"
     return str(outcome.source)

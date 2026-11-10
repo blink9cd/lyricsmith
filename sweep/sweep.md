@@ -20,6 +20,10 @@ record `sync --heard-dir` kept, with a run's ledger, pace and resume (see "The f
 `--mode draw` is read-only too: it draws a sample of provider-timed tracks to hear into a
 track list and a strata file (see "The sample's draw").
 
+`--mode genius-check` writes no track either: it splits a track list, such as a fix's
+`--hold-for-genius` list, into what Genius's keyed API says Genius has, lacks, or might
+have (see "The Genius check").
+
 ## Prerequisites
 
 `album` beside this tool, under the same project root, with the project's
@@ -29,7 +33,8 @@ with `mutagen`. Every prerequisite of `album` applies to each album a run visits
 Genius key included when you want Genius asked. The library is a folder of `Artist/Album`
 folders.
 
-Every mode runs on macOS, Linux, and Windows. Accept's removal goes through `album`'s own
+Every mode but `paste` runs on macOS, Linux, and Windows; `paste` needs macOS (see
+"Pasting from Genius"). Accept's removal goes through `album`'s own
 delete, which never follows a link out of the folder it removes on any host (see `album`'s
 "The delete that never follows a link").
 On Windows, which cannot send `album` Ctrl-C's own signal, the per-album bound terminates
@@ -61,7 +66,8 @@ Try it on a handful of albums before the whole library:
 ## Usage
 
 ```text
-sweep.py [--library <dir>] [--mode survey|run|accept|silence|fix-text|draw|hear-report] [--apply] [--lang <code>]
+sweep.py [--library <dir>] [--mode survey|run|accept|silence|fix-text|draw|hear-report|genius-check|paste]
+                [--apply] [--lang <code>]
                 [--refetch-untimed] [--refetch-implausible] [--owe-earlier-runs] [--heard-dir <dir>]
                 [--hold-for-genius <file>]
                 [--offline] [--no-netease] [--no-bandcamp] [--no-youtube-music]
@@ -69,18 +75,19 @@ sweep.py [--library <dir>] [--mode survey|run|accept|silence|fix-text|draw|hear-
                 [--limit <n>] [--restart] [--changed-list <file>] [--resume <file>]
                 [--seed <n>] [--out <dir>] [--withheld]
                 [--hearing-log <dir>] [--strata <file>] [--model <file>] [--compare-model <file>]
+                [--tracks-from <file>] [--from <file>]
 ```
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--library` | `~/Music/Albums` | The library: a folder of `Artist/Album` folders. A leading `~` is expanded. |
-| `--mode` | `survey` | `survey` counts each album's tracks by the lyrics they hold and writes nothing. `run` runs `album` on each album a survey would visit. `accept` reports, by `album`'s accept rules, what dropping each album's runs and backups would remove, and removes them with `--apply` (see "Accept"). `silence` measures every track's peak and lists the silent ones, judged (see "The silence pass"). `fix-text` runs `album --mode fix-text` on each album holding a record in `--heard-dir` (see "The fix pass"). `draw` draws a sample of provider-timed tracks to hear into `--out`, reading only (see "The sample's draw"). `hear-report` reports each group of a drawn sample's `not sung` rate from the hearing log, reading only (see "The hearing's report"). |
+| `--mode` | `survey` | `survey` counts each album's tracks by the lyrics they hold and writes nothing. `run` runs `album` on each album a survey would visit. `accept` reports, by `album`'s accept rules, what dropping each album's runs and backups would remove, and removes them with `--apply` (see "Accept"). `silence` measures every track's peak and lists the silent ones, judged (see "The silence pass"). `fix-text` runs `album --mode fix-text` on each album holding a record in `--heard-dir` (see "The fix pass"). `draw` draws a sample of provider-timed tracks to hear into `--out`, reading only (see "The sample's draw"). `hear-report` reports each group of a drawn sample's `not sung` rate from the hearing log, reading only (see "The hearing's report"). `genius-check` splits the `--tracks-from` list into three lists in `--out` by what Genius's keyed API has, writing no track (see "The Genius check"). `paste` walks the `--from` has-it list at a terminal, opening each track's Genius page and pasting the copied lyrics in through `album --mode paste` (see "Pasting from Genius"). |
 | `--apply` | off | `accept` only: record each album's manifests outside the library, then remove its `.lyricsmith` folder, every backup and undo with it. Without it, accept only reports. Refused by `survey` and `run`. |
-| `--lang` | `album`'s own, `eng` | The ISO 639-2 code `album` ranks a track's frames by and writes new frames in; the survey ranks frames by it too. Passed to `album` only when given. |
+| `--lang` | `album`'s own, `eng` | The ISO 639-2 code `album` ranks a track's frames by and writes new frames in; the survey ranks frames by it too. Passed to `album` only when given, but by `paste`, which passes it to each track's paste always, `album`'s own when omitted, and judges each record by it too. |
 | `--refetch-untimed` | off | The refetch pass (see "Two passes"): a run passes `--refetch-untimed` to `album`, which asks the providers again for each track holding only untimed lyrics, and a survey lists the albums this pass would visit. Refused with `--offline`. |
 | `--refetch-implausible` | off | A run passes `--refetch-implausible` to `album`, which asks the providers again for each track serving implausible lyrics and removes them when none answers. A survey or run with it also visits an album whose every track is synced when a track's serving lyrics are implausible, naming each such track (see "Which albums are visited"). It adds no pass: it rides the normal pass, or the refetch pass beside `--refetch-untimed` (see "Two passes"), and the survey's restart hint names it. Refused with `--offline`. |
 | `--owe-earlier-runs` | off | A survey or run also counts as owed an album an earlier run left owing: one whose newest ledger line is `done` but was written before the `owed` outcome existed, owing each refusing provider it names and each provider its run left out by a cool-down while that provider could still answer a track (see "An owed album"). A run asks it only those providers; a survey lists it with its debt. Refused with `--restart`, `--offline` and `--mode accept`. |
-| `--heard-dir` | none | `fix-text` only, and required there: the transcript folder `sync --heard-dir` wrote, made absolute (a leading `~` expanded) and passed to each album's fix, which only reads it. Every other mode refuses it. |
+| `--heard-dir` | none | `fix-text` and `paste` only, and required by each: the transcript folder `sync --heard-dir` wrote, made absolute (a leading `~` expanded) and passed to each album's fix, or each track's paste, which only reads it. Every other mode refuses it. |
 | `--hold-for-genius` | no list, and such a text removed | `fix-text` only: pass `album`'s `--hold-for-genius` to each album's fix, which then never asks Genius and keeps, instead of removing, a wrong text every provider asked answered without singing; add each track so held to this file, one absolute path per line, rewritten after each album, and added to when the file already exists, unless `--restart`. Refused with `--no-genius`, and when it names the same file as `--changed-list`; every other mode refuses it. See "Holding for Genius" under "The fix pass". |
 | `--offline` | off | `run` only: pass `--offline` to `album`, which then asks no provider. For trying the sweep on a library, and for its samples. An offline visit never makes an album done. |
 | `--no-netease` | off | `run` and `fix-text` only: pass `--no-netease` to `album`, which then skips both NetEase steps. NetEase publishes no terms for the routes asked. See *Lyrics sources and their terms* in `../README.md`. |
@@ -92,15 +99,17 @@ sweep.py [--library <dir>] [--mode survey|run|accept|silence|fix-text|draw|hear-
 | `--stop-after` | `DEFAULT_STOP_AFTER`, shown by `--help` | `run` and `fix-text` only: stop after this many consecutive refused albums (see "The stop rule"). |
 | `--limit` | every album left | `run`, `fix-text` and `silence` only: visit at most this many albums, for a first real run or a preview. An album dropped just before its visit takes no place in the count. |
 | `--restart` | off | `run` and `fix-text` only: visit the albums the ledger holds as done as well. |
-| `--changed-list` | no list | `run` and `fix-text` only: write the absolute path of every MP3 the run's albums saved to this file, one per line, for a library app or script that rereads those files' tags; rewritten after each album, and added to when the file already exists, unless `--restart`. See "The changed list". |
+| `--changed-list` | no list | `run`, `fix-text` and `paste` only: write the absolute path of every MP3 the run's albums saved to this file, one per line, for a library app or script that rereads those files' tags; rewritten after each album or paste, and added to when the file already exists, unless a run's or fix's `--restart`. See "The changed list". |
 | `--resume` | a new list | `silence` only: append to this silence list, skipping the albums it marks done, after cutting off the lines of an album it did not finish (see "The silence pass"). |
 | `--seed` | none | `draw` only, and required there: the integer the sample is drawn by, written in the strata file's header. |
-| `--out` | none | `draw` only, and required there: the folder `tracks.txt` and `strata.tsv` are written into, made absolute (a leading `~` expanded); refused inside the library. |
+| `--out` | none | `draw` and `genius-check` only, and required by each: the folder written into, made absolute (a leading `~` expanded), and refused inside the library by each. The draw writes `tracks.txt` and `strata.tsv` there; the check writes `has-it.tsv`, `not-on-genius.txt` and `unsure.tsv`. |
 | `--withheld` | off | `draw` only: list the untimed tracks whose removal a fix withheld, instead of the sample (see "The sample's draw"). |
 | `--hearing-log` | none | `hear-report` only, and required there: the hearing log `sync --mode hear` wrote, made absolute (a leading `~` expanded); only read. |
 | `--strata` | none | `hear-report` only, and required there: the `strata.tsv` the draw wrote, made absolute (a leading `~` expanded). |
 | `--model` | the pinned turbo, shown by `--help` | `hear-report` only: the whisper model file whose hearings are reported, as the hearing log names it. |
 | `--compare-model` | no comparison | `hear-report` only: a second whisper model file; each track heard by both models is compared (see "The hearing's report"). Refused when it names `--model`. |
+| `--tracks-from` | none | `genius-check` only, and required there: the track list to check, one absolute path per line in the `--changed-list` format (see "The changed list"), such as a fix's `--hold-for-genius` list, made absolute (a leading `~` expanded); only read, and a track in it outside `--library` is passed over (see "The Genius check"). |
+| `--from` | none | `paste` only, and required there: the `has-it.tsv` the Genius check wrote, made absolute (a leading `~` expanded); only read (see "Pasting from Genius"). |
 
 The survey refuses `--offline`, the five `--no-*` options, `--limit`, `--restart` and
 `--changed-list` with exit `2` rather than ignoring them, and `--pause-seconds` and
@@ -126,6 +135,12 @@ given a value other than its default; every other mode refuses the three. `hear-
 takes only `--library`, `--mode`, `--hearing-log`, `--strata`, `--model` and
 `--compare-model`, needs the first two of its own, and refuses every other option the
 same way; every other mode refuses its four given a value other than their default.
+`genius-check` takes only `--library`, which bounds the tracks it reads and refuses an `--out` inside it, `--mode`, `--tracks-from`
+and `--out`, needs both of its own, and refuses every other option the same way; every
+mode but it refuses `--tracks-from`, and every mode but it and `draw` refuses `--out`.
+`paste` takes only `--library`, `--mode`, `--from`, `--heard-dir`, `--changed-list` and `--lang`,
+needs `--from` and `--heard-dir`, and refuses every other option the same way; every
+mode but it refuses `--from`.
 
 ## Which albums are visited
 
@@ -639,7 +654,8 @@ records, never the tracks' texts: an undo of a written text leaves the record as
 (`sync` has not yet re-timed the track), so its album stays done until `--restart`.
 A `--restart` of the fix pass forgets only the fix pass's done albums, never a run's.
 
-**Holding for Genius.** Genius challenges every request a script sends, so with Genius
+**Holding for Genius.** Genius challenges every request a script sends to its site and
+its unkeyed search, the ones `album`'s Genius step makes, so with Genius
 asked each of its refusals keeps a track as an error, and an album whose providers only
 refused counts toward the stop rule; with `--no-genius` a track no other provider has is
 removed. `--hold-for-genius <file>` passes `album`'s own option to each album's fix,
@@ -666,6 +682,172 @@ an `errors: <n> tracks kept for a later fix` line when a track
 errored, each album's undo command, and the `resume:` line, which resumes the fix on the
 same `--heard-dir` and the same `--hold-for-genius` list. The exit code is a run's: `0` only when every album visited ended
 `done` with `album` exiting `0`.
+
+### The Genius check
+
+`--mode genius-check` reads a track list, such as the one `--hold-for-genius` wrote, and
+asks Genius's keyed API whether Genius has each track, so the held tracks can be split
+before anything is decided about them. It writes no track and writes only into `--out`,
+which it refuses inside the library, as the draw does. It reads only the library's
+tracks: a listed path that resolves, links followed, outside `--library` is passed over
+unread and unasked, listed unsure as `outside the library`, said on stderr and counted in
+the summary, as the paste walk passes over a row outside the library.
+The bound narrows what is read rather than sealing it: the path is resolved once and the
+resolved path read, so a link swapped into one of its folders between the two is still
+followed. The read is only of tags, and nothing is written there.
+The other way round is checked: a listed link outside the library to a track inside it is
+read and asked as the track it leads to, and so can be written to `has-it.tsv` under the
+listed path. The paste walk takes a row's path as written, links not followed, so it
+passes that row over as outside the library: list the track by its path inside the library
+to paste it.
+
+```text
+sweep.py --mode genius-check --tracks-from <file> --out <dir>
+```
+
+**Keyed only, and why.** `album`'s Genius step searches through Genius's unkeyed site and
+then reads the song's page, and Cloudflare now challenges a script on both. The keyed
+API, `api.genius.com`, still answers a script that holds a key, but it never gives
+lyrics; its search does say which songs Genius has, and whether their lyrics are
+complete. So the check makes one keyed search a track (`GET /search`, one page of the most results it gives, the
+key as the bearer header) and nothing else: never the site, never a page. The key is
+`album`'s own, from `GENIUS_ACCESS_TOKEN` or the config file (`../album/album.md`), and it
+is never printed or written. The client is the Genius step's, with the same session
+rules, pace, retry schedule on a `403` or `429` and whole-call bound, and the search goes
+through Genius's breaker (`../album/src/lyrics_breaker.py`), the file a run's Genius step
+keeps, so the check and a run see one another's refusals.
+
+**Each track.** A path the list names more than once is checked once, where first named.
+Its tags give the query as a run builds it, the file stem standing in for a missing title
+or artist tag, and the search term is the title and then the artist; a stem is searched
+without a leading track number (`04 - Song` as `Song`), the reading the matcher tries too.
+The hits are judged by `album`'s own matcher, the rules the Genius step holds a song to:
+title, artist and version, with the stem's readings for an untagged track.
+
+**What it writes.** Three files in `--out`, each private (`0600`), written whole and
+replaced on a rerun, every track of the list in exactly one, in list order:
+
+| File | Holds |
+| --- | --- |
+| `has-it.tsv` | Each track a hit matches whose lyrics Genius holds complete, and that is not marked instrumental. Columns: `track`, `genius url`, `genius title`, `genius artist`, under a header row. A track whose path holds a tab, a line break or a lone surrogate, which a row cannot hold unchanged, goes to `unsure.tsv` instead, saying so, since the walk could not find it from the changed path. |
+| `not-on-genius.txt` | Each track whose search gave a clear, complete answer with no hit close to it, in the `--changed-list` format, so it can feed a later step such as `sync --tracks-from`. Clear and complete means every hit the reply listed was read as a song, the reply listed fewer hits than a full page (`SEARCH_PER_PAGE`, so none was cut off), the track was asked by its tags, not its file name, and no hit is by the track's artist (Genius knowing the artist under other titles is as likely a title tag that misnames the song). This list may later drive removals, so any doubt goes to `unsure.tsv`. |
+| `unsure.tsv` | Everything else. Columns: `track`, `reason`, `closest genius url`, under a header row. |
+
+An unsure track's reason is one of: `near miss`, no hit matching but one close; `matched,
+lyrics not complete` or `matched, instrumental`; `a hit could not be read`, nothing close
+but a hit the reply listed was not of a song's shape; `no close hit in the first page`,
+nothing close in a full page; `no close hit, searched by file name`, nothing close to an
+untagged track's stem; `artist found, no close title`, nothing close, but a hit by the
+track's artist, named; `refused: <detail>`, a search refused or timed out (`HTTP 403
+after 3 retries`, `timeout`, `redirect refused`, or `hits unreadable` for a reply listing
+hits none of which could be read); `not asked: breaker open`, every track left once
+Genius's breaker opened, with no request sent; `outside the library`, a path that
+resolves outside `--library`, neither read nor asked; `track unreadable`, a file that
+could not be read, whatever reading it raised, not asked, its error named by type on
+stderr; `not asked: interrupted`, after Ctrl-C; and `not asked: check stopped`, every
+track left when anything else ended the check early.
+
+A search follows a redirect only within `api.genius.com`: one to Genius's site, or
+anywhere else, is refused unfollowed (`redirect refused`).
+
+A hit is **close**, a lower bar than a match and only for a person to look at, when its
+title matches at the normal bar but its artist does not, or when its artist matches and
+its title is at least `NEAR_TITLE_MIN_SIMILARITY` alike (`src/sweep_genius_judge.py`),
+well under the matcher's own `TITLE_MIN_SIMILARITY`. For an untagged track, a hit is
+close when its title is that alike to a reading of the stem. Close is a guess about
+spelling, never a finding: a near miss is often another song.
+
+Every field is made tab- and line-safe (a tab or line break becomes a space), a Genius
+title or artist is cut to the matcher's `MAX_NAME_CHARS`, and a URL is written only when
+it is https on a Genius host; any other is written empty.
+
+**What it prints.** The tracks checked, each list's count, how many of the unsure are
+outside the library, and each file's path on stdout; one progress line a track and every
+notice on stderr.
+
+**Exit codes.** `0` once the three files are written and Genius answered every search
+asked, unsure rows or not; `1` once they are written but a track is `refused: <detail>`
+or `not asked: breaker open`, so the check is worth running again; `2`, with nothing
+searched or written, for an `--out` inside the library or one that cannot be made or
+written to, no key found, or a `--tracks-from` that cannot be read, is past
+`MAX_TRACKS_FROM_BYTES` or is not a track list, and `2` for a file it cannot write after
+the searches; `130` after Ctrl-C: the track in hand and every one after it are listed
+`not asked: interrupted`, and the three files are still written: a Ctrl-C from the moment
+the hold is set, just after the last search, is held until all three are, and one in the
+instant before it is the interrupt it was, the files unwritten. A `track unreadable` or
+`outside the library` row alone leaves the exit `0`: Genius was not failed to be asked,
+the file was. Anything else that ends the check early is raised as it is, but only once
+the three files are written, so no search already made is lost.
+
+### Pasting from Genius
+
+`sweep --mode paste --from <has-it.tsv> --heard-dir <dir> [--changed-list <file>] [--lang <code>]` brings
+in, by hand, the lyrics the Genius check found Genius has. Cloudflare challenges a script
+on Genius's pages, but a person's browser reaches them, so the walk opens each page, the
+person copies the lyrics, and each paste is checked against what the hearing heard before
+anything is written. It needs macOS (`open` and `pbpaste` on `PATH`) and a terminal: with
+stdin or stdout not one, it exits `2` before anything. Each tool is found on `PATH` once,
+as the walk starts, and run by the absolute path found, never by its bare name again, so
+a same-named program put earlier on `PATH` later is never run. Neither tool, nor any
+`album` child, is handed the Genius key (`GENIUS_ACCESS_TOKEN`), which none of them
+uses, and `pbpaste` runs under a UTF-8 locale (`LANG`, `LC_ALL` and `LC_CTYPE`), so a
+`C` locale cannot make every paste fail as not UTF-8.
+
+**The list.** `--from` is read strictly, never through a link and no further than
+`MAX_HAS_IT_BYTES` (`src/sweep_genius_lists.py`): UTF-8, each line ended, the check's own
+header, then rows of its four fields, each track an absolute path, and no NUL anywhere.
+Anything else is exit `2`, nothing opened.
+
+**Each row**, in the list's order, is passed over with a one-line reason, never opened,
+when its URL is not https on a Genius host, its track is not in an `Artist/Album` folder
+of `--library`, that artist or album folder is reached through a link (`album` resolves
+the folder it is given, so it would write outside the library), the track is a link
+itself or sits under a linked folder below the album, such as a linked `Disc 2` (`album`'s
+walk skips either, so it would refuse the track once the lyrics were copied), or
+`album --mode paste` would refuse it: no record in `--heard-dir`, or a text no longer the
+one its record was judged against, under `--lang`. A row whose folders or files cannot be
+looked at is passed over too, with the error. A track already pasted holds the
+pasted text, so this is how a walk resumes: run it again over the same list and it goes
+on from the first row left. Otherwise the walk prints the track, the Genius title and
+artist and the URL, opens the page in the default browser (a page that will not open is
+said, and the URL can be opened by hand), and asks:
+
+```text
+Copy the lyrics in the browser, then press Enter (s skip, q quit):
+```
+
+| Key | What happens |
+| --- | --- |
+| Enter | The clipboard is read (`pbpaste`), written to a private file (`0o600`, in a private folder), and `album --mode paste` runs on the track as a child, its stdin closed and its output on stderr. The file is deleted once the child ends. A `pbpaste` that does not answer in time, or one a Ctrl-C reaches mid-read, is killed and waited for, never left running. |
+| `s` | The row is skipped; after a paste that was not written it is given up. |
+| `q` | The walk stops, as the end of input does. |
+
+The child's end decides what follows. Written (`album`'s exit `0`): the next row. Not
+written, the paste not sung or not lyrics to write (exit `6`, the share of the word pairs
+heard said by the child), and that exit alone: the prompt again, to copy and paste once
+more, or `s` to give up. Refused (exit `4`): noted, the next row. Any other end (a track
+error's exit `5`, a crash's `1`, another exit, the bound of `PASTE_TIMEOUT_S` passed, a
+child that would not stop) is a failure, noted, the next row: no copy could mend it, so the
+walk never asks for one.
+An empty or unreadable clipboard is said and the prompt asked again. Nothing the walk does
+asks a host: the browser is the person's, and `album`'s paste asks no provider.
+
+**The changed list.** With `--changed-list`, each child writes its own list, merged into
+the sweep's as the child ends, as a run merges its albums' (see "The changed list"), so a
+walk that stops keeps every track it wrote. Each written track is then ready for `sync
+--path`, which judges the new text against the kept transcript and times it.
+
+**What it prints.** One line of counts on stdout (`paste: 2 replaced, 1 skipped, 0
+refused, 1 given up, 0 failed`), then each row not replaced with why, and `stopped before
+the list's end` when `q` or the end of input ended it; the prompts, the progress and the
+child's output go to stderr.
+
+**Exit codes.** `0` once the walk ends, by the list's end or `q`, whatever each row's end
+but a failure; `1` when any child ended unexpectedly; `2` for no terminal, `open` or
+`pbpaste` missing, a `--from` that is not a has-it list, a `--heard-dir` that cannot be
+listed, or a `--changed-list` that exists but cannot be read as a list, nothing opened;
+`130` after Ctrl-C, at a prompt or in a child, the summary still printed and the changed
+list kept. Undo a pasted track as any `album` run, by `album --mode undo` on its album.
 
 ### The stop rule
 
@@ -1172,7 +1354,7 @@ with no timed `.lrc` are frames-only. Placeholder lyrics are no lyrics.
 
 | Group | Tracks | Drawn |
 | --- | --- | --- |
-| `wrong-text-albums` | Every provider-timed track of an album whose manifests record a `wrong text removed` outcome, a withheld removal or a fix's write of another track's text (an outcome naming the track it came from, whatever provider it is under), or that the ledger holds a `fix-text` visit of (an undone entry still counts: the finding stands) | All |
+| `wrong-text-albums` | Every provider-timed track of an album whose manifests record a `wrong text removed` outcome, a withheld removal or a fix's write of another track's text (an outcome naming the track it came from, whatever provider it is under), a paste's write (an outcome whose origin is `pasted by hand`, since a paste follows only a not-sung finding), or that the ledger holds a `fix-text` visit of (an undone entry still counts: the finding stands) | All |
 | `netease`, `youtube-music`, `lrclib` | The newest deciding manifest entry is a synced write, or `unchanged`, from that provider | `250` each |
 | `older-sidecars` | The same, from the `sidecar` | `250` |
 
@@ -1290,11 +1472,11 @@ listed, a library that cannot be listed, or a ledger that cannot be read.
 
 | Code | When |
 | --- | --- |
-| `0` | The sweep finished, every album it visited `done` (or `offline`) with `album` exiting `0`. A survey exits `0`. An accept that finished exits `0`, every album cleared, holding no run, or skipped as a link. A silence pass exits `0` when every track was measured and its page written. A draw exits `0` once both its files are written, and a hearing's report once it prints. |
-| `1` | The sweep finished, but an album did not end `done` (or `offline`) with exit `0`: track errors (a fix's `track errors` among them), refused providers, an album still `owed` answers or passed over waiting on a cool-down or breaker, an album locked by another run or one the sweep could not run, a timeout, no record, a record `album` could not write (its exit `3`), an exit code `album` never gives, or a child left running (`abandoned`). For accept: an album refused, or one whose removal, or whose records, failed. For silence: a track not measured, an album that could not be read, or a page that could not be written. |
-| `2` | A usage problem, a library that is missing or cannot be listed, a ledger that cannot be read or written (a run still prints its report so far; a survey prints nothing), its lock not taken (another sweep running on the library, or the lock unavailable), a `--heard-dir` that is not a folder or cannot be listed, a `--changed-list` or `--hold-for-genius` file whose last write failed (said on stderr after the report), an existing one it cannot read as a list, or its private folder not made. For silence: no `ffmpeg`, a `--resume` list that cannot be read, is malformed or was begun on another library, or a list that cannot be made or opened. For draw: an `--out` inside the library, or a file it cannot write. For hear-report: a strata file it cannot read or that names a track outside `--library`, or a hearing log that is not a folder or cannot be listed. |
+| `0` | The sweep finished, every album it visited `done` (or `offline`) with `album` exiting `0`. A survey exits `0`. An accept that finished exits `0`, every album cleared, holding no run, or skipped as a link. A silence pass exits `0` when every track was measured and its page written. A draw exits `0` once both its files are written, a hearing's report once it prints, and a Genius check once its three files are written and Genius answered every search it asked. A paste walk exits `0` once it ends, by its list's end or `q`, no child failing. |
+| `1` | The sweep finished, but an album did not end `done` (or `offline`) with exit `0`: track errors (a fix's `track errors` among them), refused providers, an album still `owed` answers or passed over waiting on a cool-down or breaker, an album locked by another run or one the sweep could not run, a timeout, no record, a record `album` could not write (its exit `3`), an exit code `album` never gives, or a child left running (`abandoned`). For accept: an album refused, or one whose removal, or whose records, failed. For silence: a track not measured, an album that could not be read, or a page that could not be written. For genius-check: its three files written, but a track's search refused or a track not asked once Genius's breaker opened. For paste: a child that ended unexpectedly. |
+| `2` | A usage problem, a library that is missing or cannot be listed, a ledger that cannot be read or written (a run still prints its report so far; a survey prints nothing), its lock not taken (another sweep running on the library, or the lock unavailable), a `--heard-dir` that is not a folder or cannot be listed, a `--changed-list` or `--hold-for-genius` file whose last write failed (said on stderr after the report), an existing one it cannot read as a list, or its private folder not made. For silence: no `ffmpeg`, a `--resume` list that cannot be read, is malformed or was begun on another library, or a list that cannot be made or opened. For draw: an `--out` inside the library, or a file it cannot write. For hear-report: a strata file it cannot read or that names a track outside `--library`, or a hearing log that is not a folder or cannot be listed. For genius-check: an `--out` inside the library or one it cannot make or write to, no Genius key, a `--tracks-from` it cannot read or that is not a track list, or a file it cannot write. For paste: no terminal, `open` or `pbpaste` missing, or a `--from` that is not a has-it list. |
 | `3` | Stopped after `--stop-after` consecutive refused albums; the resume command is printed. For accept: a report that could not be written, which ends the pass at that album. |
-| `130` | Interrupted with Ctrl-C; the album in hand, if any, is recorded (not done, unless its run was already read), and the resume command is printed. An accept prints no resume command and records nothing: run it again, and an album stopped after its rename has its `.lyricsmith.accepting` finished. A silence pass keeps every album it finished in its list, writes its page, and prints the resume command. |
+| `130` | Interrupted with Ctrl-C; the album in hand, if any, is recorded (not done, unless its run was already read), and the resume command is printed. An accept prints no resume command and records nothing: run it again, and an album stopped after its rename has its `.lyricsmith.accepting` finished. A silence pass keeps every album it finished in its list, writes its page, and prints the resume command. A Genius check lists the track in hand and every one after it unsure, and writes its three files. A paste walk prints its summary and keeps its changed list. |
 
 A shared library or a sibling tool's module that cannot be located, or that a same-named
 module would shadow, also exits `2`, before anything runs: see *Exit codes* in

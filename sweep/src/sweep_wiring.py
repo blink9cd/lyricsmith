@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 import sweep_accept
 import sweep_child
+import sweep_genius_seams
+import sweep_paste_seams
 import sweep_silence
 
 
@@ -21,8 +23,10 @@ import sweep_silence
 class Wiring:
     """What a run runs with: the album tool's child runner, the pause, the clock.
 
-    *accept* is what accept runs the album tool's pass with, and *silence* what the
-    silence pass measures with; None binds the real one.
+    *accept* is what accept runs the album tool's pass with, *silence* what the
+    silence pass measures with, *paste* the terminal, clipboard and browser the
+    paste walk uses, and *genius* what the Genius check reaches; None binds the real
+    one.
     """
 
     run_child: sweep_child.ChildRunner
@@ -30,6 +34,8 @@ class Wiring:
     now: Callable[[], datetime]
     accept: sweep_accept.AcceptSeams | None = None
     silence: sweep_silence.SilenceSeams | None = None
+    paste: sweep_paste_seams.PasteSeams | None = None
+    genius: sweep_genius_seams.CheckSeams | None = None
 
 
 def _utc_now() -> datetime:

@@ -46,7 +46,7 @@ from typing import Final
 import sweep_located  # noqa: F401 - puts album and the libraries on sys.path
 from lyrics_model import LyricsKind, Source
 from lyrics_outcomes import WRONG_TEXT
-from lyrics_records import ManifestTrack, OutcomeStatus, TrackOutcome
+from lyrics_records import PASTED_BY_HAND, ManifestTrack, OutcomeStatus, TrackOutcome
 from sweep_strata import StrataGroup
 
 
@@ -142,9 +142,11 @@ def provenance(entries: Iterable[ManifestTrack]) -> Stratum:
 
 
 def marks_wrong_text(entry: ManifestTrack) -> bool:
-    """True when *entry* records a wrong-text removal, a withheld one, or a sibling's text.
+    """True when *entry* records a wrong-text removal, a withheld one, or a fixed text.
 
-    Undone or not: the finding stands either way.
+    A fixed text is a sibling's text written in its place, or a paste's write
+    (`lyrics_records.PASTED_BY_HAND`), which follows only a not-sung finding. Undone or
+    not: the finding stands either way.
     """
     after = entry.after
     if after is None:
@@ -153,11 +155,16 @@ def marks_wrong_text(entry: ManifestTrack) -> bool:
     withheld = (
         after.status is OutcomeStatus.KEPT_EXISTING and after.withheld is not None
     )
+    # A paste's write names its own origin, and marks: the album tool takes a paste
+    # only for a track a transcript found not sung.
+    pasted = after.origin == PASTED_BY_HAND
     # A sibling's text is written under the provider a run recorded for that sibling,
-    # so its origin marks it; `Source.ALBUM_TEXT` alone marks one in a manifest
+    # so any other origin marks it; `Source.ALBUM_TEXT` alone marks one in a manifest
     # written before outcomes named the track a text came from.
-    sibling = after.origin is not None or after.source is Source.ALBUM_TEXT
-    return removed or withheld or sibling
+    sibling = (
+        after.origin is not None and not pasted
+    ) or after.source is Source.ALBUM_TEXT
+    return removed or withheld or sibling or pasted
 
 
 def withheld_mark(entry: ManifestTrack) -> bool:

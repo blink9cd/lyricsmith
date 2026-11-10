@@ -215,6 +215,13 @@ class VerdictTest(CompareCase):
         self.assertEqual([s.outcome for s in row.scores], [ERROR, timeout, ERROR])
         self.assertTrue(report.has_errors)
 
+    def test_an_interrupt_a_call_raises_ends_the_compare(self) -> None:
+        """A `KeyboardInterrupt` from a provider's own code is no row: it ends compare."""
+        stopped = fixtures.raising(KeyboardInterrupt())
+        table: lm.ProviderTable = {**three(None, None, None), KEYS[LRCLIB]: stopped}
+        with self.assertRaises(KeyboardInterrupt):
+            self.compare(table, self.build(KEEPER))
+
     def test_one_failing_beside_one_agreeing_agrees(self) -> None:
         report = self.compare(
             three(OSError("refused"), fixtures.LIGHTHOUSE_EDITED, None),

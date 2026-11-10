@@ -24,6 +24,13 @@ EXIT_CANNOT_RUN = 2
 #: --changed-list or its report (a progress line, the summary) could not be written; it
 #: outranks 1 and 130: undo needs the record.
 EXIT_RECORD_NOT_WRITTEN = 3
+#: A paste only (`lyrics_paste_mode`): the track refused by its guards, nothing written.
+EXIT_PASTE_REFUSED = 4
+#: A paste only: its run was made, but its one track errored.
+EXIT_PASTE_ERROR = 5
+#: A paste only: not written, the paste not sung or not lyrics to write. A code of its
+#: own, so no crash or other failure (exit 1 among them) is ever read as not sung.
+EXIT_PASTE_NOT_SUNG = 6
 #: Interrupted by Ctrl-C, the shell's 128 + SIGINT.
 EXIT_INTERRUPTED = 130
 

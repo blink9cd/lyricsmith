@@ -205,6 +205,14 @@ def has_artist(query: TrackQuery) -> bool:
     return bool(query.artist.strip())
 
 
+def strip_track_number(stem: str) -> str:
+    """*stem* without a leading track number (``03 - Song`` as ``Song``), else as it is.
+
+    A stem that is a number alone keeps it, since nothing would follow.
+    """
+    return _TRACK_NUMBER.sub("", stem, count=1)
+
+
 # fuzz-target
 def filename_readings(query: TrackQuery) -> tuple[TrackQuery, ...]:
     """The ways *query*'s title, a file stem standing in for missing tags, can be read.
@@ -220,7 +228,7 @@ def filename_readings(query: TrackQuery) -> tuple[TrackQuery, ...]:
     if not stem.strip():
         return ()
     whole = replace(query, artist="")
-    rest = _TRACK_NUMBER.sub("", stem, count=1)
+    rest = strip_track_number(stem)
     numberless = (replace(whole, title=rest),) if rest != stem else ()
     *fields, title = (part.strip() for part in _STEM_FIELD_BREAK.split(rest))
     if not title:

@@ -146,7 +146,8 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         type=album.iso_639_2,
         default=None,
         help="The ISO 639-2 code the album tool ranks and writes frames in; "
-        f"the album tool's own {album.DEFAULT_LANG} when omitted.",
+        f"the album tool's own {album.DEFAULT_LANG} when omitted. Paste passes it "
+        "to every track's paste and judges each record by it.",
     )
     parser.add_argument(
         "--refetch-untimed",
@@ -174,17 +175,20 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--strata", **sweep_more_modes.STRATA)
     parser.add_argument("--model", **sweep_more_modes.MODEL)
     parser.add_argument("--compare-model", **sweep_more_modes.COMPARE_MODEL)
+    parser.add_argument("--tracks-from", **sweep_more_modes.TRACKS_FROM)
+    parser.add_argument("--from", dest="from_list", **sweep_more_modes.FROM)
     parser.add_argument("--resume", type=Path, help=sweep_silence.RESUME_HELP)
     return parser
 
 
 def _add_run_options(parser: argparse.ArgumentParser) -> None:
-    """The options only a run or the fix uses."""
+    """The options a run, the fix, or the paste walk uses: each says which take it."""
     parser.add_argument(
         "--heard-dir",
         type=absolute_path,
-        help="fix-text only, and required there: the transcript folder sync "
-        "--heard-dir wrote, passed to each album's fix, which only reads it.",
+        help="fix-text and paste only, and required by each: the transcript folder "
+        "sync --heard-dir wrote, passed to each album's fix or each track's paste, "
+        "which only reads it.",
     )
     parser.add_argument("--hold-for-genius", **HOLD_FOR_GENIUS)
     parser.add_argument(
@@ -259,9 +263,10 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
         "--changed-list",
         type=Path,
         default=None,
-        help=f"{_BOTH} add the absolute path of every MP3 the albums saved to "
-        "this file, one per line, for an app that rereads their tags, rewritten after "
-        "each album; --restart starts it empty; no list when omitted.",
+        help="run, fix-text and paste only: add the absolute path of every MP3 saved "
+        "to this file, one per line, for an app that rereads their tags, rewritten "
+        "after each album or paste; a run's or fix's --restart starts it empty; no "
+        "list when omitted.",
     )
 
 

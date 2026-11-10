@@ -28,6 +28,7 @@ MODE_RUN, MODE_CHECK, MODE_UNDO, MODE_STRIP, MODE_COMPARE, MODE_PRUNE, MODE_ACCE
     "accept",
 )
 MODE_FIX_TEXT = "fix-text"
+MODE_PASTE = "paste"
 #: The language code a run writes into new frames when --lang is not given.
 DEFAULT_LANG = "eng"
 #: An ISO 639-2 language code, as ID3 stores one: three lowercase letters.
@@ -43,6 +44,8 @@ _ONLY_PROVIDERS = ("only_providers", ONLY_FLAG)
 _DRY_RUN = ("dry_run", "--dry-run")
 _OFFLINE = ("offline", "--offline")
 _FRESH = ("fresh", "--fresh")
+#: The language new frames are written under: every new run takes it, a paste too.
+_LANG = ("lang", "--lang")
 #: The two refetch options, each asking some tracks again as though they held nothing.
 _REFETCHES = (
     ("refetch_untimed", "--refetch-untimed"),
@@ -60,7 +63,7 @@ _RUN_ONLY = (
     ("no_youtube_music", "--no-youtube-music"),
     ("no_tekstowo", "--no-tekstowo"),
     _ONLY_PROVIDERS,
-    ("lang", "--lang"),
+    _LANG,
     _FRESH,
     *_REFETCHES,
 )
@@ -78,6 +81,10 @@ _HEARD_DIR = ("heard_dir", "--heard-dir")
 _HOLD = ("hold_for_genius", "--hold-for-genius")
 #: The options only a fix takes.
 _FIX_ONLY = (_HEARD_DIR, _HOLD)
+#: The pasted text a paste reads: the paste needs it, and every other mode refuses it.
+_TEXT_FROM = ("text_from", "--text-from")
+#: What a paste needs: the one track, the store, the text.
+_PASTE_NEEDS = (("track", "--track"), _HEARD_DIR, _TEXT_FROM)
 #: Options a mode has no use for, refused rather than silently ignored. A strip is a
 #: new run that asks no provider, of every track or the one --track names, so it
 #: refuses --run-id and every run-only option. A check changes nothing, so its list
@@ -90,13 +97,15 @@ _FIX_ONLY = (_HEARD_DIR, _HOLD)
 #: takes --apply alone, and refuses --dry-run, which leaving out --apply already is. A
 #: fix is a new run that asks the providers for some tracks again, as a refetch does:
 #: it takes a run's options but the offline run, which could ask none, and the three
-#: replacing options, whose work it does itself; it alone takes --heard-dir and
-#: --hold-for-genius.
+#: replacing options, whose work it does itself; it alone takes --hold-for-genius,
+#: and it and a paste alone --heard-dir. A paste is a new run of one track that asks
+#: no provider: it takes --track, --heard-dir, --text-from, --changed-list and --lang
+#: alone (the frame's language, as a fix's), and only it takes --text-from.
 _REFUSED: dict[str, tuple[tuple[str, str], ...]] = {
-    MODE_RUN: (_RUN_PICKER, _APPLY, *_FIX_ONLY),
-    MODE_CHECK: (*_RUN_ONLY, _CHANGED_LIST, _APPLY, *_FIX_ONLY),
-    MODE_UNDO: (*_RUN_ONLY, _APPLY, *_FIX_ONLY),
-    MODE_STRIP: (_RUN_PICKER, *_RUN_ONLY, _APPLY, *_FIX_ONLY),
+    MODE_RUN: (_RUN_PICKER, _APPLY, *_FIX_ONLY, _TEXT_FROM),
+    MODE_CHECK: (*_RUN_ONLY, _CHANGED_LIST, _APPLY, *_FIX_ONLY, _TEXT_FROM),
+    MODE_UNDO: (*_RUN_ONLY, _APPLY, *_FIX_ONLY, _TEXT_FROM),
+    MODE_STRIP: (_RUN_PICKER, *_RUN_ONLY, _APPLY, *_FIX_ONLY, _TEXT_FROM),
     MODE_COMPARE: (
         _RUN_PICKER,
         _DRY_RUN,
@@ -106,6 +115,7 @@ _REFUSED: dict[str, tuple[tuple[str, str], ...]] = {
         _CHANGED_LIST,
         _APPLY,
         *_FIX_ONLY,
+        _TEXT_FROM,
     ),
     MODE_PRUNE: (
         _RUN_PICKER,
@@ -114,6 +124,7 @@ _REFUSED: dict[str, tuple[tuple[str, str], ...]] = {
         _CHANGED_LIST,
         _APPLY,
         *_FIX_ONLY,
+        _TEXT_FROM,
     ),
     MODE_ACCEPT: (
         _RUN_PICKER,
@@ -121,8 +132,22 @@ _REFUSED: dict[str, tuple[tuple[str, str], ...]] = {
         *_RUN_ONLY,
         _CHANGED_LIST,
         *_FIX_ONLY,
+        _TEXT_FROM,
     ),
-    MODE_FIX_TEXT: (_RUN_PICKER, _OFFLINE, _FRESH, *_REFETCHES, _APPLY),
+    MODE_FIX_TEXT: (
+        _RUN_PICKER,
+        _OFFLINE,
+        _FRESH,
+        *_REFETCHES,
+        _APPLY,
+        _TEXT_FROM,
+    ),
+    MODE_PASTE: (
+        _RUN_PICKER,
+        *(option for option in _RUN_ONLY if option != _LANG),
+        _APPLY,
+        _HOLD,
+    ),
 }
 
 
@@ -142,6 +167,9 @@ def refuse_misplaced(parser: argparse.ArgumentParser, args: argparse.Namespace) 
             parser.error(f"{flag} cannot be used with --mode {args.mode}")
     if args.mode == MODE_FIX_TEXT and getattr(args, _HEARD_DIR[0]) is None:
         parser.error(f"{_HEARD_DIR[1]} is required with --mode {MODE_FIX_TEXT}")
+    for attr, flag in _PASTE_NEEDS if args.mode == MODE_PASTE else ():
+        if getattr(args, attr) is None:
+            parser.error(f"{flag} is required with --mode {MODE_PASTE}")
     # Holding for Genius already leaves Genius out; beside --no-genius the one choice
     # would be made twice, so the pair is refused rather than read either way.
     if getattr(args, _HOLD[0]) is not None and args.no_genius:

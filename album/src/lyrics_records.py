@@ -245,6 +245,10 @@ class OutcomeStatus(StrEnum):
     ERROR = "error"
 
 
+#: The origin of a text ``--mode paste`` wrote: copied from a browser, never fetched.
+PASTED_BY_HAND = "pasted by hand"
+
+
 @dataclass(frozen=True)
 class TrackOutcome:
     """The manifest's ``after`` block: what the run did to one track.
@@ -294,7 +298,8 @@ class TrackOutcome:
     silence_failed: str | None = None
     #: What the track held before the run changed anything, None when not read.
     held: HeldBefore | None = None
-    #: The album-relative path of the track a fix took the written text from.
+    #: The album-relative path of the track a fix took the written text from, or
+    #: `PASTED_BY_HAND` for a text ``--mode paste`` wrote.
     origin: str | None = None
     #: Why a fix kept a wrong text it would have removed: the album looks spoken
     #: (`lyrics_spoken`), so its transcripts are speech no text is sung in.

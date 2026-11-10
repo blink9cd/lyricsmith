@@ -43,6 +43,7 @@ from pathlib import Path, PureWindowsPath
 from typing import BinaryIO, Literal, cast
 
 from lyrics_model import LyricsError, ReadBackError
+from lyrics_pinned import refuse_unless_pinned
 
 #: The mode a new file is created with, before the process umask narrows it, unless
 #: a write asks for another: a state file asks to be readable by its writer alone.
@@ -236,7 +237,8 @@ def open_regular(path: Path, mode: OpenMode) -> BinaryIO:
     so the file behaves as a plain `open` would. A link is followed. No mode creates
     a file: a missing one raises `FileNotFoundError`, so a track removed in the
     middle of a write is never made again as a stub. A failure after the open closes
-    the descriptor before it is raised.
+    the descriptor before it is raised. Inside `lyrics_pinned.pinned`, a pinned name
+    must open as the pinned file.
     """
 
     def opener(name: str, flags: int) -> int:
@@ -244,6 +246,7 @@ def open_regular(path: Path, mode: OpenMode) -> BinaryIO:
         _look(path, follow=True)
         descriptor = os.open(name, flags | _NONBLOCK)
         _refuse_unless_regular(descriptor, path, block=True)
+        refuse_unless_pinned(descriptor, path)
         return descriptor
 
     return cast(BinaryIO, open(path, mode, opener=opener))

@@ -294,12 +294,20 @@ class AbandonedCallTest(_ProviderCase):
         # Only a backstop: the abandoned calls are finished inside the transport.
         self.addCleanup(held.released.set)
         provider = lyp.YouTubeMusicProvider(yf.client(self.tmp, held, self.clock))
+
+        def search() -> object:
+            return provider.answer_all_kinds(QUERY)
+
         with http_fakes.transport(held):
-            for _ in range(2):
-                with self.assertRaises(lp.ProviderTimeout):
-                    lf.run_with_deadline(
-                        lambda: provider.answer_all_kinds(QUERY), SHORT_S
-                    )
+            with self.assertRaises(lp.ProviderTimeout):
+                lf.run_with_deadline(search, SHORT_S)
+            # The first search must hold the lock before the next is tried; under load
+            # the watchdog can abandon it before it has, so wait for its request.
+            self.assertTrue(held.wait_sent(1))
+            # The second sends nothing, so `finish` has no thread of its to join: once
+            # released, the first's 404 stops the client and the second ends unsent.
+            with self.assertRaises(lp.ProviderTimeout):
+                lf.run_with_deadline(search, SHORT_S)
             sent = len(held.sent)
             finished = held.finish()
         self.assertEqual(sent, 1)

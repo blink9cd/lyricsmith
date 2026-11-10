@@ -4,7 +4,10 @@
 `lyrics_run.run_album`, so a fix shares a run's lock, backup barrier, error boundary,
 per-track record, changed list and undo. Each track it is given has a record in the
 transcript store; the step reads the track's text again under the lock, and a track no
-longer one the fix takes (`lyrics_fix_text.skip_reason`) is its error, nothing changed.
+longer one the fix takes (`lyrics_fix_text.skip_reason`), or no longer the file the plan
+matched to its record (`FixPlan.identities`, `lyrics_fix_text.held_to_planned_file`), is
+its error, nothing changed and no provider asked. Every open of the track after that
+check, each write's, must be the planned file too, or it is the track's error.
 
 The candidates are the album's other stored untimed texts, read before the run, then each
 provider's untimed answer (`lyrics_compare.answers_in_turn`), each provider asked only
@@ -57,14 +60,16 @@ from lyrics_fix_text import (
     TextChangedError,
     first_sung,
     fix_skip_reason,
+    held_to_planned_file,
     text_of,
     words_of_text,
 )
-from lyrics_heard_store import HeardRecord
+from lyrics_heard_store import FileIdentity, HeardRecord
 from lyrics_held import read_held
 from lyrics_model import (
     REFUSED_OUTCOMES,
     FetchResult,
+    Lyrics,
     ProviderAttempt,
     Source,
     TrackQuery,
@@ -102,7 +107,9 @@ SIBLING_UNREAD = "SiblingUnreadError"
 class FixPlan:
     """What a fix settled before its run: each track's record, the album's texts.
 
-    *records* maps each track the fix takes, by album-relative path, to its record.
+    *records* maps each track the fix takes, by album-relative path, to its record,
+    and *identities* each to its file's identity as read before that record was matched
+    (None when it could not be read then).
     *cooling* holds each provider the run left out because it is cooling down, which
     a run would otherwise have asked. *spoken* says why the album looks spoken
     (`lyrics_spoken.spoken_reason`), so no removal is made; None when it does not.
@@ -110,6 +117,7 @@ class FixPlan:
     """
 
     records: Mapping[str, HeardRecord]
+    identities: Mapping[str, FileIdentity | None]
     siblings: SiblingTexts
     cooling: frozenset[Source] = field(default_factory=frozenset)
     spoken: str | None = None
@@ -231,14 +239,41 @@ def fix_step(
     reason, refused = fix_skip_reason(stored, record), stored.lyrics
     if refused is None or reason is not None:
         raise TextChangedError(reason or SKIP_NOT_UNTIMED)
+    # Every open of the track from here on, each write's, must be the planned file.
+    with held_to_planned_file(path, plan.identities[track.path]):
+        turn = _Turn(record, tags, query, refused, timed=stored.timed)
+        return _fix_held(plan, ctx, track, before, state, turn)
+
+
+@dataclass(frozen=True)
+class _Turn:
+    """What a track's step read before its candidates: its record, tags and wrong text."""
+
+    record: HeardRecord
+    tags: TrackTags
+    query: TrackQuery
+    refused: Lyrics
+    timed: bool
+
+
+def _fix_held(
+    plan: FixPlan,
+    ctx: TrackContext,
+    track: ManifestTrack,
+    before: TrackBefore,
+    state: TrackState,
+    turn: _Turn,
+) -> TrackOutcome:
+    """Write the first sung candidate for the track, or remove its wrong text."""
+    path, query, tags = ctx.album / track.path, turn.query, turn.tags
     attempts: list[ProviderAttempt] = []
     state.stage, state.in_fetch = ErrorStage.FETCH, True
     siblings = plan.siblings
-    others = (siblings.every_besides if stored.timed else siblings.besides)(track.path)
-    answers = _answers(ctx, query, tags, attempts, timed=stored.timed)
+    others = (siblings.every_besides if turn.timed else siblings.besides)(track.path)
+    answers = _answers(ctx, query, tags, attempts, timed=turn.timed)
     candidates = chain(others, answers)
-    refused_words = words_of_text(refused.plain_text())
-    winner = first_sung(candidates, record.transcript, refused_words)
+    refused_words = words_of_text(turn.refused.plain_text())
+    winner = first_sung(candidates, turn.record.transcript, refused_words)
     state.in_fetch = False
     if winner is None:
         state.result = FetchResult(None, None, query, tuple(attempts))

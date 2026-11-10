@@ -2,6 +2,84 @@
 
 Notable changes to lyricsmith, newest first.
 
+## 0.5.0 - 2026-11-10
+
+### Added
+
+- `album --mode paste --track <mp3> --heard-dir <dir> --text-from <file>` writes one
+  text a person copied from the track's Genius page in a browser, in place of the wrong
+  text `sync` found not sung, only when the track's transcript sings it, by the fix's own
+  rule. The text is cleaned as Genius's is (its header and `Embed` trailer, and the `You
+  might also like` line a browser copy picks up), judged against the track's length,
+  and written by one run, backed up and undoable, recorded as Genius's with the origin
+  `pasted by hand`, its frame under `--lang` as a fix writes one. It asks no provider. A
+  paste not sung writes nothing and exits `6`, saying the share heard, a code no other
+  end shares; a track the fix's guards refuse, or whose tags or sidecars cannot be read,
+  exits `4`; and every open of the track under the lock must be the file its record was
+  matched to.
+- `sweep --mode paste --from <has-it.tsv> --heard-dir <dir>` walks the Genius check's
+  `has-it.tsv` at a terminal on macOS: it opens each page in the browser, and on Enter
+  pastes the clipboard through `album --mode paste`, asking again only when the paste is
+  not sung (`album`'s exit `6`), any other failed child being that row's; `s` skips and
+  `q` stops. It takes `--lang`, passed to each paste. `pbpaste` and `open` are found on
+  `PATH` once and run by the absolute path found; neither, nor any child, is handed the
+  Genius key; and `pbpaste` runs under a UTF-8 `LC_ALL` as well as `LANG`. A row
+  already pasted, with no record, outside the library or not on a Genius URL is passed
+  over, so a rerun resumes, and every child's `--changed-list` is merged into the walk's
+  own. A track reached through a link, its artist, album or disc folder or the track
+  itself, is passed over before its page opens, as is a row whose path cannot be looked
+  at, never a traceback; a list holding a NUL is refused whole; and a `pbpaste` cut
+  short, by its bound or a Ctrl-C, is killed and waited for.
+- `sweep --mode genius-check --tracks-from <list> --out <dir>` splits a track list, such
+  as a fix's `--hold-for-genius` list, by what Genius has, asking only Genius's keyed API:
+  one search a track, with the key, paced, retried, and held back by Genius's breaker as
+  `album`'s Genius step is, and never Genius's site or a lyrics page, which Cloudflare
+  challenges for a script. It writes `has-it.tsv` (a matching song with complete lyrics),
+  `not-on-genius.txt` (a track list, only when the search clearly found nothing close:
+  every hit read, a page short of full, the track asked by its tags) and `unsure.tsv`
+  (any doubt), and never writes a track. It exits `1` when a search was refused or a
+  track not asked by the breaker, and refuses an `--out` inside the library. It reads
+  only the library's tracks: a listed path that resolves outside `--library` is listed
+  unsure as `outside the library`, never read or asked, and counted. A track whose tags
+  raise anything at all is that track's `track unreadable`, and the three files are
+  written before any early end, a Ctrl-C from just after the last search held until all
+  three are. A track whose path a TSV row cannot hold (a tab, a line break, a lone
+  surrogate) is listed unsure, saying so, rather than written to `has-it.tsv` changed,
+  where the walk could not find it.
+
+### Changed
+
+- The license is now two files. `LICENSE` holds the GNU AGPL v3 text exactly as the Free
+  Software Foundation publishes it, so GitHub and other tools recognize it. `NOTICE`
+  holds the copyright line and the "or any later version" grant. The terms are
+  unchanged: AGPL-3.0-or-later.
+
+### Fixed
+
+- `album --mode fix-text` refuses a track swapped for another file after its turn's
+  identity check, at the open that would write it: every open of the MP3 from that check
+  on is told by the opened file itself, where only the name was checked before, so a
+  text judged against one file's hearing can no longer be written into another.
+- A provider call stopped by an error outside Python's `Exception` (a
+  `KeyboardInterrupt` or a `SystemExit` raised by the call's own code) is raised as
+  itself, where it was lost as an `IndexError`. `album`, its fix modes, and `--mode
+  compare` recorded that as the step's error and went on to the next provider, and
+  `sweep --mode genius-check` as the track's `refused: IndexError`, going on to the next
+  track. A `KeyboardInterrupt` now stops each as Ctrl-C does (in `genius-check`, the
+  track in hand and every one after it `not asked: interrupted`), and a `SystemExit`
+  ends the process with its own code. No breaker is told of either.
+- A Ctrl-C taken while the provider watchdog starts a call's thread is raised as itself,
+  even when Python's threading code wraps it in a lock error of its own (`RuntimeError:
+  release unlocked lock`). Before, it was read as the provider's error: in `album` and
+  its fix modes the step's, and in `sweep --mode genius-check` a refused search, told to
+  Genius's breaker, the check going on to the next track.
+- `album --mode fix-text` refuses a track whose name, by its turn under the lock, names
+  another file than the one its transcript record was matched to, as `--mode paste`
+  does: it is the track's error, `it is no longer the file its transcript was heard
+  from`, with nothing changed and no provider asked. Before, a file swapped in between the
+  plan and the write, its sidecar unchanged, took a text judged against another file's
+  hearing.
+
 ## 0.4.0 - 2026-11-09
 
 ### Added

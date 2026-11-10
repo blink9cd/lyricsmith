@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import shutil
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from pathlib import Path
 from unittest import mock
@@ -295,11 +295,16 @@ class SwappedForALinkTest(sf.SweepCase):
         """Swap album *index* for a link outside the library while A1 is visited."""
         outside = sf.needy_album(self.tmp / "outside", "Far Artist", "Far Album")
 
-        def swapping(argv: Sequence[str], timeout_s: float) -> sweep_child.ChildResult:
+        def swapping(
+            argv: Sequence[str],
+            timeout_s: float,
+            *,
+            env: Mapping[str, str] | None = None,
+        ) -> sweep_child.ChildResult:
             if not self.fake.calls:
                 shutil.rmtree(self.albums[index])
                 self.albums[index].symlink_to(outside)
-            return self.fake(argv, timeout_s)
+            return self.fake(argv, timeout_s, env=env)
 
         self.run_child = swapping
 

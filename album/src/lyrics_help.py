@@ -114,6 +114,11 @@ Exit codes:
        compare's or a dry run's: a progress line or the summary that a closed
        stdout or stderr refused, which ends it with no summary; it outranks 1
        and 130, since undo needs the record
+  4    paste only: the track refused by its guards (no transcript record, its
+       text changed since it was heard, its tags or sidecars unreadable),
+       nothing written
+  5    paste only: the run was made, but its one track errored
+  6    paste only: not written, the paste not sung or not lyrics to write
   130  interrupted (Ctrl-C); once the backup is done, the manifest records the
        tracks that finished; an accept stopped after its rename leaves
        .lyricsmith.accepting, which the next accept finishes"""

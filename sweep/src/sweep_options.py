@@ -11,7 +11,8 @@
   --heard-dir;
 - survey or run is given --apply;
 - any mode but silence is given --resume;
-- any mode but the fix is given --heard-dir or --hold-for-genius;
+- any mode but the fix is given --hold-for-genius, or --heard-dir, which the paste
+  walk takes too;
 - --hold-for-genius is given with --no-genius, or names the same file as
   --changed-list;
 - a refetch is given with --offline, or --owe-earlier-runs with --restart or
@@ -39,7 +40,7 @@ import sweep_child
 import sweep_report
 import sweep_run
 from lyrics_exit import EXIT_OK, EXIT_RECORD_NOT_WRITTEN
-from sweep_more_modes import OptionSpec
+from sweep_more_modes import MODE_PASTE, OptionSpec
 
 MODE_SURVEY, MODE_RUN, MODE_ACCEPT = "survey", "run", "accept"
 MODE_SILENCE, MODE_FIX_TEXT = "silence", "fix-text"
@@ -66,7 +67,8 @@ _NOT_ACCEPT = (
 _SILENCE_ONLY = (("resume", "--resume"),)
 #: The fix's list of the tracks it held for Genius, as (the parsed attribute, the option).
 _HOLD = ("hold_for_genius", sweep_child.HOLD_OPTION)
-#: The options only the fix takes, refused by every other mode.
+#: The fix's own options, refused by every other mode but the paste walk, which takes
+#: --heard-dir too (`sweep_more_modes`) and refuses --hold-for-genius here.
 _FIX_ONLY = (("heard_dir", "--heard-dir"), _HOLD)
 #: What accept and silence each refuse: every option but their own. Silence takes
 #: --limit, and --apply is accept's.
@@ -205,7 +207,9 @@ def refuse_misplaced(parser: argparse.ArgumentParser, args: argparse.Namespace) 
     if args.mode != MODE_SILENCE:
         _refuse_set(parser, args, _SILENCE_ONLY)
     if args.mode != MODE_FIX_TEXT:
-        _refuse_set(parser, args, _FIX_ONLY)
+        # The paste walk reads the store too, and requires it itself (`sweep_more_modes`).
+        taken = (_HOLD,) if args.mode == MODE_PASTE else _FIX_ONLY
+        _refuse_set(parser, args, taken)
     elif args.heard_dir is None:
         parser.error(f"--heard-dir is required with --mode {MODE_FIX_TEXT}")
     # The album tool refuses the pair too, so every album would only fail to run.

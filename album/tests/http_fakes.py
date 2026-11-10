@@ -94,7 +94,10 @@ class HeldTransport:
     It stands in for a server that never answers, so the watchdog abandons the call.
     The abandoned call goes on running, and may send a follow-up request once released,
     so `finish` must run while this transport is still installed: then that request is
-    answered here, and never reaches the socket after the patch is gone.
+    answered here, and never reaches the socket after the patch is gone. The watchdog
+    can abandon a call before its thread has sent anything, so a test waits for the
+    request it expects (`wait_sent`) before releasing it, never reading `sent` at the
+    deadline: `finish` can wait only for a thread that has already sent.
     """
 
     def __init__(self, limit_s: float, status: int = 404) -> None:
@@ -105,13 +108,27 @@ class HeldTransport:
         #: The URL of every request sent, in order.
         self.sent: list[str] = []
         self._callers: list[threading.Thread] = []
+        #: Told as each request arrives, so `wait_sent` wakes when the count is reached.
+        self._arrival = threading.Condition()
 
     def __call__(self, request: requests.PreparedRequest) -> requests.Response:
         """Record *request* and the thread sending it, then hold it until released."""
-        self.sent.append(request.url or "")
-        self._callers.append(threading.current_thread())
+        with self._arrival:
+            self.sent.append(request.url or "")
+            self._callers.append(threading.current_thread())
+            self._arrival.notify_all()
         self.released.wait(timeout=self.limit_s)
         return response(request, self.status)
+
+    def wait_sent(self, count: int) -> bool:
+        """Wait up to the limit for *count* requests to have arrived; whether they had."""
+        with self._arrival:
+            return self._arrival.wait_for(lambda: len(self.sent) >= count, self.limit_s)
+
+    def senders(self) -> int:
+        """How many threads have sent a request here: one per call that reached it."""
+        with self._arrival:
+            return len(set(self._callers))
 
     def finish(self) -> bool:
         """Release every request and wait for each sending thread; whether all ended."""

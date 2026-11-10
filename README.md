@@ -78,7 +78,9 @@ Either way, installing puts no code anywhere and installs no `lyricsmith` comman
 ### A Genius key
 
 The Genius step needs an access token of your own. Without one, that step is skipped with
-a notice and every other source is still asked. To get one, sign in to Genius, create an
+a notice and every other source is still asked. `sweep --mode genius-check` needs it
+too, since it asks nothing but Genius's keyed API: without a token it exits `2` before
+it reads a track or asks anything. To get one, sign in to Genius, create an
 API client at <https://genius.com/api-clients>, and generate its client access token.
 Then set it in the `GENIUS_ACCESS_TOKEN` environment variable, or put it in a config file
 readable by you alone, as `album/album.md` ("The config file") describes:
@@ -143,7 +145,7 @@ you. Each has a `--no-*` option on `album` and `sweep` that leaves it out.
 | YouTube Music | Terms-limited: [YouTube's terms](https://www.youtube.com/t/terms) bar automated access | `--no-youtube-music` |
 | Tekstowo.pl | Terms-limited: [its terms](https://www.tekstowo.pl/info/regulamin) allow home use only | `--no-tekstowo` |
 | NetEase | Terms-limited: it publishes no terms for the undocumented routes the tool asks; [its user agreement](https://st.music.163.com/official-terms/service) is the nearest | `--no-netease` |
-| Genius | Terms-limited: its API gives no lyrics, so the song page is read, which [Genius's terms](https://genius.com/static/terms) bar as scraping. A key of your own is needed | `--no-genius` |
+| Genius | Terms-limited: its API gives no lyrics, so the song page is read, which [Genius's terms](https://genius.com/static/terms) bar as scraping. A key of your own is needed | `--no-genius`; in `--mode fix-text`, `--hold-for-genius` too, which keeps and lists the tracks only Genius might have. `sweep --mode genius-check` asks only the keyed API's search, which reads no page; `sweep --mode paste` opens each page it lists in your own browser, and `album --mode paste` writes the lyrics you copy, asking nothing |
 | Bandcamp | Terms-limited: [its terms](https://bandcamp.com/terms_of_use) allow personal, non-commercial use | `--no-bandcamp` |
 | LRCLIB | Open: [LRCLIB](https://lrclib.net/) states no terms and no data license | none |
 | MusicBrainz | Open: [it asks](https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting) for one request a second and a User-Agent naming a contact; the tool paces itself to that and adds the `[musicbrainz]` contact from the config file when set | `--no-bandcamp`, the only step that asks it |

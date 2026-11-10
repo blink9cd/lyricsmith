@@ -13,6 +13,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(_HERE), str(_HERE.parent / "src")]
@@ -52,7 +53,7 @@ class GuardedFake:
     """A one-kind provider carrying a breaker; it raises its errors in turn, then answers."""
 
     breaker: lbs.BreakerGuard | None
-    errors: list[Exception] = field(default_factory=list)
+    errors: list[BaseException] = field(default_factory=list)
     answer: str | None = None
     calls: int = 0
 
@@ -145,8 +146,18 @@ class SkipTest(GuardCase):
         self.assertEqual(provider.calls, 4)
         self.assertEqual(self.guard.state.window, 2 * lbk.FIRST_WINDOW)
 
+    def test_an_interrupt_in_the_call_is_raised_and_settles_nothing(self) -> None:
+        """A `KeyboardInterrupt` from the call's own code ends the fetch, breaker untold."""
+        provider = GuardedFake(self.guard, [KeyboardInterrupt()], PLAIN)
+        with (
+            mock.patch.object(self.guard, "settle") as settle,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.fetch(provider)
+        settle.assert_not_called()
+
     def test_a_timeout_counts_as_unreachable(self) -> None:
-        errors: list[Exception] = [lp.ProviderTimeout("slow") for _ in range(3)]
+        errors: list[BaseException] = [lp.ProviderTimeout("slow") for _ in range(3)]
         provider = GuardedFake(self.guard, errors)
         self.fetch_each(provider, 3)
         self.assertEqual(self.guard.state.reason, R.UNREACHABLE)
@@ -199,7 +210,7 @@ class SkipTest(GuardCase):
                 self.assertEqual(self.guard.state.open_until, NOW + lbk.MAX_WINDOW)
 
     def test_three_server_errors_in_a_row_open_it_as_overloaded(self) -> None:
-        errors: list[Exception] = [
+        errors: list[BaseException] = [
             lp.HttpStatusError(GENIUS, status) for status in (500, 501, 505)
         ]
         provider = GuardedFake(self.guard, errors)

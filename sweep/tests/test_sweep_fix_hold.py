@@ -14,7 +14,7 @@ import contextlib
 import io
 import shlex
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from unittest import mock
@@ -60,10 +60,14 @@ class HoldingAlbumTool(sf.FakeAlbumTool):
     no_list: set[str] = field(default_factory=set)
 
     def __call__(
-        self, argv: Sequence[str], timeout_s: float
+        self,
+        argv: Sequence[str],
+        timeout_s: float,
+        *,
+        env: Mapping[str, str] | None = None,
     ) -> sweep_child.ChildResult:
         """The fake album tool's run, then the hold list it was handed, written."""
-        result = super().__call__(argv, timeout_s)
+        result = super().__call__(argv, timeout_s, env=env)
         album_dir = Path(sf.option_value(argv, "--album"))
         if HOLD in argv and album_dir.name not in self.no_list:
             names = self.held.get(album_dir.name, ())

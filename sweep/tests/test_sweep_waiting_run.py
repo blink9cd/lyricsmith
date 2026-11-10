@@ -14,7 +14,7 @@ import contextlib
 import io
 import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
@@ -224,10 +224,13 @@ class FreshReadTest(WaitingCase):
         self.owe("A3", _TEKSTOWO)
 
         def run_then_cool(
-            argv: Sequence[str], timeout_s: float
+            argv: Sequence[str],
+            timeout_s: float,
+            *,
+            env: Mapping[str, str] | None = None,
         ) -> sweep_child.ChildResult:
             # The album tool's run on A1 meets a refusal and writes the cool-down.
-            result = self.fake(argv, timeout_s)
+            result = self.fake(argv, timeout_s, env=env)
             cool(_TEKSTOWO)
             return result
 

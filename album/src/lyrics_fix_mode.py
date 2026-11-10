@@ -7,7 +7,8 @@ The mode reads the transcript store `--heard-dir` names (`lyrics_heard_store`), 
 its records to the album's tracks, or the one ``--track`` names, by file identity
 (`records_for`), and plans each matched track before anything is locked: skipped, with
 why (`lyrics_fix_text.skip_reason`), or taken. Each store file that cannot be read is
-one notice, and the rest are still used.
+one notice, and the rest are still used. Each track's identity is read before the match
+and kept for the step to check under the lock (`FixPlan.identities`).
 
 Before that, the mode reads whether the album looks spoken (`lyrics_spoken`): a spoken
 genre on any of its tracks, or most of all its tracks, whatever ``--track`` names,
@@ -68,7 +69,13 @@ from lyrics_fix_text import (
     text_of,
     words_of_text,
 )
-from lyrics_heard_store import HeardRecord, list_records, records_for
+from lyrics_heard_store import (
+    FileIdentity,
+    HeardRecord,
+    found_identity,
+    list_records,
+    records_for,
+)
 from lyrics_modes import PlannedTrack
 from lyrics_cooldown import STATE_FILES
 from lyrics_model import Source
@@ -118,11 +125,14 @@ class FixTrack:
 class AlbumPlan:
     """What a fix plans for its album: each track's plan, its texts, why it is spoken.
 
-    *spoken* is `lyrics_spoken.spoken_reason`'s, None when the album does not look so.
+    *identities* holds each chosen track's file identity, read before any record was
+    matched. *spoken* is `lyrics_spoken.spoken_reason`'s, None when the album does not
+    look so.
     """
 
     album: Path
     fixes: list[FixTrack]
+    identities: dict[Path, FileIdentity | None]
     siblings: SiblingTexts
     spoken: str | None = None
 
@@ -231,6 +241,8 @@ def _plan_album(args: argparse.Namespace, wiring: Wiring, notice: Notice) -> Alb
     listing = list_records(args.heard_dir.absolute())
     for problem in listing.problems:
         notice(problem)
+    # Before the match, so a file swapped in after it is told apart under the lock.
+    identities = {path: found_identity(path) for path in tracks}
     heard = records_for(listing, found.tracks)
     genres = album_genres(wiring.stages, found.tracks)
     spoken = spoken_reason(genres, len(heard), len(found.tracks))
@@ -246,7 +258,7 @@ def _plan_album(args: argparse.Namespace, wiring: Wiring, notice: Notice) -> Alb
         for path in tracks
         if path in records
     ]
-    return AlbumPlan(album, fixes, siblings, spoken)
+    return AlbumPlan(album, fixes, identities, siblings, spoken)
 
 
 def fix_text_mode(
@@ -264,9 +276,11 @@ def fix_text_mode(
     asked = choose_providers(args, wiring, notice)
     options = provider_options(args, asked)
     records = {track.rel: track.record for track in taken}
+    identities = {track.rel: planned.identities[track.path] for track in taken}
     hold = args.hold_for_genius
     plan = FixPlan(
         records,
+        identities,
         planned.siblings,
         cooling_sources(asked),
         planned.spoken,

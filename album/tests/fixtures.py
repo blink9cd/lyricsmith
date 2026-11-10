@@ -413,7 +413,7 @@ class FakeProvider:
     """A provider stand-in: records each query, then answers, raises, or hangs."""
 
     answer: str | None = None
-    error: Exception | None = None
+    error: BaseException | None = None
     release: threading.Event | None = None
     limit_s: float = HANG_LIMIT_S
     calls: list[lm.TrackQuery] = field(default_factory=list)
@@ -438,7 +438,7 @@ def empty() -> FakeProvider:
     return FakeProvider()
 
 
-def raising(error: Exception) -> FakeProvider:
+def raising(error: BaseException) -> FakeProvider:
     """A provider that raises *error*."""
     return FakeProvider(error=error)
 

@@ -296,7 +296,7 @@ class GeniusProvider:
         A song the matcher refuses is None, as no song is: nothing found. A retry wait
         that would end past the call's deadline is not begun, as a pace wait is not, so
         the call is never abandoned mid-wait: the step's error is then the last
-        challenge (`_still_challenged`). So is a retry whose turn times out (the lock
+        challenge (`still_challenged`). So is a retry whose turn times out (the lock
         held to the deadline, or a pace wait past it): no request went out, so the
         challenge it was for is still what the call last heard.
         """
@@ -323,14 +323,14 @@ class GeniusProvider:
             if song is None or not song_matches(query, song):
                 return None
             return song.lyrics
-        raise _still_challenged(challenges)
+        raise still_challenged(challenges)
 
 
 def _send_quietly() -> None:
     """The sending hook for a first try, or a call no tally watches: nothing to count."""
 
 
-def _still_challenged(challenges: list[HttpStatusError]) -> ProviderError:
+def still_challenged(challenges: list[HttpStatusError]) -> ProviderError:
     """The error a call ends on after *challenges*: the last, retries counted.
 
     With no retry made it is the challenge itself, as `lyrics_http`'s retries raise

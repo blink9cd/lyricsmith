@@ -342,6 +342,9 @@ class AbandonedCallTest(_ClientCase):
         with http_fakes.transport(held):
             with self.assertRaises(lp.ProviderTimeout):
                 lf.run_with_deadline(lambda: self.post(client), SHORT_S)
+            # The first call must hold the lock before the second is tried; under
+            # load the watchdog can abandon it before it has, so wait for its request.
+            self.assertTrue(held.wait_sent(1))
             with self.assertRaises(lp.ProviderTimeout):
                 client.post(lym.SEARCH, BODY, self.clock() + SHORT_S)
             sent = len(held.sent)
